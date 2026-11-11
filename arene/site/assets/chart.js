@@ -1,4 +1,5 @@
-/* Graphique d'equity en base 100 (uPlot). Les données sont lues dans <script id="equity-data">. */
+/* Graphique d'equity en base 100 (uPlot). Les données sont lues dans <script id="equity-data">.
+   Un point par cycle réel : les graduations de l'axe des temps tombent sur les cycles, jamais entre deux. */
 (function () {
   "use strict";
   var node = document.getElementById("equity-data");
@@ -8,9 +9,30 @@
   var plot = null;
   var MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
   var DASHES = [[7, 4], [2, 3], [10, 3, 2, 3], [1, 4]];
+  var LAST = data.x.length - 1;
 
   function css(name) {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function fr(v, d) { return v.toFixed(d).replace(".", ",").replace("-", "−"); }
+  function jour(d) { return d.getUTCDate() + " " + MOIS[d.getUTCMonth()]; }
+  function heure(d) { return d.getUTCHours() + " h"; }
+  function dateLongue(ts) {
+    var d = new Date(ts * 1000);
+    return jour(d) + ", " + heure(d) + " UTC";
+  }
+
+  /* Graduations : uniquement aux instants des cycles, espacées d'au moins `minPx` pixels. */
+  function splits(u) {
+    var xs = data.x, n = xs.length;
+    if (n < 2) return xs.slice();
+    var width = u.bbox.width / (window.devicePixelRatio || 1);
+    var minPx = width < 420 ? 64 : 80;
+    var perStep = width / (n - 1);
+    var every = Math.max(1, Math.ceil(minPx / perStep));
+    var out = [];
+    for (var i = LAST; i >= 0; i -= every) out.unshift(xs[i]);
+    return out;
   }
 
   function build() {
@@ -18,76 +40,93 @@
     var width = host.clientWidth || 600;
     var compact = width < 520;
     var llm = 0, tem = 0;
-    var series = [{ label: "Date (UTC)" }];
+    var many = data.x.length > 60;
+    var series = [{
+      label: "Cycle",
+      value: function (u, v) { return v == null ? "—" : dateLongue(v); }
+    }];
     var columns = [data.x];
     data.series.forEach(function (s) {
       var isLlm = s.kind === "llm";
-      var o = { label: s.name, spanGaps: true, points: { show: false } };
+      var focused = data.focus && s.id === data.focus;
+      var o = {
+        label: s.name,
+        spanGaps: true,
+        value: function (u, v) { return v == null ? "—" : fr(v, 2); }
+      };
       if (isLlm) {
         o.stroke = css("--llm" + (llm++ % 3));
         o.width = 2.5;
       } else {
         o.stroke = css("--tem" + (tem % 4));
         o.dash = DASHES[tem % DASHES.length];
-        o.width = 1.5;
+        o.width = 1.75;
         tem++;
       }
-      if (data.focus && s.id !== data.focus && !(data.focus && s.id === "temoin:panier")) {
-        o.show = false;
+      if (focused) {
+        o.width = 3;
+        o.dash = undefined;
+        if (!isLlm) o.stroke = css("--text");
       }
-      if (data.focus && s.id === data.focus) { o.width = 3; o.stroke = css("--focus"); o.dash = undefined; }
+      o.points = { show: !many, size: focused || isLlm ? 7 : 5, width: 1.5, fill: css("--surface") };
+      if (data.focus && !focused && s.id !== "temoin:panier") o.show = false;
       series.push(o);
       columns.push(s.values);
     });
     var axisStroke = css("--muted");
-    var grid = { stroke: css("--border"), width: 1 };
+    var grid = { stroke: css("--grid"), width: 1 };
+    var font = "12px " + css("--sans");
     var opts = {
       width: width,
-      height: compact ? 260 : 360,
+      height: compact ? 240 : 340,
       series: series,
-      cursor: { drag: { x: false, y: false } },
+      cursor: { drag: { x: false, y: false }, points: { size: 9 } },
       scales: {
-        x: { time: true },
+        x: { time: false },
         y: { range: function (u, min, max) {
           var lo = Math.min(min, 100), hi = Math.max(max, 100);
-          var pad = Math.max((hi - lo) * 0.08, 0.5);
+          var pad = Math.max((hi - lo) * 0.12, 0.25);
           return [lo - pad, hi + pad];
         } }
       },
-      tzDate: function (ts) { return uPlot.tzDate(new Date(ts * 1000), "UTC"); },
       axes: [
-        { stroke: axisStroke, grid: grid, ticks: { stroke: css("--border") }, font: "12px system-ui, sans-serif",
-          values: function (u, vals, space) {
-            var short = (vals[vals.length - 1] - vals[0]) < 3 * 86400;
+        { stroke: axisStroke, grid: grid, ticks: { stroke: css("--grid") }, font: font, gap: 6, size: 48,
+          splits: splits,
+          values: function (u, vals) {
+            var prevDay = null;
             return vals.map(function (v) {
               var d = new Date(v * 1000);
-              var h = d.getUTCHours();
-              if (h !== 0 && !short) return h + " h";
-              var t = d.getUTCDate() + " " + MOIS[d.getUTCMonth()];
-              if (short && h !== 0) t = h + " h";
-              return t;
+              var day = jour(d);
+              var label = day === prevDay ? heure(d) : heure(d) + "\n" + day;
+              prevDay = day;
+              return label;
             });
           } },
-        { stroke: axisStroke, grid: grid, ticks: { stroke: css("--border") }, size: 48, font: "12px system-ui, sans-serif",
-          values: function (u, vals) { return vals.map(function (v) { return v.toFixed(1).replace(".", ","); }); } }
+        { stroke: axisStroke, grid: grid, ticks: { show: false }, size: 52, font: font,
+          values: function (u, vals) { return vals.map(function (v) { return fr(v, 1); }); } }
       ],
-      legend: { live: !compact }
+      legend: { live: true },
+      hooks: {
+        draw: [function (u) {
+          // Ligne de référence à 100 (capital de départ).
+          var y = Math.round(u.valToPos(100, "y", true)) + 0.5;
+          var ctx = u.ctx;
+          ctx.save();
+          ctx.strokeStyle = css("--muted");
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 4]);
+          ctx.beginPath();
+          ctx.moveTo(u.bbox.left, y);
+          ctx.lineTo(u.bbox.left + u.bbox.width, y);
+          ctx.stroke();
+          ctx.restore();
+        }],
+        // Hors survol, la légende montre le dernier cycle au lieu de « -- ».
+        setCursor: [function (u) { if (u.cursor.idx == null) u.setLegend({ idx: LAST }); }]
+      }
     };
-    // Ligne de référence à 100 : un petit hook de dessin.
-    opts.hooks = { draw: [function (u) {
-      var y = u.valToPos(100, "y", true);
-      var ctx = u.ctx;
-      ctx.save();
-      ctx.strokeStyle = css("--muted");
-      ctx.globalAlpha = 0.6;
-      ctx.setLineDash([2, 4]);
-      ctx.beginPath();
-      ctx.moveTo(u.bbox.left, y);
-      ctx.lineTo(u.bbox.left + u.bbox.width, y);
-      ctx.stroke();
-      ctx.restore();
-    }] };
     plot = new uPlot(opts, columns, host);
+    plot.setLegend({ idx: LAST });
   }
 
   build();
@@ -95,12 +134,12 @@
   window.addEventListener("resize", function () {
     clearTimeout(timer);
     timer = setTimeout(function () {
-      if (plot) plot.setSize({ width: host.clientWidth, height: host.clientWidth < 520 ? 260 : 360 });
-    }, 100);
+      var w = host.clientWidth;
+      if (plot && w) plot.setSize({ width: w, height: w < 520 ? 240 : 340 });
+    }, 120);
   });
   if (window.matchMedia) {
     var mq = window.matchMedia("(prefers-color-scheme: dark)");
-    var rebuild = function () { build(); };
-    if (mq.addEventListener) mq.addEventListener("change", rebuild);
+    if (mq.addEventListener) mq.addEventListener("change", build);
   }
 })();

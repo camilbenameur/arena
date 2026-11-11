@@ -186,10 +186,10 @@ def cmd_build_site(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, no
 
 
 def cmd_smoke_llm(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
-    if not anthropic_key(paths):
+    cfg = load_config(paths.config)
+    if cfg.decider_backend == "api" and not anthropic_key(paths):
         print("refus : aucune clé API (anthropic_api_key) ; rien n'a été appelé.", file=sys.stderr)
         return 2
-    cfg = load_config(paths.config)
     deciders = cyc.default_deciders(cfg, paths)
     decider = deciders.get(a.portfolio)
     if decider is None:

@@ -300,12 +300,14 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
 
     decisions = _decisions(events, all_cycles, now)
     costs: Counter[str] = Counter()
+    decided: Counter[str] = Counter()
     skipped: dict[str, Counter[str]] = {}
     rejects: dict[str, Counter[str]] = {}
     for e in events:
         t, p = e["type"], e["payload"]
         if t == "decision_received":
             costs[p["portfolio"]] += p.get("cost_uusd") or 0
+            decided[p["portfolio"]] += 1
         elif t == "decision_skipped":
             skipped.setdefault(p["portfolio"], Counter())[p["reason"]] += 1
     intent_owner = {e["payload"]["intent_id"]: e["payload"]["portfolio"] for e in events if e["type"] == "intent"}
@@ -363,6 +365,7 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
             "distinguishable": dist, "cash_ueur": st.cash_ueur, "halted": st.halted,
             "frozen_until_ts": st.frozen_until_ts if st.frozen_until_ts > now else 0,
             "positions": positions,
+            "n_decided": decided[pf] if kinds[pf] == "llm" else None,
             "skipped": dict(skipped.get(pf, {})), "rejects": dict(rejects.get(pf, {})),
             "decisions_total": len(decisions.get(pf, ())),
             "decisions": decisions.get(pf, [])[:DECISIONS_MAX],
@@ -386,6 +389,8 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
         "n_cycles": len(all_cycles),
         "first_cycle_ts": all_cycles[0] if all_cycles else None,
         "last_cycle_ts": all_cycles[-1] if all_cycles else None,
+        "interval_s": config.interval_s,
+        "decider_backend": getattr(config, "decider_backend", None),
         "last_quote_ts": last_quote_ts,
         "min_cycles_stats": MIN_CYCLES_STATS,
         "any_llm_distinguishable": any_distinguishable,

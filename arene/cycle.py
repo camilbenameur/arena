@@ -44,7 +44,7 @@ from arene.data import DataError
 from arene.data.binance import BinanceClient
 from arene.data.kraken import KrakenClient
 from arene.data.store import BarStore
-from arene.deciders.llm import LLMDecider, parse_decision, prompt_sha256
+from arene.deciders.llm import LLMDecider, SubscriptionDecider, parse_decision, prompt_sha256
 from arene.deciders.snapshot import build_snapshot, snapshot_sha256
 from arene.journal import Journal, intent_from_payload, verdict_from_payload, verify
 from arene.ledger import (
@@ -199,16 +199,23 @@ class EventLog:
 
 
 def default_deciders(cfg: Config, paths: Paths) -> dict[str, LLMDecider]:
-    """Un LLMDecider par modèle de la config ; la clé est lue à l'exécution (jamais avant l'appel)."""
-    out = {}
+    """Un décideur par modèle de la config.
+
+    decider_backend = "api" : clé Console lue à l'exécution (absente -> no_key).
+    decider_backend = "abonnement" : `claude -p` sur l'abonnement, isolé (voir SubscriptionDecider).
+    """
+    out: dict[str, LLMDecider] = {}
     for m in cfg.models:
-        out[m.portfolio] = LLMDecider(
+        args = (
             m.model,
             m.portfolio,
             (Decimal(m.price_in_uusd_per_mtok) / MICRO, Decimal(m.price_out_uusd_per_mtok) / MICRO),
             Decimal(m.daily_budget_uusd) / MICRO,
-            key_reader=lambda: anthropic_key(paths),
         )
+        if cfg.decider_backend == "abonnement":
+            out[m.portfolio] = SubscriptionDecider(*args, workdir=paths.var / "claude-vide")
+        else:
+            out[m.portfolio] = LLMDecider(*args, key_reader=lambda: anthropic_key(paths))
     return out
 
 

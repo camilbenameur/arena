@@ -1,5 +1,7 @@
 # Configuration de l'arène (MVP paper). Hachée dans le journal à chaque chargement.
 venue_mode = "paper"
+# Décideurs : "abonnement" = claude -p sur l'abonnement du propriétaire (choix du 11/11/2026) ; "api" = clé Console.
+decider_backend = "abonnement"
 capital_eur = 1000
 interval_s = 14400          # cycle de 4 h
 cycle_delay_s = 300         # décision à HH:05 UTC

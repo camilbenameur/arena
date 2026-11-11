@@ -391,3 +391,113 @@ class LLMDecider:
         parsed, err, intents = parse_decision(raw_text, self.portfolio, int(snapshot["cycle_ts"]), self.symbols)
         result.parsed, result.parse_error, result.intents = parsed, err, intents
         return result
+
+
+# ------------------------------------------------- décideur sur l'abonnement
+
+CLAUDE_BIN_DEFAULT = "claude"
+
+
+def _claude_bin() -> str:
+    """Chemin de la CLI Claude Code : PATH, sinon ~/.local/bin/claude (unités systemd au PATH minimal)."""
+    import shutil
+
+    found = shutil.which(CLAUDE_BIN_DEFAULT)
+    if found:
+        return found
+    local = Path.home() / ".local" / "bin" / "claude"
+    return str(local)
+
+
+class SubscriptionDecider(LLMDecider):
+    """Même décideur, mais l'appel passe par `claude -p` sur l'abonnement du propriétaire (pas de clé API).
+
+    Choix du propriétaire du 11/11/2026 (« fais-les tourner en usage abonnement pour le moment »).
+    L'appel est isolé : aucun outil (`--tools ""`), aucun MCP, aucun réglage utilisateur ni CLAUDE.md
+    (`--setting-sources ""`, dossier de travail vide), aucune session conservée. `ANTHROPIC_API_KEY` est
+    retirée de l'environnement pour que l'appel ne soit jamais facturé à une clé. Le coût journalisé est
+    l'équivalent au prix catalogue renvoyé par la CLI (`total_cost_usd`) : il sert de garde-fou de quota.
+    """
+
+    def __init__(self, *args: Any, workdir: Path, runner: Callable[..., Any] | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.workdir = Path(workdir)
+        self._runner = runner  # injectable en test : runner(cmd, input_text, env, cwd, timeout) -> (rc, stdout, stderr)
+
+    def _cmd(self) -> list[str]:
+        return [
+            _claude_bin(), "-p",
+            "--model", self.model,
+            "--output-format", "json",
+            "--json-schema", json.dumps(OUTPUT_SCHEMA, separators=(",", ":")),
+            "--system-prompt", self.system_prompt,
+            "--tools", "",
+            "--strict-mcp-config",
+            "--setting-sources", "",
+            "--no-session-persistence",
+            "--effort", "low",
+        ]
+
+    def _run(self, cmd: list[str], text: str) -> tuple[int, str, str]:
+        import subprocess
+
+        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+        if self._runner is not None:
+            return self._runner(cmd, text, env, self.workdir, self.timeout_s)
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        p = subprocess.run(
+            cmd, check=False, input=text, capture_output=True, text=True, env=env, cwd=self.workdir, timeout=self.timeout_s
+        )
+        return p.returncode, p.stdout, p.stderr
+
+    def decide(self, snapshot: dict, spent_today_uusd: int) -> DecisionResult:
+        user_message = self._user_message(snapshot)
+        if spent_today_uusd + self.max_cost_uusd(user_message) > self.budget_uusd:
+            return DecisionResult(skipped_reason="budget")
+        cmd = self._cmd()
+        t0 = time.monotonic()
+        out: dict | None = None
+        last_error = ""
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                rc, stdout, _stderr = self._run(cmd, user_message)
+                data = json.loads(stdout) if stdout.strip() else None
+            except Exception as exc:  # noqa: BLE001 - délai, CLI absente, sortie illisible
+                last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+                data, rc = None, -1
+            if isinstance(data, dict) and not data.get("is_error") and data.get("subtype") == "success":
+                out = data
+                break
+            if isinstance(data, dict):
+                status = data.get("api_error_status")
+                last_error = f"cli rc={rc} subtype={data.get('subtype')} status={status}: {str(data.get('result'))[:200]}"
+                retryable = status is None or (isinstance(status, int) and status >= 500)
+            else:
+                last_error = last_error or f"cli rc={rc}: sortie non JSON"
+                retryable = True
+            if not retryable or attempt >= MAX_RETRIES:
+                break
+            self._sleep(BACKOFF_S[min(attempt, len(BACKOFF_S) - 1)])
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        if out is None:
+            return DecisionResult(skipped_reason="api_error", error=last_error, latency_ms=latency_ms)
+
+        usage = out.get("usage") or {}
+        in_tok = sum(int(usage.get(k) or 0) for k in
+                     ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        out_tok = int(usage.get("output_tokens") or 0)
+        models = list((out.get("modelUsage") or {}).keys())
+        cost = Decimal(str(out.get("total_cost_usd") or 0)) * 1_000_000
+        structured = out.get("structured_output")
+        raw_text = json.dumps(structured, ensure_ascii=False) if structured is not None else str(out.get("result") or "")
+        result = DecisionResult(
+            raw_text=raw_text,
+            model_returned=models[0] if len(models) == 1 else ",".join(models) or None,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_uusd=int(cost.to_integral_value(rounding="ROUND_CEILING")),
+            latency_ms=latency_ms,
+        )
+        parsed, err, intents = parse_decision(raw_text, self.portfolio, int(snapshot["cycle_ts"]), self.symbols)
+        result.parsed, result.parse_error, result.intents = parsed, err, intents
+        return result

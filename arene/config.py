@@ -66,6 +66,7 @@ class Config:
     models: tuple[ModelConfig, ...]
     temoins: TemoinsConfig
     sha256: str  # hash du fichier brut (journalisé dans config_loaded)
+    decider_backend: str = "api"  # "api" (clé Console) ou "abonnement" (claude -p)
 
     def enrich(self, pairs: dict[str, PairInfo]) -> tuple[Instrument, ...]:
         """Instruments complets (tick, ordre min, coût min) à partir de `KrakenClient.asset_pairs`."""
@@ -108,6 +109,7 @@ def load_config(path: Path | str = DEFAULT_PATH) -> Config:
             fill_model_version=t["fill_model_version"],
             taker_fee_bp=int(t["taker_fee_bp"]),
             slippage_bp=int(t["slippage_bp"]),
+            decider_backend=str(t.get("decider_backend", "api")),
             instrument_refs=tuple(
                 InstrumentRef(i["symbol"], i["kraken_pair"], i["binance_symbol"]) for i in t["instruments"]
             ),
@@ -130,6 +132,8 @@ def load_config(path: Path | str = DEFAULT_PATH) -> Config:
         )
     except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"config invalide ({path}): {exc!r}") from exc
+    if cfg.decider_backend not in ("api", "abonnement"):
+        raise ConfigError("decider_backend doit valoir 'api' ou 'abonnement'")
     if cfg.venue_mode != "paper":
         raise ConfigError("MVP : venue_mode doit être 'paper'")
     return cfg
