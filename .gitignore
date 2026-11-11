@@ -1,1 +1,7 @@
 *.local.*
+.venv/
+var/
+__pycache__/
+.pytest_cache/
+.hypothesis/
+.ruff_cache/

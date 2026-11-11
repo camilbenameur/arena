@@ -1,0 +1,33 @@
+[project]
+name = "arene"
+version = "0.1.0"
+description = "Arène de trading : des modèles d'IA décident, du code valide, tout est journalisé et mesuré honnêtement."
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "anthropic>=0.40",
+]
+
+[project.scripts]
+arene = "arene.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6.100",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["reseau: test qui appelle une API publique (exclu par défaut avec -m 'not reseau')"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"

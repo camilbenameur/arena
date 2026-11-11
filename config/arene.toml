@@ -1,0 +1,57 @@
+# Configuration de l'arène (MVP paper). Hachée dans le journal à chaque chargement.
+venue_mode = "paper"
+capital_eur = 1000
+interval_s = 14400          # cycle de 4 h
+cycle_delay_s = 300         # décision à HH:05 UTC
+fill_model_version = "pessimiste-v1"
+taker_fee_bp = 50           # 0,40 % Kraken Pro de base, majoré de 25 %
+slippage_bp = 5
+
+[[instruments]]
+symbol = "BTC/EUR"
+kraken_pair = "XBTEUR"
+binance_symbol = "BTCUSDT"
+[[instruments]]
+symbol = "ETH/EUR"
+kraken_pair = "ETHEUR"
+binance_symbol = "ETHUSDT"
+[[instruments]]
+symbol = "SOL/EUR"
+kraken_pair = "SOLEUR"
+binance_symbol = "SOLUSDT"
+[[instruments]]
+symbol = "XRP/EUR"
+kraken_pair = "XRPEUR"
+binance_symbol = "XRPUSDT"
+[[instruments]]
+symbol = "LINK/EUR"
+kraken_pair = "LINKEUR"
+binance_symbol = "LINKUSDT"
+[[instruments]]
+symbol = "LTC/EUR"
+kraken_pair = "LTCEUR"
+binance_symbol = "LTCUSDT"
+
+[[models]]
+portfolio = "llm:claude-haiku-5-5"
+model = "claude-haiku-5-5"
+daily_budget_usd = 0.10
+price_in_usd_per_mtok = 0.10
+price_out_usd_per_mtok = 0.50
+[[models]]
+portfolio = "llm:claude-sonnet-5-5"
+model = "claude-sonnet-5-5"
+daily_budget_usd = 0.50
+price_in_usd_per_mtok = 2.0
+price_out_usd_per_mtok = 10.0
+[[models]]
+portfolio = "llm:claude-opus-5-5"
+model = "claude-opus-5-5"
+daily_budget_usd = 0.90
+price_in_usd_per_mtok = 4.0
+price_out_usd_per_mtok = 20.0
+
+[temoins]
+portfolios = ["temoin:panier", "temoin:6040", "temoin:e0065", "temoin:aleatoire"]
+e0065 = { L = 20, k = 3, H = 10 }
+aleatoire_trajectoires = 1000
