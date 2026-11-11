@@ -1,0 +1,69 @@
+{
+  "nom": "06_stop_avec_gap",
+  "explication": "Achat 200 000 u a 50 000 EUR (cout 100 500 000, cash 899 500 000), stop a 49 000 EUR. Gap : la barre ouvre a 48 500 EUR, sortie a min(stop, open) - 5 bp = 48 500 * 0,9995 = 48 475,75 EUR = 48 475 750 000 uEUR. Produit = 200000*48 475 750 000/1e8 = 96 951 500. Frais 0,5 % = 484 757,5 arrondis haut = 484 758. P&L realise = 96 951 500 - 484 758 - 100 500 000 = -4 033 258. Cash = 899 500 000 + 96 951 500 - 484 758 = 995 966 742. Frais 984 758. Position soldee, le stop disparait.",
+  "events": [
+    {
+      "type": "portfolio_opened",
+      "ts": 1700000000,
+      "payload": {
+        "portfolio": "llm:test",
+        "kind": "llm",
+        "capital_ueur": 1000000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700014400,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "buy",
+        "qty": 200000,
+        "price_ueur": 50000000000,
+        "fee_ueur": 500000,
+        "reason": "intent",
+        "ts": 1700014400,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimiste-v1",
+        "order_id": "o1"
+      }
+    },
+    {
+      "type": "stop_set",
+      "ts": 1700028800,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "stop_ueur": 49000000000
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700043200,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "sell",
+        "qty": 200000,
+        "price_ueur": 48475750000,
+        "fee_ueur": 484758,
+        "reason": "stop",
+        "ts": 1700043200,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimiste-v1",
+        "order_id": "o3"
+      }
+    }
+  ],
+  "marks": {},
+  "attendu": {
+    "llm:test": {
+      "cash_ueur": 995966742,
+      "fees_paid_ueur": 984758,
+      "realized_pnl_ueur": -4033258,
+      "positions": {},
+      "equity_ueur": 995966742
+    }
+  }
+}

@@ -1,0 +1,212 @@
+{
+ "name": "pic_de_volume",
+ "sha256": "4d5d64d02b4af6156b256e39d76ea99e5e9f94a29ec66e294640cc0506658f42",
+ "snapshot": {
+  "bar_interval_s": 14400,
+  "cycle_ts": 1700006400,
+  "market": {
+   "BTC/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "60120",
+    "last_closes_eur": [
+     "60000",
+     "60120",
+     "59940",
+     "60060",
+     "59880",
+     "60000",
+     "60120",
+     "59940",
+     "60060",
+     "59880",
+     "60000",
+     "60120"
+    ],
+    "range_7d_high_eur": "60420.6",
+    "range_7d_low_eur": "59580.6",
+    "range_7d_pos_bp": 6421,
+    "rel_volume_bp": 74545,
+    "ret_24h_bp": 20,
+    "ret_4h_bp": 20,
+    "ret_7d_bp": 40,
+    "vol_4h_bp": 24
+   },
+   "ETH/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "2505",
+    "last_closes_eur": [
+     "2500",
+     "2505",
+     "2497.5",
+     "2502.5",
+     "2495",
+     "2500",
+     "2505",
+     "2497.5",
+     "2502.5",
+     "2495",
+     "2500",
+     "2505"
+    ],
+    "range_7d_high_eur": "2517.525",
+    "range_7d_low_eur": "2482.525",
+    "range_7d_pos_bp": 6421,
+    "rel_volume_bp": 74545,
+    "ret_24h_bp": 20,
+    "ret_4h_bp": 20,
+    "ret_7d_bp": 40,
+    "vol_4h_bp": 24
+   },
+   "LINK/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "12.024",
+    "last_closes_eur": [
+     "12",
+     "12.024",
+     "11.988",
+     "12.012",
+     "11.976",
+     "12",
+     "12.024",
+     "11.988",
+     "12.012",
+     "11.976",
+     "12",
+     "12.024"
+    ],
+    "range_7d_high_eur": "12.08412",
+    "range_7d_low_eur": "11.91612",
+    "range_7d_pos_bp": 6421,
+    "rel_volume_bp": 74545,
+    "ret_24h_bp": 20,
+    "ret_4h_bp": 20,
+    "ret_7d_bp": 40,
+    "vol_4h_bp": 24
+   },
+   "LTC/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "80.16",
+    "last_closes_eur": [
+     "80",
+     "80.16",
+     "79.92",
+     "80.08",
+     "79.84",
+     "80",
+     "80.16",
+     "79.92",
+     "80.08",
+     "79.84",
+     "80",
+     "80.16"
+    ],
+    "range_7d_high_eur": "80.5608",
+    "range_7d_low_eur": "79.4408",
+    "range_7d_pos_bp": 6421,
+    "rel_volume_bp": 74545,
+    "ret_24h_bp": 20,
+    "ret_4h_bp": 20,
+    "ret_7d_bp": 40,
+    "vol_4h_bp": 24
+   },
+   "SOL/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "150.3",
+    "last_closes_eur": [
+     "150",
+     "150.3",
+     "149.85",
+     "150.15",
+     "149.7",
+     "150",
+     "150.3",
+     "149.85",
+     "150.15",
+     "149.7",
+     "150",
+     "150.3"
+    ],
+    "range_7d_high_eur": "151.0515",
+    "range_7d_low_eur": "148.9515",
+    "range_7d_pos_bp": 6421,
+    "rel_volume_bp": 74545,
+    "ret_24h_bp": 20,
+    "ret_4h_bp": 20,
+    "ret_7d_bp": 40,
+    "vol_4h_bp": 24
+   },
+   "XRP/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "0.501",
+    "last_closes_eur": [
+     "0.5",
+     "0.501",
+     "0.4995",
+     "0.5005",
+     "0.499",
+     "0.5",
+     "0.501",
+     "0.4995",
+     "0.5005",
+     "0.499",
+     "0.5",
+     "0.501"
+    ],
+    "range_7d_high_eur": "0.503505",
+    "range_7d_low_eur": "0.496505",
+    "range_7d_pos_bp": 6421,
+    "rel_volume_bp": 74545,
+    "ret_24h_bp": 20,
+    "ret_4h_bp": 20,
+    "ret_7d_bp": 40,
+    "vol_4h_bp": 24
+   }
+  },
+  "portfolio": {
+   "cash_eur": "1000.00",
+   "cash_weight_bp": 10000,
+   "equity_eur": "1000.00",
+   "fees_paid_eur": "0.00",
+   "frozen": false,
+   "halted": false,
+   "portfolio": "llm:claude-sonnet-5-5",
+   "positions": [],
+   "realized_pnl_eur": "0.00"
+  },
+  "recent_decisions": [
+   {
+    "actions": 0,
+    "cycle": 1699934400,
+    "justification": "décision 5, ret_24h_bp=12"
+   },
+   {
+    "actions": 1,
+    "cycle": 1699948800,
+    "justification": "décision 4, ret_24h_bp=12"
+   },
+   {
+    "actions": 0,
+    "cycle": 1699963200,
+    "justification": "décision 3, ret_24h_bp=12"
+   },
+   {
+    "actions": 1,
+    "cycle": 1699977600,
+    "justification": "décision 2, ret_24h_bp=12"
+   },
+   {
+    "actions": 0,
+    "cycle": 1699992000,
+    "justification": "décision 1, ret_24h_bp=12"
+   }
+  ],
+  "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
+  "schema_version": "1"
+ }
+}

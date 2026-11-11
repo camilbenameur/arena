@@ -1,0 +1,51 @@
+{
+  "nom": "05_frais_et_notional_arrondis",
+  "explication": "Achat de 7 777 777 u (0,07777777) a 123,456789 EUR = 123 456 789 uEUR. Produit exact = 7777777*123456789 = 960 219 373 977 453 ; /1e8 = 9 602 193,7398 : notional d'achat arrondi vers le HAUT = 9 602 194. Frais 0,5 % = 48 010,97 arrondis vers le haut = 48 011. Cout = 9 602 194 + 48 011 = 9 650 205. Cash = 1 000 000 000 - 9 650 205 = 990 349 795. Valorisation au bid 123 456 789 arrondie vers le BAS = 9 602 193. Equity = 990 349 795 + 9 602 193 = 999 951 988.",
+  "events": [
+    {
+      "type": "portfolio_opened",
+      "ts": 1700000000,
+      "payload": {
+        "portfolio": "llm:test",
+        "kind": "llm",
+        "capital_ueur": 1000000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700014400,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "SOL/EUR",
+        "side": "buy",
+        "qty": 7777777,
+        "price_ueur": 123456789,
+        "fee_ueur": 48011,
+        "reason": "intent",
+        "ts": 1700014400,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimiste-v1",
+        "order_id": "o1"
+      }
+    }
+  ],
+  "marks": {
+    "SOL/EUR": 123456789
+  },
+  "attendu": {
+    "llm:test": {
+      "cash_ueur": 990349795,
+      "fees_paid_ueur": 48011,
+      "realized_pnl_ueur": 0,
+      "positions": {
+        "SOL/EUR": {
+          "qty": 7777777,
+          "cost_ueur": 9650205,
+          "stop_ueur": null
+        }
+      },
+      "equity_ueur": 999951988
+    }
+  }
+}

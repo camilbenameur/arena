@@ -118,7 +118,7 @@ tests/              un fichier de test par module, scénarios d'or dans tests/go
 | `max_position_bp` | 4000 | position par symbole ≤ 40 % de l'equity après l'ordre (`MAX_POSITION`) |
 | `max_exposure_bp` | 10000 | exposition totale ≤ 100 %, cash ≥ 0 après frais (`MAX_EXPOSURE`, `INSUFFICIENT_CASH`) |
 | `max_trades_per_day` | 2 | par portefeuille, fenêtre glissante 24 h, ventes comprises (`DAILY_TRADES`) |
-| `max_orders_per_minute` | 5 | tous portefeuilles (`ORDER_RATE`) |
+| `max_orders_per_minute` | 20 | tous portefeuilles ; 7 portefeuilles × 2 actions décident au même instant en paper ; à ramener à 5 par plateforme en réel (`ORDER_RATE`) |
 | `min_interval_same_symbol_s` | 14400 | anti-oscillation (`TOO_SOON`) |
 | `stop_bp_min` / `stop_bp_max` | 100 / 2500 | achat sans stop ou hors bornes → rejet (`STOP_REQUIRED`, `STOP_RANGE`) |
 | `max_cost_to_expected_move_pct` | 33 | coût aller-retour estimé ≤ 33 % du mouvement attendu déclaré (`EDGE_TOO_SMALL`) ; mouvement absent → rejet |

@@ -1,0 +1,261 @@
+{
+ "name": "krach",
+ "sha256": "14546ef30a718916b6ad4333ba9da4088ecfe6352a34a4152fe293262160750e",
+ "snapshot": {
+  "bar_interval_s": 14400,
+  "cycle_ts": 1700006400,
+  "market": {
+   "BTC/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "47700",
+    "last_closes_eur": [
+     "60000",
+     "60060",
+     "60120",
+     "60000",
+     "60060",
+     "60120",
+     "60000",
+     "60060",
+     "60120",
+     "47100",
+     "47400",
+     "47700"
+    ],
+    "range_7d_high_eur": "60420.6",
+    "range_7d_low_eur": "46864.5",
+    "range_7d_pos_bp": 616,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": -2066,
+    "ret_4h_bp": 63,
+    "ret_7d_bp": -2066,
+    "vol_4h_bp": 331
+   },
+   "ETH/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "1987.5",
+    "last_closes_eur": [
+     "2500",
+     "2502.5",
+     "2505",
+     "2500",
+     "2502.5",
+     "2505",
+     "2500",
+     "2502.5",
+     "2505",
+     "1962.5",
+     "1975",
+     "1987.5"
+    ],
+    "range_7d_high_eur": "2517.525",
+    "range_7d_low_eur": "1952.6875",
+    "range_7d_pos_bp": 616,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": -2066,
+    "ret_4h_bp": 63,
+    "ret_7d_bp": -2066,
+    "vol_4h_bp": 331
+   },
+   "LINK/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "9.54",
+    "last_closes_eur": [
+     "12",
+     "12.012",
+     "12.024",
+     "12",
+     "12.012",
+     "12.024",
+     "12",
+     "12.012",
+     "12.024",
+     "9.42",
+     "9.48",
+     "9.54"
+    ],
+    "range_7d_high_eur": "12.08412",
+    "range_7d_low_eur": "9.3729",
+    "range_7d_pos_bp": 616,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": -2066,
+    "ret_4h_bp": 63,
+    "ret_7d_bp": -2066,
+    "vol_4h_bp": 331
+   },
+   "LTC/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "63.6",
+    "last_closes_eur": [
+     "80",
+     "80.08",
+     "80.16",
+     "80",
+     "80.08",
+     "80.16",
+     "80",
+     "80.08",
+     "80.16",
+     "62.8",
+     "63.2",
+     "63.6"
+    ],
+    "range_7d_high_eur": "80.5608",
+    "range_7d_low_eur": "62.486",
+    "range_7d_pos_bp": 616,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": -2066,
+    "ret_4h_bp": 63,
+    "ret_7d_bp": -2066,
+    "vol_4h_bp": 331
+   },
+   "SOL/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "119.25",
+    "last_closes_eur": [
+     "150",
+     "150.15",
+     "150.3",
+     "150",
+     "150.15",
+     "150.3",
+     "150",
+     "150.15",
+     "150.3",
+     "117.75",
+     "118.5",
+     "119.25"
+    ],
+    "range_7d_high_eur": "151.0515",
+    "range_7d_low_eur": "117.16125",
+    "range_7d_pos_bp": 616,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": -2066,
+    "ret_4h_bp": 63,
+    "ret_7d_bp": -2066,
+    "vol_4h_bp": 331
+   },
+   "XRP/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "0.3975",
+    "last_closes_eur": [
+     "0.5",
+     "0.5005",
+     "0.501",
+     "0.5",
+     "0.5005",
+     "0.501",
+     "0.5",
+     "0.5005",
+     "0.501",
+     "0.3925",
+     "0.395",
+     "0.3975"
+    ],
+    "range_7d_high_eur": "0.503505",
+    "range_7d_low_eur": "0.390537",
+    "range_7d_pos_bp": 616,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": -2066,
+    "ret_4h_bp": 63,
+    "ret_7d_bp": -2066,
+    "vol_4h_bp": 331
+   }
+  },
+  "portfolio": {
+   "cash_eur": "50.00",
+   "cash_weight_bp": 1071,
+   "equity_eur": "466.74",
+   "fees_paid_eur": "12.00",
+   "frozen": false,
+   "halted": false,
+   "portfolio": "llm:claude-opus-5-5",
+   "positions": [
+    {
+     "cost_eur": "150.00",
+     "held_h": 72,
+     "mark_eur": "9.54",
+     "qty": "0.1",
+     "stop_eur": "140",
+     "symbol": "LINK/EUR",
+     "unrealized_pnl_bp": -9936,
+     "unrealized_pnl_eur": "-149.05",
+     "value_eur": "0.95",
+     "weight_bp": 20
+    },
+    {
+     "cost_eur": "150.00",
+     "held_h": 72,
+     "mark_eur": "63.6",
+     "qty": "0.1",
+     "stop_eur": "140",
+     "symbol": "LTC/EUR",
+     "unrealized_pnl_bp": -9576,
+     "unrealized_pnl_eur": "-143.64",
+     "value_eur": "6.36",
+     "weight_bp": 136
+    },
+    {
+     "cost_eur": "150.00",
+     "held_h": 72,
+     "mark_eur": "119.25",
+     "qty": "0.1",
+     "stop_eur": "140",
+     "symbol": "SOL/EUR",
+     "unrealized_pnl_bp": -9205,
+     "unrealized_pnl_eur": "-138.08",
+     "value_eur": "11.92",
+     "weight_bp": 255
+    },
+    {
+     "cost_eur": "100.00",
+     "held_h": 72,
+     "mark_eur": "0.3975",
+     "qty": "1000",
+     "stop_eur": null,
+     "symbol": "XRP/EUR",
+     "unrealized_pnl_bp": 29750,
+     "unrealized_pnl_eur": "297.50",
+     "value_eur": "397.50",
+     "weight_bp": 8517
+    }
+   ],
+   "realized_pnl_eur": "-3.00"
+  },
+  "recent_decisions": [
+   {
+    "actions": 0,
+    "cycle": 1699934400,
+    "justification": "décision 5, ret_24h_bp=12"
+   },
+   {
+    "actions": 1,
+    "cycle": 1699948800,
+    "justification": "décision 4, ret_24h_bp=12"
+   },
+   {
+    "actions": 0,
+    "cycle": 1699963200,
+    "justification": "décision 3, ret_24h_bp=12"
+   },
+   {
+    "actions": 1,
+    "cycle": 1699977600,
+    "justification": "décision 2, ret_24h_bp=12"
+   },
+   {
+    "actions": 0,
+    "cycle": 1699992000,
+    "justification": "décision 1, ret_24h_bp=12"
+   }
+  ],
+  "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
+  "schema_version": "1"
+ }
+}

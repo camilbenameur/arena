@@ -1,0 +1,68 @@
+{
+  "nom": "02_achat_deux_fois_cout_moyen",
+  "explication": "Achat 1 : 200 000 u a 50 000 EUR : notional 100 000 000, frais 500 000, cout 100 500 000. Achat 2 : 100 000 u a 56 000 EUR : 100000*56e9/1e8 = 56 000 000, frais 280 000, cout 56 280 000. Position : qty 300 000, cout 100 500 000 + 56 280 000 = 156 780 000. Cash = 1e9 - 156 780 000 = 843 220 000. Frais 780 000. Bid 55 000 EUR : 300000*55e9/1e8 = 165 000 000 ; equity = 843 220 000 + 165 000 000 = 1 008 220 000.",
+  "events": [
+    {
+      "type": "portfolio_opened",
+      "ts": 1700000000,
+      "payload": {
+        "portfolio": "llm:test",
+        "kind": "llm",
+        "capital_ueur": 1000000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700014400,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "buy",
+        "qty": 200000,
+        "price_ueur": 50000000000,
+        "fee_ueur": 500000,
+        "reason": "intent",
+        "ts": 1700014400,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimiste-v1",
+        "order_id": "o1"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700028800,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "buy",
+        "qty": 100000,
+        "price_ueur": 56000000000,
+        "fee_ueur": 280000,
+        "reason": "intent",
+        "ts": 1700028800,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimiste-v1",
+        "order_id": "o2"
+      }
+    }
+  ],
+  "marks": {
+    "BTC/EUR": 55000000000
+  },
+  "attendu": {
+    "llm:test": {
+      "cash_ueur": 843220000,
+      "fees_paid_ueur": 780000,
+      "realized_pnl_ueur": 0,
+      "positions": {
+        "BTC/EUR": {
+          "qty": 300000,
+          "cost_ueur": 156780000,
+          "stop_ueur": null
+        }
+      },
+      "equity_ueur": 1008220000
+    }
+  }
+}
