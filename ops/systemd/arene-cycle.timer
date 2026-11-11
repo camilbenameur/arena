@@ -1,0 +1,11 @@
+[Unit]
+Description=Arène de trading : déclenche un cycle à HH:05 UTC, toutes les 4 h
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:05:00 UTC
+Persistent=true
+AccuracySec=1s
+Unit=arene-cycle.service
+
+[Install]
+WantedBy=timers.target
