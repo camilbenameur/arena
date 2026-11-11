@@ -771,6 +771,14 @@ class _Runner:
         reserved = notional_ueur(qty, price, round_up=True) + fee if intent.side == Side.BUY else notional_ueur(qty, price, round_up=False)
         return Verdict(intent.intent_id, True, ("REFERENCE",), qty, reserved, self.policy.sha256)
 
+    def _buy_now_forbidden(self, intent: Intent, st: PortfolioState) -> bool:
+        """Un verdict approuvé en attente d'exécution (crash entre verdict et ordre) ne vaut plus si, à la reprise,
+        le coupe-circuit, la dormance, le gel ou l'arrêt interdit l'entrée."""
+        started = any(
+            e["payload"].get("order_id") == intent.intent_id for e in self._events_of("order_state", "fill")
+        )
+        return not started and (self.entries_blocked or st.halted or st.frozen_until_ts > self.t)
+
     def _handle(self, p: str, intents: list[Intent], *, reference: bool) -> None:
         """Journalise toutes les intentions, puis verdict et exécution de chacune (idempotent)."""
         seen = {e["payload"]["intent_id"] for e in self._events_of("intent")}
@@ -785,6 +793,8 @@ class _Runner:
             for e in self._events_of("risk_verdict"):
                 if e["payload"]["intent_id"] == intent.intent_id:
                     verdict = verdict_from_payload(e["payload"])
+            if verdict is not None and verdict.approved and intent.side == Side.BUY and self._buy_now_forbidden(intent, st):
+                verdict = None  # approuvé avant un crash, jamais exécuté, et l'entrée est interdite à la reprise : on réévalue
             if verdict is None:
                 if reference:
                     verdict = self._reference_verdict(intent, st)

@@ -153,7 +153,10 @@ class DecisionModel(BaseModel):
     @field_validator("justification", mode="before")
     @classmethod
     def _truncate(cls, v: Any) -> Any:
-        return v[:JUSTIFICATION_MAX] if isinstance(v, str) else v
+        if not isinstance(v, str):
+            return v
+        # Un « \ud800 » isolé décodé par json.loads n'est pas encodable en UTF-8 : le journal refuserait l'écriture.
+        return v[:JUSTIFICATION_MAX].encode("utf-8", "replace").decode("utf-8")
 
 
 def _dstr(d: Decimal | None) -> str | None:
@@ -240,8 +243,8 @@ def parse_decision(raw_text: str, portfolio: str, cycle: int, symbols: Iterable[
             text = text[4:].strip()
     try:
         data = json.loads(text, parse_constant=_reject_nan)
-    except ValueError as exc:
-        return None, f"json_invalide: {exc}"[:300], []
+    except (ValueError, RecursionError) as exc:  # RecursionError : JSON profondément imbriqué
+        return None, f"json_invalide: {type(exc).__name__}: {exc}"[:300], []
     try:
         model = DecisionModel.model_validate(data, context={"symbols": tuple(symbols)})
     except ValidationError as exc:

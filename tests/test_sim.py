@@ -45,7 +45,7 @@ def buy_intent(iid="i1", stop_bp=500, p=P):
 
 
 def ok(iid="i1", qty=100_000, p=P):  # 0,001 BTC
-    return Verdict(iid, True, (), qty, 50 * EUR, "h")
+    return Verdict(iid, True, (), qty, 100 * EUR, "h")
 
 
 def fills_in(j):

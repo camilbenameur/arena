@@ -270,7 +270,7 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
     for e in events:
         if e["type"] == "quote":
             p = e["payload"]
-            last_marks[p["symbol"]] = (p["bid"] + p["ask"]) // 2
+            last_marks[p["symbol"]] = p["bid"]  # valorisation au bid, comme l'equity du cycle (cash + positions = equity)
             last_quote_ts = p["ts"]
 
     # Distribution des trajectoires aléatoires, rejouées sur les mêmes cycles et quotes.

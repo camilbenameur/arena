@@ -110,6 +110,11 @@ class SimExecutor:
             inst = self.instruments[intent.symbol]
             price, fee = market_fill(intent.side, verdict.qty, quote, inst, self.fee_bp, self.slippage_bp)
             reason = self._funds_check(intent, verdict.qty, price, fee)
+            if reason is None and intent.side == Side.BUY:
+                # Le quote d'exécution peut avoir bougé depuis le verdict : jamais payer plus que riskd n'a réservé.
+                total = notional_ueur(verdict.qty, price, round_up=True) + fee
+                if total > verdict.reserved_ueur:
+                    reason = f"prix d'exécution au-delà de la réservation de riskd ({total} > {verdict.reserved_ueur})"
         if reason is not None:
             self._log_state(oid, OrderState.CANCELED, reason, now_ts, portfolio=intent.portfolio)
             return None
@@ -185,13 +190,27 @@ class SimExecutor:
             )
         else:
             has_stop = False
-        if fill.side == Side.BUY and intent.stop_bp is not None and not has_stop:
+        if fill.side == Side.BUY and intent.stop_bp is not None and not has_stop and self._holds(fill):
             stop = stop_price(fill.price_ueur, intent.stop_bp, self.instruments[fill.symbol])
+            # Un second achat ne doit jamais desserrer le stop des lots déjà détenus (stop 25 % sur 1 % de plus).
+            stop = max(stop, self._current_stop(fill))
             self.journal.append(
                 "stop_set", {"portfolio": fill.portfolio, "symbol": fill.symbol, "stop_ueur": stop}, fill.ts
             )
         if OrderState.FILLED.value not in hist:
             self._log_state(fill.order_id, OrderState.FILLED, "", now_ts, portfolio=fill.portfolio)
+
+    def _holds(self, fill: Fill) -> bool:
+        """Vrai si le portefeuille détient encore le symbole : un stop_set sur une position soldée entre-temps
+        (mise à plat à la reprise après crash) ferait lever `replay` pour toujours."""
+        st = replay(self.journal.iter_events()).get(fill.portfolio)
+        return st is not None and fill.symbol in st.positions
+
+    def _current_stop(self, fill: Fill) -> int:
+        """Stop déjà posé sur la position avant ce fill (0 si aucun)."""
+        st = replay(self.journal.iter_events()).get(fill.portfolio)
+        pos = st.positions.get(fill.symbol) if st else None
+        return pos.stop_ueur or 0 if pos else 0
 
     # ------------------------------------------------------------------ UNKNOWN
 
