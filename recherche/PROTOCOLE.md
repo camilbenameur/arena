@@ -191,3 +191,6 @@ Le holdout du labo (01/07 au 09/11/2026, environ 132 jours) est la seule donnée
 ## 12. Historique
 
 - recherche-v1 : 11/11/2026, version figée avant tout essai, après la revue adverse.
+- Errata recherche-v1 (12/11/2026, avant tout essai réel, aucun seuil changé) :
+  1. §6 « environ 85 % pour 3 » est faux. La simulation de la règle de réfutation du §9 donne environ 91 % de « non réfuté » par candidat sans avantage (0,89 à 0,91 selon le drawdown du backtest), soit 99,9 % pour 3 candidats indépendants (`recherche/portes/selection.py::simuler_p_non_refute`). Cela renforce la conclusion du §1 : le paper ne prouve rien.
+  2. §3 « Marchés » : une fiche `directionnel` peut déclarer `signaux_perp: true`. Elle reçoit alors les barres perp et le funding comme **signaux** ; sa jambe perp reste imposée à zéro par le moteur (`FORME_POIDS` sinon). Les données utilisées restent celles du §2. Sans cette précision, une famille autorisée par l'audit (r-fonds-foule) aurait tourné sans son signal.

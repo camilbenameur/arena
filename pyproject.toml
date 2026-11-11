@@ -35,7 +35,10 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-markers = ["reseau: test qui appelle une API publique (exclu par défaut avec -m 'not reseau')"]
+markers = [
+    "reseau: test qui appelle une API publique (exclu par défaut avec -m 'not reseau')",
+    "donnees_reelles: test qui lit var/recherche/donnees (se saute si le dossier est absent)",
+]
 
 [tool.ruff]
 line-length = 110

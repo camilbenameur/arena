@@ -42,6 +42,7 @@ class FicheEssai:
     famille: str
     classe: str
     fiche_sha256: str
+    signaux_perp: bool = False  # directionnel : reçoit barres perp et funding comme SIGNAUX (jambe perp nulle)
 
 
 @dataclass
@@ -247,7 +248,18 @@ def _champ(fiche, nom):
     return fiche[nom] if isinstance(fiche, Mapping) else getattr(fiche, nom)
 
 
-def _panneau(donnees, univers: str, classe: str, criteres) -> Panneau:
+def _signaux_perp(fiche, classe: str) -> bool:
+    """Une fiche couvert reçoit toujours perp et funding ; une fiche directionnel seulement si elle le déclare
+    (`signaux_perp: true`), et alors comme signaux : `valider_poids` impose toujours une jambe perp nulle."""
+    if classe == "couvert":
+        return True
+    v = fiche.get("signaux_perp", False) if isinstance(fiche, Mapping) else getattr(fiche, "signaux_perp", False)
+    return bool(v)
+
+
+def _panneau(donnees, univers: str, classe: str, criteres, avec_perp: bool | None = None) -> Panneau:
+    if avec_perp is None:
+        avec_perp = classe == "couvert"
     if isinstance(donnees, Panneau):
         pan = donnees
         if univers.startswith("controle:"):
@@ -258,11 +270,11 @@ def _panneau(donnees, univers: str, classe: str, criteres) -> Panneau:
             raise ValueError(f"univers inconnu : {univers!r}")
     else:
         for d, u, c, p in _PANNEAUX:
-            if d is donnees and u == univers and c == classe:
+            if d is donnees and u == univers and c == avec_perp:
                 return p
-        pan = panneau_depuis_donnees(donnees, univers, avec_perp=classe == "couvert",
+        pan = panneau_depuis_donnees(donnees, univers, avec_perp=avec_perp,
                                      symboles_arene=tuple(criteres.univers_arene))
-        _PANNEAUX.append((donnees, univers, classe, pan))
+        _PANNEAUX.append((donnees, univers, avec_perp, pan))
         del _PANNEAUX[:-4]
         return pan
     return pan
@@ -301,8 +313,9 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
     res = ResultatEssai(id=eid, code=ERREUR, univers=univers)
     try:
         bac_a_sable.verifier_source(source.decode("utf-8", "replace"), Path(code_path).name)
-        pan = _panneau(donnees, univers, classe, criteres)
-        if classe != "couvert" and pan.perp_1h is not None:
+        signaux = _signaux_perp(fiche, classe)
+        pan = _panneau(donnees, univers, classe, criteres, avec_perp=signaux)
+        if not signaux and pan.perp_1h is not None:
             pan = _sans_perp(pan)
         if causalite:
             cle = (hashlib.sha256(source).hexdigest(), params_canoniques(params), pan.n_paires,

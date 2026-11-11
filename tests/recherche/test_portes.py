@@ -580,7 +580,7 @@ def test_selection_trois_au_plus_classes_par_dsr():
     s = selection.selectionner(cs, CRIT)
     assert s.retenus == ("c4", "c3", "c2")
     assert set(s.ecartes) == {"c1", "c0"}
-    assert s.p_au_moins_un_non_refute == pytest.approx(0.85)
+    assert s.p_au_moins_un_non_refute == pytest.approx(1 - (1 - selection.P_NON_REFUTE_H0_DEFAUT) ** 3)
     assert selection.selectionner([], CRIT).retenus == ()
     assert selection.proba_au_moins_un_non_refute(0) == 0.0
 
