@@ -52,9 +52,9 @@ NOMS = {
     "temoin:aleatoire": "Témoin aléatoire",
 }
 DESCRIPTIONS = {
-    "temoin:panier": "1/6 de l'equity sur chacune des 6 paires au premier cycle, puis conservé.",
+    "temoin:panier": "1/6 de l’equity sur chacune des 6 paires au premier cycle, puis conservé.",
     "temoin:6040": "60 % BTC / 40 % cash, rééquilibré le premier cycle de chaque mois civil.",
-    "temoin:e0065": "Règle F1 du labo (pression taker), paramètres L = 20, k = 3, H = 10, adaptée à l'univers Kraken EUR.",
+    "temoin:e0065": "Règle F1 du labo (pression taker), paramètres L = 20, k = 3, H = 10, adaptée à l’univers Kraken EUR.",
     "temoin:aleatoire": "Tire 0 à 2 actions au hasard par cycle, avec exactement les mêmes règles de risque que les modèles.",
 }
 
@@ -307,7 +307,8 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
         t, p = e["type"], e["payload"]
         if t == "decision_received":
             costs[p["portfolio"]] += p.get("cost_uusd") or 0
-            decided[p["portfolio"]] += 1
+            if not p.get("parse_error"):
+                decided[p["portfolio"]] += 1  # une réponse invalide n'est pas une décision
         elif t == "decision_skipped":
             skipped.setdefault(p["portfolio"], Counter())[p["reason"]] += 1
     intent_owner = {e["payload"]["intent_id"]: e["payload"]["portfolio"] for e in events if e["type"] == "intent"}

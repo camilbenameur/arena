@@ -20,6 +20,7 @@ from arene.site import render
 HERE = Path(__file__).resolve().parent
 VENDOR = HERE / "vendor"
 ASSETS = HERE / "assets"
+FONTS = HERE / "fonts"  # IBM Plex Sans et Mono (OFL-1.1), sous-ensemble latin, sommes dans fonts/SHA256SUMS
 VENDOR_FILES = ("uPlot.iife.min.js", "uPlot.min.css", "LICENSE-uPlot.txt", "SHA256SUMS")
 
 __all__ = ["build"]
@@ -51,6 +52,9 @@ def build(journal_path: Path, out_dir: Path, *, config: Config, policy: Policy, 
         (tmp / "assets").mkdir()
         for f in ASSETS.iterdir():
             shutil.copyfile(f, tmp / "assets" / f.name)
+        (tmp / "fonts").mkdir()
+        for f in FONTS.iterdir():
+            shutil.copyfile(f, tmp / "fonts" / f.name)
 
         # JSON publiés (chacun avec venue_mode ; les justifications < 24 h y sont déjà absentes).
         meta = {"venue_mode": vm, "generated_ts": gen}

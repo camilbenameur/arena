@@ -171,14 +171,55 @@ def test_venue_mode_dans_chaque_json(site):
 def test_bandeau_simule_partout(site):
     out, _ = site
     for f in out.rglob("*.html"):
-        assert "SIMULÉ — paper, aucun argent réel" in f.read_text(encoding="utf-8"), f.name
+        txt = f.read_text(encoding="utf-8")
+        assert "Simulation — aucun argent réel" in txt, f.name
+        assert "ARGENT RÉEL" not in txt, f.name
+
+
+def test_bandeau_argent_reel_si_venue_live():
+    from arene.site.render import layout
+
+    data = {"portfolios": [], "venue_mode": "live", "generated_ts": T0,
+            "journal": {"n_records": 1, "head_hash": "a" * 64}}  # fmt: skip
+    page = layout(title="t", body="", root="", active="index", data=data)
+    assert "ARGENT RÉEL" in page and "venue_mode" in page
+    assert "Simulation — aucun argent réel" not in page
+
+
+def test_csp_stricte_et_aucun_style_inline(site):
+    out, _ = site
+    for f in out.rglob("*.html"):
+        txt = f.read_text(encoding="utf-8")
+        assert "'unsafe-inline'" not in txt, f.name
+        assert "style-src 'self'" in txt, f.name
+        assert not re.search(r"\sstyle\s*=", txt), f.name  # la CSP bloquerait tout attribut style
+
+
+def test_modele_sans_decision_ni_rang_ni_cout(site):
+    """Un modèle dont toutes les décisions ont été sautées n'affiche ni rang ni coût : il n'a rien décidé."""
+    index = read(site, "index.html")
+    ligne = re.search(r'<tr class="llm inactif">.*?</tr>', index, re.DOTALL)
+    assert ligne and "Claude Haiku 5.5" in ligne.group(0)
+    assert "n’a jamais décidé" in ligne.group(0) and "sans décision" in ligne.group(0) and "aucun appel" in ligne.group(0)
+    haiku = read(site, "modele/llm-claude-haiku-5-5.html")
+    assert "Ce modèle n’a encore jamais décidé" in haiku
+    sonnet = read(site, "modele/llm-claude-sonnet-5-5.html")
+    assert "jamais décidé" not in sonnet
+
+
+def test_formats_francais():
+    from arene.site.render import eur, typo_fr
+
+    assert eur(1_000_000_000, decimals=0) == "1\u202f000\u00a0€"
+    assert eur(-1_234_567) == "\u22121,23\u00a0€"
+    assert typo_fr("<p>a : b ; « c »</p><code>x : y</code>") == "<p>a\u202f: b\u202f; «\u202fc\u202f»</p><code>x : y</code>"
 
 
 def test_justification_recente_masquee_et_ancienne_affichee(site):
     out, _ = site
     page = read(site, "modele/llm-claude-sonnet-5-5.html")
     assert SECRET_RECENT not in page
-    assert "Publiée 24 h après la décision" in page
+    assert "publiée 24 h après la décision" in page
     assert "prise de profit" in page  # décision ancienne : justification publiée
     # le JSON ne fuit pas non plus la justification récente
     for f in (out / "data").glob("*.json"):
@@ -203,7 +244,7 @@ def test_injection_html_echappee(site):
 
 def test_rejet_riskd_en_clair_et_sauts_comptes(site):
     sonnet = read(site, "modele/llm-claude-sonnet-5-5.html")
-    assert "MAX_ORDER_SIZE" in sonnet and "ordre trop gros" in sonnet and "rejeté" in sonnet
+    assert "MAX_ORDER_SIZE" in sonnet and "ordre trop gros" in sonnet and "refusé" in sonnet
     haiku = read(site, "modele/llm-claude-haiku-5-5.html")
     assert "sautée" in haiku and "pas de clé d’API" in haiku
     summary = json.loads(read(site, "data/summary.json"))
@@ -287,3 +328,26 @@ def test_reconstruction_atomique_ecrase_proprement(site, tmp_path):
     build(j.path, dest, config=cfg, policy=pol, now_ts=NOW)
     assert not (dest / "reste.txt").exists()
     assert [p.name for p in dest.parent.iterdir()] == ["site"]  # aucun dossier temporaire résiduel
+
+
+def test_couleur_stable_d_une_page_a_l_autre():
+    """Opus garde sa couleur sur sa page, même quand le graphique n'affiche que lui et le panier."""
+    from arene.site.render import _styles
+
+    serie = lambda i, k: {"id": i, "kind": k, "name": i, "values": [100.0]}
+    seul = {"x": [0], "series": [serie("llm:claude-opus-5-5", "llm"), serie("temoin:panier", "temoin")]}
+    assert _styles(seul, None)[0]["color"] == "--llm2"
+
+
+def test_pas_de_courbe_sous_trois_cycles(tmp_path):
+    cfg = load_config(ROOT / "config" / "arene.toml")
+    cfg = dataclasses.replace(cfg, temoins=dataclasses.replace(cfg.temoins, aleatoire_trajectoires=5))
+    j = Journal(tmp_path / "e.jsonl")
+    j.append("portfolio_opened", {"portfolio": "temoin:panier", "kind": "temoin", "capital_ueur": CAPITAL,
+                                  "venue_mode": "paper"}, T0)  # fmt: skip
+    j.append("equity", {"portfolio": "temoin:panier", "cycle": T0, "cash_ueur": CAPITAL,
+                        "positions_value_ueur": 0, "equity_ueur": CAPITAL}, T0)  # fmt: skip
+    build(j.path, tmp_path / "s", config=cfg, policy=load_policy(ROOT / "config" / "policy.toml"), now_ts=T0 + 3600)
+    index = (tmp_path / "s" / "index.html").read_text(encoding="utf-8")
+    assert "Courbe à partir de 3" in index
+    assert "chart.js" not in index

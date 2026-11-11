@@ -340,7 +340,7 @@ def test_justification_masquee_avant_24h(env: Env):
     cfg, pol = load_config(env.paths.config), load_policy(env.paths.policy)
     out = env.root / "site"
     build_site(env.paths.journal, out, config=cfg, policy=pol, now_ts=T0 + 2 * H4 + 3600)
-    assert "SECRET-JUSTIF" not in "".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file())
+    assert "SECRET-JUSTIF" not in "".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file() and p.suffix != ".woff2")
 
 
 def test_parse_error_ne_fait_pas_fuiter_de_texte_non_borne(env: Env):
