@@ -1,0 +1,80 @@
+# Critères chiffrés de recherche-v1. Font foi sur PROTOCOLE.md. Figés par le tag recherche-protocole-v1 ;
+# leur sha256 est vérifié par le moteur au démarrage (tag recherche-moteur-v1).
+version: recherche-v1
+
+donnees:
+  coupure_exclue: "2026-07-01T00:00:00Z"        # rien d'égal ou postérieur, sous aucune forme
+  fenetre_evaluation: {debut: "2020-01-01", fin: "2026-06-30"}
+  fin_fenetre_perp: "2026-06-29"
+  echauffement: "2018-01-01 -> 2019-12-31"
+  univers: [ADAUSDT, ATOMUSDT, AVAXUSDT, BCHUSDT, BNBUSDT, BTCUSDT, DOGEUSDT, DOTUSDT, ETCUSDT, ETHUSDT, LINKUSDT, LTCUSDT, SOLUSDT, TRXUSDT, XRPUSDT]
+  univers_arene: [BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, LINKUSDT, LTCUSDT]
+  univers_controle: {taille: 20, regle: "plus gros volumes en quote de janvier 2020 sur data.binance.vision (spot USDT), hors univers, délistés compris, stablecoins et jetons à levier exclus ; figé avant la vague 1"}
+  tolerances: {trous_1d: 0, trous_1h_part_max: 0.001, trous_1h_consecutifs_max: 6}
+  connue_a: {barre: "open_time + duree", funding: "fundingTime + 1 s"}
+
+couts_bp:                       # alignés sur config/arene.toml (taker_fee_bp 50, slippage_bp 5) + demi-spread 5
+  spot_par_rotation: 60
+  perp_par_rotation: 10         # plus le funding réel
+  stress_multiplicateur: 2
+  marge_perp_part: 0.5          # capital immobilisé = notionnel spot + 0,5 x notionnel short perp
+
+classes:
+  directionnel: {poids_min: 0, somme_max: 1, drawdown_max: 0.45, rotation_annuelle_max: 15}
+  couvert: {short_perp_max: "<= long spot de la même paire", drawdown_max: 0.20, rotation_annuelle_max: 40}
+
+essais:
+  N_dsr: 726                    # 126 (labo, gel-final) + 600 (plafond recherche-v1), quel que soit le moment
+  plafond_total: 600
+  plafond_vague_1: 120
+  familles_max_par_vague: 6
+  variantes_max_par_famille_vague_1: 20
+  parametres_min: 2
+  parametres_max: 4
+  grille: {valeurs_min_par_parametre: 3, rapport_min_entre_voisines: 1.25}
+  arret_apres_vague_1: {dsr_max_inferieur_a: 0.5, effet: "vague 2 seulement sur décision écrite du propriétaire"}
+  walk_forward: interdit_en_v1
+
+dsr:
+  formule: "Bailey & López de Prado (2014), comme ~/dev/labo-trading/outils/dsr.py"
+  variance: "par classe : max(moyenne pondérée par famille des variances des sr_jour de recherche, 1/(T-1)) ; labo exclu de V, inclus dans N"
+  seuil: 0.95
+
+portes:
+  C1_dsr_min: 0.95
+  C5_annees: {annees: [2020, 2021, 2022, 2023, 2024, 2025], sharpe_min_par_annee: -1.0, annees_positives_min: 4}
+  C6_drawdown_max: {directionnel: 0.45, couvert: 0.20}
+  C7_voisinage: {part_voisins_min: 0.75, ratio_sharpe_voisin_min: 0.6, sharpe_voisin_min: 0.5, bord_de_grille: echec}
+  C8_directionnel: {bootstrap_apparie_blocs_jours: 20, replications: 5000, graine: 12345, p_unilateral_max: 0.05, panier: "équipondéré de l'univers du candidat, rebalancé le 1er du mois, mêmes coûts"}
+  C8_couvert: {alpha_t_newey_west_min: 2.0, retards: 20, beta_abs_max: 0.3}
+  C9_causalite: {coupures_aleatoires: 20, coupures_fixes: 3, part_heure_non_pleine_min: 0.4, tolerance: 1.0e-9, donnees: synthetiques}
+  C11_extremes: {retrait_part_1: 0.01, sharpe_min_apres_1: "max(0.5, 0.5 x sharpe complet)", retrait_part_2: 0.02, sharpe_min_apres_2: 0.0}
+  C12_couts: {cout_sur_rendement_brut_max: 0.5}
+  C13_moities: {sharpe_min_chaque_moitie: 0.0}
+  C14_materialite: {rendement_annualise_net_min: 0.04}
+  C15_arene: {politique: "config/policy-strategie.toml", sharpe_min: 0.0, drawdown_max_facteur_C6: 1.3}
+  C16_hors_univers: {part_symboles_sharpe_positif_min: 0.6}
+
+coherence:                      # contrôles anti-bug, requis mais non comptés comme portes indépendantes
+  C2_sharpe_net_min: 0.5
+  C3_t_newey_west_min: 2.0
+  C4_sharpe_stress_min: 0.0
+  C10_bootstrap: {blocs_jours: 20, replications: 5000, graine: 12345, p_unilateral_max: 0.05}
+
+selection:
+  candidats_max: 3
+  correlation_exces_panier_max: 0.7
+  classement: dsr_decroissant
+
+paper:
+  etiquettes: [refute, non_refute, defaut_technique]
+  replication: {correlation_quotidienne_min: 0.95, ecart_cumule_max_facteur_cout_stresse: 1.5}
+  refutation: {jours_56_rendement_cumule_max_facteur_vol: -0.5, jours_84_rendement_cumule_max_facteur_vol: -0.6, drawdown_max_facteur_backtest: 1.3}
+  regards: {frequence: hebdomadaire, depense_alpha: obrien_fleming, alpha_total: 0.05}
+  duree_min_jours: {spot: 56, levier_ou_perp: 84}
+  confirmation: "IC 90 % du Sharpe en avant > 0 (≈ 300 j pour SR 1,8 ; ≈ 1 000 j pour SR 1)"
+
+execution:
+  sandbox: bwrap
+  codes_retour: [OK, CAUSALITE, TIMEOUT, SOURCE_REFUSEE, FORME_POIDS, ERREUR]
+  timeout_essai_s: 600
