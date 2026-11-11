@@ -152,7 +152,7 @@ def test_dormance_niveaux_et_reference(tmp_path: Path):
 
 def run_cli(env: Env, *args: str, now: int | None = None) -> int:
     ts = now if now is not None else env.clock.now
-    return cli.main(["--var", str(env.paths.var), "--secrets", str(env.sec), *args], clients=env.clients, now=lambda: ts)
+    return cli.main(["--var", str(env.paths.var), "--secrets", str(env.sec), "--config", str(env.paths.config), *args], clients=env.clients, now=lambda: ts)
 
 
 def hold(idx: int, snap: dict):

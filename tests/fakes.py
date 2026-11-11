@@ -126,9 +126,13 @@ class Env:
         self.sec.mkdir(parents=True, exist_ok=True)
         for k, v in (secrets or {}).items():
             (self.sec / k).write_text(v)
+        # Copie de la config réelle en mode "api" : un test ne doit jamais lancer `claude -p` sur l'abonnement.
+        cfg_text = (REPO / "config" / "arene.toml").read_text()
+        test_cfg = root / "arene-test.toml"
+        test_cfg.write_text(cfg_text.replace('decider_backend = "abonnement"', 'decider_backend = "api"'))
         self.paths = Paths(
             var=root / "var", secrets=self.sec, user_kill=root / "user_KILL",
-            config=REPO / "config" / "arene.toml", policy=REPO / "config" / "policy.toml",
+            config=test_cfg, policy=REPO / "config" / "policy.toml",
         )  # fmt: skip
         self.clock = Clock()
         self.kraken = FakeKraken(self.clock)
