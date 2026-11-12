@@ -891,6 +891,12 @@ class _Runner:
         )
         return not started and (self.entries_blocked or st.halted or st.frozen_until_ts > self.t)
 
+    def _no_quote(self, intent: Intent) -> None:
+        if not any(e["payload"]["intent_id"] == intent.intent_id for e in self._events_of("risk_verdict")):
+            self.w("risk_verdict", Verdict(intent.intent_id, False, ("NO_QUOTE",), 0, 0, self.policy.sha256))
+        self.executor.reject(intent, "NO_QUOTE", self.t)
+        self.log.refresh()
+
     def _handle(self, p: str, intents: list[Intent], *, reference: bool) -> None:
         """Journalise toutes les intentions, puis verdict et exécution de chacune (idempotent)."""
         seen = {e["payload"]["intent_id"] for e in self._events_of("intent")}
@@ -899,7 +905,10 @@ class _Runner:
                 self.w("intent", intent)
         for intent in intents:
             st = self.states().get(p)
-            if st is None or intent.symbol not in self.quotes:
+            if st is None:
+                continue
+            if intent.symbol not in self.quotes:  # jamais de `continue` muet : verdict NO_QUOTE et ordre refusé
+                self._no_quote(intent)
                 continue
             if not self.entries_blocked and killswitch.active_sources(self.paths):
                 self.kill = self.entries_blocked = True  # armé pendant l'appel LLM : l'achat qui suit doit être refusé

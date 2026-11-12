@@ -4,8 +4,9 @@
 1. verrou du cycle SANS attente (cycle ou réveil en cours : sortie sans rien écrire) ; journal cassé : rien écrit ;
 2. tick = `now_ts // tick_s * tick_s` ; un événement `veille` déjà journalisé pour ce tick : sortie sans rien écrire ;
 3. quotes Kraken, contrôlés symbole par symbole (invalide, spread, saut, confirmation de rupture) ; un symbole rejeté est exclu du tick ;
-4. stops en direct, confirmés sur deux ticks, au bid avec glissement et frais, idempotents par `order_id` ;
-5. déclencheur de mouvement (confirmé sur deux ticks) et garde-fous ; si un réveil part, `reveil_started` est écrit
+4. stops en direct jugés sur les bougies Kraken 1 min (2 bougies sous le stop, prix de la dernière clôture avec
+   glissement et frais, jamais au-dessus du stop), idempotents par `order_id` ;
+5. déclencheur de mouvement (bougies 1 min, aux deux derniers ticks) et garde-fous ; si un réveil part, `reveil_started` est écrit
    AVANT l'événement `veille` et avant tout appel réseau du réveil ;
 6. événement `veille` (horodaté au tick), puis le réveil : une ronde de décision (LLM et aléatoire) rejouée par
    `_Runner` (sous-classe `_ReveilRunner`), sous le même verrou. Un réveil interrompu est repris par un tick suivant
@@ -44,7 +45,7 @@ from arene.ops.notify import Notifier
 from arene.paths import Paths
 from arene.risk.policy import Policy, PolicyError, load_policy
 from arene.sim.executor import SimExecutor
-from arene.types import Instrument, Quote
+from arene.types import Bar, Instrument, Quote
 
 log = logging.getLogger("arene.veille")
 
@@ -58,6 +59,11 @@ SAUT_MAX_PCT = 15  # un milieu qui s'écarte de 15 % ou plus du dernier quote va
 SAUT_HORIZON_S = 1800
 COHERENCE_PCT = 2  # deux quotes rejetés dont les milieux sont à moins de 2 % l'un de l'autre se confirment
 REJETS_AVANT_ALERTE = 3
+CHAINE_MAX = 6  # ticks consécutifs acceptés par confirmation de rupture (30 min) ; au-delà, rejet
+MINUTE_S = 60
+OHLC_DEPUIS_S = 66 * 60  # bougies 1 min lues par tick : de tick - 66 min à tick (référence du mouvement comprise)
+REF_TOLERANCE_S = 120  # bougie de référence du mouvement : la plus proche de tick - fenêtre, à 2 min près
+BOUGIE_PERIMEE_S = 900  # dernière bougie close plus vieille que 15 min : pas de mesure
 CONFIRMATION_S = 600  # le tick précédent (stops, mouvement) doit dater de 10 min au plus
 REFERENCE_TOLERANCE_S = 900  # référence du mouvement : quote valide à tick - fenêtre ou avant, de 15 min au plus
 ALERTE_JOURNAL_CASSE_S = 3600
@@ -151,20 +157,16 @@ def classer_quote(
     if flag is None:
         return None, False
     prev = precedent(hist, tick)
-    if prev is not None and prev.flag in ("spread", "saut", "confirme") and (prev.flag == "confirme" or not prev.acc):
+    run = 0  # ticks de rupture consécutifs déjà vus (rejetés ou acceptés par confirmation)
+    for e in reversed(hist):
+        if e.flag not in ("spread", "saut", "confirme"):
+            break
+        run += 1
+    if prev is not None and run <= CHAINE_MAX and prev.flag in ("spread", "saut", "confirme") and (prev.flag == "confirme" or not prev.acc):
         pm = _mid(prev.bid, prev.ask)
         if pm > 0 and abs(_mid(bid, ask) - pm) * 100 < COHERENCE_PCT * pm:
             return None, True
     return flag, False
-
-
-def reference_a(hist: list[H], target: int) -> H | None:
-    """Quote ACCEPTÉ le plus proche de `target` ou avant, à moins de 15 min."""
-    best = None
-    for h in hist:
-        if h.acc and h.tick <= target and target - h.tick <= REFERENCE_TOLERANCE_S:
-            best = h
-    return best
 
 
 def precedent(hist: list[H], tick: int) -> H | None:
@@ -177,33 +179,58 @@ def _depasse(mid: int, ref_mid: int, seuil_bp: int) -> bool:
     return ref_mid > 0 and abs(mid - ref_mid) * BP >= seuil_bp * ref_mid
 
 
-def mouvement(
-    quotes: dict[str, tuple[int, int]], hist: Hist, tick: int, seuil_bp: int, fenetre_s: int
-) -> dict[str, Any] | None:
-    """Instrument dont le milieu a bougé d'au moins `seuil_bp` sur la fenêtre, au tick courant (quote accepté) ET au
-    tick précédent (quote brut, même rejeté), dans le même sens, chacun contre sa propre référence (quote accepté).
-    Le plus grand |variation| l'emporte. Mesuré au milieu du quote."""
-    best: tuple[int, int, str, int] | None = None  # (|d|·1e8/ref, d, symbole, ref)
-    for sym in sorted(quotes):
-        h = hist.get(sym, [])
-        ref = reference_a(h, tick - fenetre_s)
-        prev = precedent(h, tick)
-        prev_ref = reference_a(h, prev.tick - fenetre_s) if prev else None
-        if ref is None or prev is None or prev_ref is None:
-            continue
-        mid, rmid = _mid(*quotes[sym]), _mid(ref.bid, ref.ask)
-        pmid, prmid = _mid(prev.bid, prev.ask), _mid(prev_ref.bid, prev_ref.ask)
-        d, pd = mid - rmid, pmid - prmid
-        if not (_depasse(mid, rmid, seuil_bp) and _depasse(pmid, prmid, seuil_bp)) or (d > 0) != (pd > 0):
-            continue
-        score = abs(d) * 10**8 // rmid
-        if best is None or score > best[0]:
-            best = (score, d, sym, rmid)
-    if best is None:
+def bougies_closes(bars: list[Bar], tick: int) -> list[Bar]:
+    """Bougies 1 min closes au tick (ts + 60 <= tick), triées."""
+    return sorted((b for b in bars if b.ts + MINUTE_S <= tick), key=lambda b: b.ts)
+
+
+def variation_bougies(bars: list[Bar], tick: int, fenetre_s: int) -> tuple[int, int] | None:
+    """(clôture de la dernière bougie close, clôture de la bougie la plus proche de tick - fenêtre à 2 min près), ou
+    None. Sans transaction récente (dernière bougie close de plus de 15 min), pas de mesure."""
+    closed = bougies_closes(bars, tick)
+    if not closed or tick - (closed[-1].ts + MINUTE_S) > BOUGIE_PERIMEE_S:
         return None
-    _, d, sym, rmid = best
-    bp = (abs(d) * BP * 2 + rmid) // (2 * rmid)
-    return {"type": "mouvement", "symbole": sym, "variation_bp": bp if d > 0 else -bp, "fenetre_s": fenetre_s}
+    target = tick - fenetre_s
+    cands = [b for b in closed if abs(b.ts - target) <= REF_TOLERANCE_S]
+    if not cands:
+        return None
+    ref = min(cands, key=lambda b: (abs(b.ts - target), b.ts))
+    return closed[-1].close, ref.close
+
+
+def mouvement(
+    minute_bars: dict[str, list[Bar]], tick: int, seuil_bp: int, fenetre_s: int, pas_s: int
+) -> tuple[dict[str, Any] | None, dict[str, int]]:
+    """(déclencheur, variations_bp par symbole) mesurés sur les TRANSACTIONS (bougies 1 min), jamais sur le ticker.
+
+    Variation = clôture de la dernière bougie close / clôture de la bougie la plus proche de tick - fenêtre, moins 1.
+    Le seuil doit être dépassé au tick courant ET au tick précédent (tick - pas_s, rejugé avec ses propres bougies),
+    dans le même sens. Le plus grand |variation| l'emporte."""
+    best: tuple[int, int, str, int] | None = None  # (|d|·1e8/ref, d, symbole, ref)
+    variations: dict[str, int] = {}
+    for sym in sorted(minute_bars):
+        cur = variation_bougies(minute_bars[sym], tick, fenetre_s)
+        if cur is None:
+            continue
+        d, rref = cur[0] - cur[1], cur[1]
+        if rref <= 0:
+            continue
+        bp = (abs(d) * BP * 2 + rref) // (2 * rref)
+        variations[sym] = bp if d > 0 else -bp
+        prev = variation_bougies(minute_bars[sym], tick - pas_s, fenetre_s)
+        if prev is None or prev[1] <= 0:
+            continue
+        pd = prev[0] - prev[1]
+        if not (_depasse(cur[0], rref, seuil_bp) and _depasse(prev[0], prev[1], seuil_bp)) or (d > 0) != (pd > 0):
+            continue
+        score = abs(d) * 10**8 // rref
+        if best is None or score > best[0]:
+            best = (score, d, sym, rref)
+    if best is None:
+        return None, variations
+    _, d, sym, rref = best
+    bp = (abs(d) * BP * 2 + rref) // (2 * rref)
+    return {"type": "mouvement", "symbole": sym, "variation_bp": bp if d > 0 else -bp, "fenetre_s": fenetre_s}, variations
 
 
 def _alerte_reveil(
@@ -268,19 +295,14 @@ class _ReveilRunner(_Runner):
         }
 
     def _view(self) -> None:
-        """Comme au cycle, avec deux écarts : un symbole sans quote valide est valorisé à son dernier quote valide
-        (jamais négociable), et PRICE_SANITY compare au milieu du quote du tick précédent de la veille."""
+        """Comme au cycle, avec deux écarts : un symbole sans quote accepté est valorisé à son dernier quote accepté
+        (jamais négociable), et PRICE_SANITY compare au dernier cours des TRANSACTIONS (clôture de la dernière bougie
+        1 min close, lue dans l'événement `veille` du tick d'origine) : un ticker erroné bloque les entrées."""
         super()._view()
-        veilles = sorted(
-            (e["payload"] for e in self._events_of("veille") if e["payload"]["tick"] < self.t),
-            key=lambda pl: pl["tick"],
-        )
         last_closes = dict(self.market.last_closes)
-        for sym in self.symbols:
-            for pl in reversed(veilles):
-                if sym in pl["quotes"]:
-                    last_closes[sym] = _mid(*pl["quotes"][sym])
-                    break
+        origine = next((e["payload"] for e in self._events_of("veille") if e["payload"]["tick"] == self.t), None)
+        if origine is not None:
+            last_closes.update({s: c for s, c in origine.get("clotures_1m", {}).items() if s in self.symbols})
         marks, bids = dict(self.marks), dict(self.bids)
         for sym in self.symbols:
             if sym in self.quotes:
@@ -315,9 +337,17 @@ class _ReveilRunner(_Runner):
         self.prev_cycle = completed[-1] if completed else None
         self.cycle_index = len(completed)
         started = [e for e in self._events_of("reveil_started") if e["payload"]["reveil"] == t]
+        origine = next((e["payload"] for e in self._events_of("veille") if e["payload"]["tick"] == t), None)
+        if resume and origine is not None:  # la reprise repart des quotes acceptés du tick d'origine
+            self.prefetched_quotes = {s: Quote(s, t, b, a) for s, (b, a) in origine["quotes"].items()}
+            self.quote_symbols = set(self.prefetched_quotes)
         self._market(True, started[-1]["seq"])
         if resume:
             self.alert("info", "reveil_resumed", "réveil interrompu repris")
+            for s, (b, a) in sorted((origine or {"quotes": {}})["quotes"].items()):
+                if s not in self.quotes:  # quote_reveil manquant (crash pendant l'écriture) : complété, jamais ignoré
+                    self.quotes[s] = Quote(s, t, b, a)
+                    self.wn("quote_reveil", self.quotes[s])
         self._journal_market()
         self._view()
         self._resolve_unknowns()
@@ -448,12 +478,22 @@ class _Veille:
             elif s not in rejets and n_prev >= REJETS_AVANT_ALERTE:
                 self._alert("info", "veille_symbole_ecarte", f"{s} : quotes de nouveau acceptés")
 
-        # 2. stops en direct, confirmés par le tick valide précédent (à moins de 10 min)
-        prev_bids = {s: p.bid for s in quotes if (p := precedent(hist.get(s, []), tick)) is not None}
+        # 2. transactions : bougies Kraken 1 min closes (stops et mouvement ne lisent jamais le ticker)
+        minute_bars: dict[str, list[Bar]] = {}
+        for s, inst in instruments.items():
+            try:
+                bars = bougies_closes(self.clients.kraken.ohlc(s, inst.kraken_pair, 60, tick - OHLC_DEPUIS_S), tick)
+                if not bars:
+                    raise DataError("aucune bougie 1 min")
+                minute_bars[s] = bars
+            except Exception:  # noqa: BLE001 - ni stop ni déclencheur sur ce symbole à ce tick
+                rejets.setdefault(s, "ohlc")
+
+        # 2 bis. stops en direct sur les transactions
         executor = SimExecutor(
             self.journal, instruments, cfg.taker_fee_bp, cfg.slippage_bp, cfg.venue_mode, self.fault_injector
         )
-        executor.process_live_stops(quotes, tick, prev_bids)
+        executor.process_live_stops(minute_bars, tick)
         self.log.refresh()
         suffix = f":veille:{tick}"
         stop_ids = [e["payload"]["order_id"] for e in self._of("fill") if e["payload"]["order_id"].endswith(suffix)]
@@ -482,8 +522,8 @@ class _Veille:
 
         # 4. déclencheur et garde-fous (pas de nouveau réveil pendant une reprise)
         launch: dict[str, Any] | None = None
+        trigger, variations = mouvement(minute_bars, tick, v.seuil_mouvement_bp, v.fenetre_mouvement_s, v.tick_s)
         if resume is None:
-            trigger = mouvement(qd, hist, tick, v.seuil_mouvement_bp, v.fenetre_mouvement_s)
             rep.declencheur = trigger
             if trigger is not None and gele:
                 rep.refus = "saison_gelee"
@@ -515,6 +555,8 @@ class _Veille:
                 "quotes": {s: [b, a] for s, (b, a) in sorted(qd.items())},
                 "quotes_bruts": {s: [b, a] for s, (b, a) in sorted(bruts.items())},
                 "rejets": dict(sorted(rejets.items())),
+                "variations_bp": dict(sorted(variations.items())),
+                "clotures_1m": {s: b[-1].close for s, b in sorted(minute_bars.items())},
                 "confirmes": sorted(confirmes),
                 "equity": {p: equity_ueur(st, marks, bids) for p, st in sorted(states.items())},
                 "stops": rep.stops,

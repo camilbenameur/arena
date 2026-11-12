@@ -13,7 +13,7 @@ from typing import Any
 
 from arene.journal import Journal, fill_from_payload
 from arene.ledger import replay
-from arene.sim.fills import FILL_MODEL_VERSION, market_fill, stop_fill, stop_price
+from arene.sim.fills import BP, FILL_MODEL_VERSION, market_fill, stop_fill, stop_price
 from arene.types import (
     Bar,
     Fill,
@@ -24,11 +24,15 @@ from arene.types import (
     Side,
     VenueMode,
     Verdict,
+    ceil_div,
     notional_ueur,
 )
 
 _DONE = {OrderState.FILLED, OrderState.CANCELED, OrderState.RISK_REJECTED, OrderState.UNKNOWN}
 DEFAULT_CYCLE_S = 14_400
+MINUTE_S = 60
+STOP_WINDOW_S = 600  # fenêtre des bougies 1 min jugées par un stop de veille
+STOP_MIN_BARS = 2  # bougies distinctes sous le stop exigées
 
 
 class SimExecutor:
@@ -326,31 +330,43 @@ class SimExecutor:
                 done.add(oid)
         return out
 
-    def process_live_stops(
-        self, quotes: Mapping[str, Quote], tick: int, prev_bids: Mapping[str, int] | None = None
-    ) -> list[Fill]:
-        """Stops en direct de la veille : une position dont le bid est au niveau du stop (ou en dessous) est vendue
-        tout de suite, au bid avec glissement et frais taker. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick},
-        idempotent. Confirmation : `prev_bids` (bid du tick valide précédent, à moins de 10 min) doit lui aussi être
-        au niveau du stop ; sans lui (symbole absent), rien n'est vendu. Un prix calculé nul ou négatif est ignoré.
-        Le contrôle sur barres du cycle suivant part des positions rejouées : il ne revend rien."""
+    def process_live_stops(self, minute_bars: Mapping[str, list[Bar]], tick: int) -> list[Fill]:
+        """Stops en direct de la veille, jugés sur les TRANSACTIONS (bougies Kraken 1 min closes), jamais sur le ticker.
+
+        Une position est vendue si, parmi les bougies closes depuis `max(tick - 600, ouverture de la position)`, au
+        moins 2 bougies distinctes ont un plus bas <= stop (une bougie aberrante isolée ne suffit pas : on attend le
+        tick suivant). Prix : clôture de la dernière bougie close x (1 - glissement), arrondie au tick vers le bas,
+        jamais au-dessus du stop, avec les frais taker. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick},
+        idempotent. Un symbole absent de `minute_bars` (lecture en échec) n'a pas de stop ce tick-là. Un prix calculé
+        nul ou négatif est ignoré. Le contrôle sur barres de 4 h du cycle reste le filet de sécurité."""
         out: list[Fill] = []
         _, done_fills = self._scan()
         for pname, st in sorted(replay(self.journal.iter_events()).items()):
             for sym, pos in sorted(st.positions.items()):
-                inst, q = self.instruments.get(sym), quotes.get(sym)
-                if inst is None or q is None or pos.stop_ueur is None or q.bid > pos.stop_ueur:
+                inst, bars = self.instruments.get(sym), minute_bars.get(sym)
+                if inst is None or not bars or pos.stop_ueur is None:
                     continue
-                if prev_bids is not None and not (sym in prev_bids and prev_bids[sym] <= pos.stop_ueur):
+                closed = sorted((b for b in bars if b.ts + MINUTE_S <= tick), key=lambda b: b.ts)
+                since = max(tick - STOP_WINDOW_S, pos.opened_ts)
+                hits = {b.ts for b in closed if b.ts >= since and b.low <= pos.stop_ueur}
+                if len(hits) < STOP_MIN_BARS:
                     continue
                 oid = f"stop:{pname}:{sym}:veille:{tick}"
                 if oid in done_fills:
                     continue
-                px, fee = market_fill(Side.SELL, pos.qty, q, inst, self.fee_bp, self.slippage_bp)
+                px, _ = market_fill(Side.SELL, pos.qty, Quote(sym, tick, closed[-1].close, closed[-1].close), inst,
+                                    self.fee_bp, self.slippage_bp)  # fmt: skip
+                px = min(px, pos.stop_ueur)
                 if px <= 0:
                     continue
+                fee = ceil_div(notional_ueur(pos.qty, px, round_up=True) * self.fee_bp, BP)
                 out.append(self._forced_sell(oid, pname, sym, pos.qty, px, fee, tick, "stop"))
         return out
+
+    def reject(self, intent: Intent, reason: str, now_ts: int) -> None:
+        """Ordre refusé avant envoi (ex. NO_QUOTE) : état RISK_REJECTED, une seule fois (idempotent)."""
+        if not self._state_of(intent.intent_id):
+            self._log_state(intent.intent_id, OrderState.RISK_REJECTED, reason, now_ts, portfolio=intent.portfolio)
 
     def settle_interrupted(self, intent: Intent, now_ts: int) -> None:
         """Répare un ordre interrompu par un crash avant d'abandonner sa ronde : un fill sans `stop_set` reçoit son

@@ -26,10 +26,17 @@ from arene.journal import Journal, verify
 from arene.ledger import equity_ueur, replay
 from arene.paths import REPO
 from arene.sim.executor import SimExecutor
-from arene.sim.fills import market_fill
 from arene.temoins.aleatoire import seed_for
-from arene.types import Instrument, Quote, Side, notional_ueur
-from arene.veille import H, classer_quote, mouvement, precedent, prochain_rendez_vous, reference_a, run_veille
+from arene.types import Bar, Instrument, Quote, notional_ueur
+from arene.veille import (
+    H,
+    classer_quote,
+    mouvement,
+    precedent,
+    prochain_rendez_vous,
+    run_veille,
+    variation_bougies,
+)
 from tests.fakes import (
     H4,
     HAIKU,
@@ -53,17 +60,38 @@ X = T0 + 4200  # premier tick où le mouvement et les garde-fous permettent un r
 
 
 class LiveKraken(FakeKraken):
-    """Marché factice dont le ticker peut être forcé symbole par symbole (mouvement intra-barre)."""
+    """Marché factice : ticker forçable (`override`), transactions forçables (`trades` : cours par morceaux, et
+    `bar_override` : une bougie 1 min précise) et lecture OHLC 1 min en panne (`fail_ohlc`)."""
 
     def __init__(self, clock) -> None:
         super().__init__(clock)
         self.override: dict[str, tuple[int, int]] = {}
+        self.trades: dict[str, list[tuple[int, int]]] = {}  # symbole -> [(à partir de ts, cours)]
+        self.bar_override: dict[tuple[str, int], tuple[int, int, int, int]] = {}
+        self.fail_ohlc: set[str] = set()
 
     def ticker(self, symbol: str, pair: str) -> Quote:
         if symbol in self.override:
             bid, ask = self.override[symbol]
             return Quote(symbol, self.clock.now, bid, ask)
         return super().ticker(symbol, pair)
+
+    def minute_bar(self, sym: str, ts: int):
+        if (sym, ts) in self.bar_override:
+            o, h, lo, c = self.bar_override[(sym, ts)]
+            return Bar(sym, 60, ts, o, h, lo, c, 1_000_000)
+        price = None
+        for frm, p in self.trades.get(sym, []):
+            if frm <= ts:
+                price = p
+        if price is not None:
+            return Bar(sym, 60, ts, price, price, price, price, 1_000_000)
+        return super().minute_bar(sym, ts)
+
+    def ohlc(self, symbol: str, pair: str, interval_s: int = H4, since: int | None = None):
+        if interval_s == 60 and symbol in self.fail_ohlc:
+            raise RuntimeError("ohlc en panne (test)")
+        return super().ohlc(symbol, pair, interval_s, since)
 
 
 class Recorder(ScriptedDecider):
@@ -134,12 +162,36 @@ def set_veille(env: Env, **kw: int) -> None:
     env.paths.config.write_text(txt)
 
 
-def set_btc(env: Env, mid: int, *, wide: bool = False) -> None:
-    """BTC au milieu `mid` (multiple de 1000) ; `wide` : spread de 3 %, bid et ask très écartés du milieu."""
+def set_trades(env: Env, sym: str, price: int, at: int | None = None) -> None:
+    """Les transactions de `sym` se font à `price` à partir de `at` (défaut : l'horloge courante)."""
+    env.kraken.trades.setdefault(sym, []).append((env.clock.now if at is None else at, price))
+
+
+def set_btc(env: Env, mid: int, *, wide: bool = False, at: int | None = None) -> None:
+    """BTC au milieu `mid` (multiple de 1000) : ticker immédiat (`wide` : spread de 3 %) et transactions à `mid`
+    à partir de `at`."""
     if wide:
         env.kraken.override[BTC] = (mid * 985 // 1000, mid * 1015 // 1000)
     else:
         env.kraken.override[BTC] = (mid * 9995 // 10000, mid * 10005 // 10000)
+    set_trades(env, BTC, mid, at)
+
+
+def set_ticker_btc(env: Env, mid: int) -> None:
+    """BTC au milieu `mid` au ticker SEULEMENT : les transactions (bougies 1 min) ne bougent pas."""
+    env.kraken.override[BTC] = (mid * 9995 // 10000, mid * 10005 // 10000)
+
+
+def clear_market(env: Env) -> None:
+    env.kraken.override.clear()
+    env.kraken.trades.clear()
+    env.kraken.bar_override.clear()
+
+
+def crash_to(env: Env, bid: int, ask: int | None = None, at: int | None = None) -> None:
+    """Ticker (bid, ask) et transactions au cours `bid`, à partir de `at` (défaut : l'horloge courante)."""
+    env.kraken.override[BTC] = (bid, bid + bid // 1000 if ask is None else ask)
+    set_trades(env, BTC, bid, at)
 
 
 def up(bp: int) -> int:
@@ -147,16 +199,14 @@ def up(bp: int) -> int:
 
 
 def prepare(env: Env, x: int, d: dict | None = None, bp: int = 300, *, wide: bool = False) -> dict:
-    """Cycle 0, références à x-3900 et x-3600 (BTC_REF), confirmation à x-300 (BTC à +bp) ; BTC reste à +bp pour x."""
+    """Cycle 0 ; BTC traité à BTC_REF puis, dès x-420, à +bp (ticker et transactions) ; un tick à x-300, où le
+    mouvement n'est pas encore confirmé (le tick x-600 était encore à BTC_REF). Le tick x est lancé par le test."""
     d = d if d is not None else deciders()
     cycle(env, 0, d)
-    set_btc(env, BTC_REF)
-    for t in (x - 3900, x - 3600):
-        r = tick(env, t, d)
-        assert r.status == "done" and r.declencheur is None
-    set_btc(env, up(bp), wide=wide)
+    set_btc(env, BTC_REF, at=0)
+    set_btc(env, up(bp), wide=wide, at=x - 420)
     r = tick(env, x - 300, d)
-    assert r.status == "done" and r.declencheur is None  # pas de tick précédent à moins de 10 min : rien à confirmer
+    assert r.status == "done" and r.declencheur is None
     return d
 
 
@@ -209,8 +259,17 @@ def test_forme_de_l_evenement_veille_et_equity_au_bid(tmp_path: Path):
     before = env.events()
     tick(env, T0 + 600)
     p = of(env, "veille")[-1]["payload"]
-    assert set(p) == {"tick", "quotes", "quotes_bruts", "rejets", "confirmes", "equity", "stops", "reveil", "refus"}
+    assert set(p) == {"tick", "quotes", "quotes_bruts", "rejets", "confirmes", "variations_bp", "clotures_1m", "equity", "stops", "reveil", "refus"}
     assert p["quotes_bruts"] == p["quotes"] and p["confirmes"] == []
+    # Transactions : bougies 1 min closes ; marché plat, donc variation nulle et clôture = dernier cours.
+    last = env.kraken.minute_bar("ETH/EUR", (T0 + 600) // 60 * 60 - 60).close
+    assert p["clotures_1m"]["ETH/EUR"] == last and set(p["variations_bp"]) == set(SYMBOLS)
+    for sym in SYMBOLS:  # variation = dernière clôture 1 min / clôture 1 min d'il y a 1 h, en bp arrondis
+        ref = env.kraken.minute_bar(sym, T0 + 600 - 3600).close
+        cur = env.kraken.minute_bar(sym, T0 + 600 - 60).close
+        d = cur - ref
+        bp = (abs(d) * 20_000 + ref) // (2 * ref)
+        assert p["variations_bp"][sym] == (bp if d > 0 else -bp)
     assert p["stops"] == [] and p["reveil"] is None and p["refus"] is None and p["rejets"] == {}
     assert set(p["quotes"]) == set(SYMBOLS)
     q = env.kraken.ticker("ETH/EUR", "ETHEUR")
@@ -241,7 +300,7 @@ def test_avant_le_premier_cycle_la_veille_n_ecrit_rien(tmp_path: Path):
 def test_mediane_des_spreads_du_cycle_inchangee_par_la_veille_et_par_les_reveils(tmp_path: Path):
     env = make_env(tmp_path)
     d = prepare(env, X, deciders())
-    assert [e["payload"]["tick"] for e in of(env, "veille")] == [X - 3900, X - 3600, X - 300]
+    assert [e["payload"]["tick"] for e in of(env, "veille")] == [X - 300]
     quotes_before = of(env, "quote")
     assert tick(env, X, d).reveil == "completed"
     assert of(env, "quote") == quotes_before  # ni la veille ni le réveil n'ajoutent de `quote`
@@ -273,7 +332,8 @@ def test_aucun_fill_a_zero_ni_negatif_avant_ecriture(tmp_path: Path):
     # Un quote dont le bid tombe à 0 (glissement compris) est ignoré par les stops en direct, la mise à plat
     # et le contrôle de détention : le journal reste identique.
     zero = {BTC: Quote(BTC, T0 + 600, 0, 100_000)}
-    assert ex.process_live_stops(zero, T0 + 600) == []
+    nulles = {BTC: [Bar(BTC, 60, T0 + 60 * k, 0, 0, 0, 0, 1) for k in range(1, 10)]}  # transactions à 0 : prix de vente nul
+    assert ex.process_live_stops(nulles, T0 + 600) == []
     assert ex.flatten(HAIKU, zero, T0 + 600, "kill_switch") == []
     assert ex.process_stops_and_expiry({}, zero, T0 + 600 + 8 * 86_400, 604_800) == []
     assert env.paths.journal.read_bytes() == before
@@ -376,43 +436,33 @@ def veille_p(env: Env) -> dict:
     return of(env, "veille")[-1]["payload"]
 
 
-def test_spread_x10_durable_accepte_au_2e_tick_et_le_stop_part(tmp_path: Path):
+def test_spread_x10_durable_accepte_au_2e_tick(tmp_path: Path):
     env = make_env(tmp_path)
-    d = deciders(buy_btc_at_cycle_0)
-    cycle(env, 0, d)
-    S = stop_of(env)
+    cycle(env, 0)
     normal = env.kraken.ticker(BTC, "XBTEUR")
     spread10 = 10 * (normal.ask - normal.bid)
     for k in range(5):  # 5 ticks normaux : le contrôle du spread s'applique
-        assert tick(env, T0 + 600 + 300 * k, d).rejets == {}
-    bid = S - 1_000_000
-    wide_quote(env, bid, spread10, bid=True)
-    w1 = tick(env, T0 + 2100, d)
-    assert w1.rejets == {BTC: "spread"} and w1.confirmes == [] and w1.stops == []
+        assert tick(env, T0 + 600 + 300 * k).rejets == {}
+    wide_quote(env, normal.bid, spread10, bid=True)
+    w1 = tick(env, T0 + 2100)
+    assert w1.rejets == {BTC: "spread"} and w1.confirmes == []
     p1 = veille_p(env)
-    assert BTC not in p1["quotes"] and p1["quotes_bruts"][BTC] == [bid, bid + spread10]
-    assert BTC in replay(env.events())[HAIKU].positions
-    r = T0 + 2400
-    w2 = tick(env, r, d)  # deuxième tick cohérent : la rupture est acceptée, et le stop part à ce tick
+    assert BTC not in p1["quotes"] and p1["quotes_bruts"][BTC] == [normal.bid, normal.bid + spread10]
+    w2 = tick(env, T0 + 2400)  # deuxième tick cohérent : la rupture est acceptée
     assert w2.rejets == {} and w2.confirmes == [BTC]
     p2 = veille_p(env)
-    assert p2["quotes"][BTC] == [bid, bid + spread10] and p2["confirmes"] == [BTC] and p2["rejets"] == {}
-    oid = f"stop:{HAIKU}:{BTC}:veille:{r}"
-    assert oid in w2.stops
-    fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
-    assert fill["price_ueur"] == bid * 9995 // 10_000 // 100_000 * 100_000 and fill["ts"] == r
-    assert BTC not in replay(env.events())[HAIKU].positions
+    assert p2["quotes"][BTC] == [normal.bid, normal.bid + spread10] and p2["confirmes"] == [BTC] and p2["rejets"] == {}
     check_journal(env)
 
 
-def test_krach_stable_de_20_pct_stop_au_2e_tick_et_equity_a_jour(tmp_path: Path):
+def test_krach_du_ticker_sans_transactions_equity_au_dernier_quote_accepte_aucune_vente(tmp_path: Path):
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
-    set_btc(env, BTC_REF)
+    set_ticker_btc(env, BTC_REF)
     tick(env, T0 + 600, d)
     ok = veille_p(env)["quotes"][BTC]
-    set_btc(env, BTC_REF * 80 // 100)
+    set_ticker_btc(env, BTC_REF * 80 // 100)  # le ticker s'effondre, aucune transaction ne suit
     crash = env.kraken.override[BTC]
     w1 = tick(env, T0 + 900, d)
     assert w1.rejets == {BTC: "saut"} and w1.stops == []
@@ -422,30 +472,49 @@ def test_krach_stable_de_20_pct_stop_au_2e_tick_et_equity_a_jour(tmp_path: Path)
     bids = {s: b for s, (b, _a) in p1["quotes"].items()} | {BTC: ok[0]}  # valorisé au dernier quote accepté
     marks = {s: (b + a) // 2 for s, (b, a) in p1["quotes"].items()} | {BTC: sum(ok) // 2}
     assert p1["equity"]["temoin:panier"] == equity_ueur(pre, marks, bids)
-    r = T0 + 1200
-    w2 = tick(env, r, d)
-    assert w2.rejets == {} and w2.confirmes == [BTC] and f"stop:{HAIKU}:{BTC}:veille:{r}" in w2.stops
+    w2 = tick(env, T0 + 1200, d)  # deuxième tick cohérent : accepté (equity à jour), mais jamais de vente
+    assert w2.rejets == {} and w2.confirmes == [BTC] and w2.stops == []
     p2 = veille_p(env)
     pre2 = replay(env.events()[: of(env, "veille")[-1]["seq"]])["temoin:panier"]
     bids2 = {s: b for s, (b, _a) in p2["quotes"].items()}
     marks2 = {s: (b + a) // 2 for s, (b, a) in p2["quotes"].items()}
-    assert p2["equity"]["temoin:panier"] == equity_ueur(pre2, marks2, bids2)
-    assert p2["equity"]["temoin:panier"] < p1["equity"]["temoin:panier"]  # le krach est enfin visible
-    assert bids2[BTC] == crash[0]
+    assert p2["equity"]["temoin:panier"] == equity_ueur(pre2, marks2, bids2) < p1["equity"]["temoin:panier"]
+    assert BTC in replay(env.events())[HAIKU].positions
     check_journal(env)
+
+
+def test_acceptation_en_chaine_plafonnee_a_6_ticks_puis_rejet_alerte_et_levee(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    normal = env.kraken.ticker(BTC, "XBTEUR")
+    for k in range(20):  # 20 spreads bruts normaux : la médiane ne suit le nouveau régime qu'au 11e tick large
+        tick(env, T0 + 600 + 300 * k)
+    wide_quote(env, normal.bid, 10 * (normal.ask - normal.bid), bid=True)
+    out, conf = [], []
+    for w in range(1, 12):
+        rep = tick(env, T0 + 600 + 300 * (19 + w))
+        out.append("ok" if rep.rejets == {} else rep.rejets[BTC])
+        conf.append(BTC in rep.confirmes)
+        if w in (8, 9, 10):  # chaîne épuisée : le symbole est rejeté, l'equity reste au dernier quote accepté
+            assert BTC not in veille_p(env)["quotes"] and veille_p(env)["quotes_bruts"][BTC][0] == normal.bid
+    # 1 rejet initial, 6 ticks acceptés par confirmation, 3 rejets, puis la médiane brute a rattrapé : accepté.
+    assert out == ["spread"] + ["ok"] * 6 + ["spread"] * 3 + ["ok"]
+    assert conf == [False] + [True] * 6 + [False] * 4
+    alerts = [(a["level"], a["message"]) for a in pl(env, "alert") if a["code"] == "veille_symbole_ecarte"]
+    assert [(lvl, m.startswith(t)) for (lvl, m), t in zip(alerts, ("BTC/EUR : quotes écartés", "BTC/EUR : quotes de nouveau"), strict=True)] == [("action", True), ("info", True)]
 
 
 def test_tick_aberrant_isole_jamais_accepte_ni_vente_ni_reveil(tmp_path: Path):
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
-    set_btc(env, BTC_REF)
+    set_ticker_btc(env, BTC_REF)
     tick(env, T0 + 600, d)
-    set_btc(env, BTC_REF * 50 // 100)
+    set_ticker_btc(env, BTC_REF * 50 // 100)
     b = tick(env, T0 + 900, d)
     assert b.rejets == {BTC: "saut"} and b.confirmes == [] and b.stops == [] and b.declencheur is None
     assert BTC not in veille_p(env)["quotes"]
-    set_btc(env, BTC_REF)
+    set_ticker_btc(env, BTC_REF)
     c = tick(env, T0 + 1200, d)  # retour à la normale : accepté normalement, pas par confirmation
     assert c.rejets == {} and c.confirmes == [] and c.stops == []
     assert BTC in veille_p(env)["quotes"]
@@ -457,11 +526,11 @@ def test_deux_ticks_aberrants_incoherents_entre_eux_restent_rejetes(tmp_path: Pa
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
-    set_btc(env, BTC_REF)
+    set_ticker_btc(env, BTC_REF)
     tick(env, T0 + 600, d)
-    set_btc(env, BTC_REF * 50 // 100)
+    set_ticker_btc(env, BTC_REF * 50 // 100)
     assert tick(env, T0 + 900, d).rejets == {BTC: "saut"}
-    set_btc(env, BTC_REF * 70 // 100)  # -30 % : 40 % d'écart avec le tick précédent
+    set_ticker_btc(env, BTC_REF * 70 // 100)  # -30 % : 40 % d'écart avec le tick précédent
     c = tick(env, T0 + 1200, d)
     assert c.rejets == {BTC: "saut"} and c.confirmes == [] and c.stops == []
     assert BTC not in veille_p(env)["quotes"] and BTC in replay(env.events())[HAIKU].positions
@@ -471,14 +540,14 @@ def test_historique_perime_le_saut_se_mesure_contre_la_cloture_4h(tmp_path: Path
     env = make_env(tmp_path)  # aucun quote de veille : le premier tick compare à la clôture 4 h du store
     cycle(env, 0)
     close = max(env.kraken.ohlc(BTC, "XBTEUR", H4, None), key=lambda b: b.ts).close
-    set_btc(env, close // 10_000 * 10_000 // 2)
+    set_ticker_btc(env, close // 10_000 * 10_000 // 2)
     first = tick(env, T0 + 600)
     assert first.rejets == {BTC: "saut"} and BTC not in veille_p(env)["quotes"]
     # Historique accepté vieux de 30 min pile : même règle, puis confirmation au tick suivant.
     env2 = make_env(tmp_path, "e2")
     cycle(env2, 0)
     tick(env2, T0 + 600)  # BTC normal accepté
-    set_btc(env2, close // 10_000 * 10_000 // 2)
+    set_ticker_btc(env2, close // 10_000 * 10_000 // 2)
     b = tick(env2, T0 + 600 + 1800)
     assert b.rejets == {BTC: "saut"} and b.confirmes == []
     c = tick(env2, T0 + 600 + 2100)
@@ -489,7 +558,7 @@ def test_alerte_symbole_ecarte_et_mediane_sur_les_quotes_bruts(tmp_path: Path):
     env = make_env(tmp_path)
     cycle(env, 0)
     for k in range(5):
-        set_btc(env, BTC_REF)
+        set_ticker_btc(env, BTC_REF)
         tick(env, T0 + 600 + 300 * k)
     # Spread x10 durable avec un milieu qui oscille de 3 % : jamais confirmé (écart de 2 % ou plus entre deux ticks).
     outcomes = []
@@ -515,7 +584,7 @@ def test_symbole_ecarte_pas_de_stop_ni_de_declencheur_sur_lui(tmp_path: Path):
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
     S = stop_of(env)
-    set_btc(env, BTC_REF)
+    set_ticker_btc(env, BTC_REF)
     tick(env, T0 + 600, d)
     # Quote sous le stop mais avec un saut > 15 % (spread de 3 % : ask 3 % au-dessus) : écarté, pas de vente.
     bad = S * 80 // 100
@@ -538,63 +607,140 @@ def test_aucun_symbole_valide_le_tick_echoue_sans_rien_ecrire(tmp_path: Path):
     assert tick(env, T0 + 900).status == "done"
 
 
-# ---------------------------------------------------------------------------------------------- 3. confirmation sur deux ticks
+# ---------------------------------------------------------------------------------------------- 3. stops et mouvement sur les transactions
 
 
-def test_stop_confirme_sur_deux_ticks_au_bid_avec_glissement_et_frais(tmp_path: Path):
+def base_close(env: Env) -> int:
+    """Cours plat des transactions de BTC quand rien n'est forcé (clôture 4 h du marché factice)."""
+    return env.kraken.minute_bar(BTC, T0).close
+
+
+def b1(ts: int, o: int, h: int, lo: int, c: int) -> Bar:
+    return Bar(BTC, 60, ts, o, h, lo, c, 1)
+
+
+def fee_of(qty: int, px: int) -> int:
+    return -(-notional_ueur(qty, px, round_up=True) * 50 // 10_000)  # frais taker 50 bp, vers le haut
+
+
+def test_stop_sur_les_transactions_au_dernier_cours_avec_glissement_et_frais(tmp_path: Path):
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
     qty = replay(env.events())[HAIKU].positions[BTC].qty
     S = stop_of(env)
-    tick(env, T0 + 600, d)  # bid au-dessus du stop
-    bid = S - 1_000_000
-    env.kraken.override[BTC] = (bid, S * 105 // 100)  # ask bien au-dessus : le milieu reste au-dessus du stop
-    assert (bid + S * 105 // 100) // 2 > S
-    rep1 = tick(env, T0 + 900, d)  # sous le stop, mais le tick précédent ne l'était pas : pas de vente
-    assert rep1.stops == [] and BTC in replay(env.events())[HAIKU].positions
+    low = S - 1_000_000
+    set_trades(env, BTC, low, at=T0 + 840)  # les transactions passent sous le stop ; le ticker reste normal
+    r1 = tick(env, T0 + 900, d)  # une seule bougie close sous le stop (ts T0+840) : on attend le tick suivant
+    assert r1.stops == [] and BTC in replay(env.events())[HAIKU].positions
     r = T0 + 1200
-    rep2 = tick(env, r, d)  # sous le stop deux ticks de suite : vendu au bid
+    rep = tick(env, r, d)
     oid = f"stop:{HAIKU}:{BTC}:veille:{r}"
-    assert rep2.stops == [oid]
+    assert oid in rep.stops
     fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
-    px = bid * (10_000 - 5) // 10_000 // 100_000 * 100_000  # glissement 5 bp, tick vers le bas
-    fee = -(-notional_ueur(qty, px, round_up=True) * 50 // 10_000)  # frais taker 50 bp, vers le haut
+    px = low * 9995 // 10_000 // 100_000 * 100_000  # clôture de la dernière bougie x (1 - glissement 5 bp), tick vers le bas
     assert (fill["side"], fill["qty"], fill["price_ueur"], fill["fee_ueur"], fill["ts"], fill["reason"]) == (
-        "sell", qty, px, fee, r, "stop",
+        "sell", qty, px, fee_of(qty, px), r, "stop",
     )  # fmt: skip
-    assert (px, fee) == market_fill(Side.SELL, qty, Quote(BTC, r, bid, S * 105 // 100), BTC_INST, 50, 5)
-    assert px < bid and BTC not in replay(env.events())[HAIKU].positions
-    assert of(env, "veille")[-1]["payload"]["stops"] == [oid]
-    n_fills = len(of(env, "fill"))
+    assert px < env.kraken.ticker(BTC, "XBTEUR").bid  # le ticker (au-dessus du stop) ne fixe pas le prix
+    assert BTC not in replay(env.events())[HAIKU].positions and oid in of(env, "veille")[-1]["payload"]["stops"]
+    n = len(of(env, "fill"))
     tick(env, r)  # même tick : rien de plus
-    assert len(of(env, "fill")) == n_fills
-
-    # Le cycle suivant voit la barre T0 sous le stop (krach de 6 %) : la position est déjà vendue, pas de seconde vente.
-    env.kraken.override.clear()
+    assert len(of(env, "fill")) == n
+    # Le cycle suivant voit la barre T0 sous le stop (krach de 6 %) : déjà vendu, pas de seconde vente.
+    clear_market(env)
     env.kraken.crash(BTC, T0, 940)
     cycle(env, 1, d)
     sells = [f["order_id"] for f in pl(env, "fill") if f["portfolio"] == HAIKU and f["symbol"] == BTC and f["side"] == "sell"]
-    assert sells == [oid]
-    assert not [f for f in pl(env, "fill") if f["order_id"] == f"stop:{HAIKU}:{BTC}:{T0}"]
+    assert sells == [oid] and not [f for f in pl(env, "fill") if f["order_id"] == f"stop:{HAIKU}:{BTC}:{T0}"]
     check_journal(env)
 
 
-def test_stop_pas_confirme_si_le_tick_precedent_a_plus_de_10_minutes(tmp_path: Path):
+def test_prix_du_stop_jamais_au_dessus_du_stop(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    qty = replay(env.events())[HAIKU].positions[BTC].qty
+    S = stop_of(env)
+    set_trades(env, BTC, S - 1_000_000, at=T0 + 840)  # deux bougies sous le stop (T0+840, T0+900) ...
+    set_trades(env, BTC, base_close(env), at=T0 + 960)  # ... puis le cours remonte bien au-dessus
+    r = T0 + 1200
+    rep = tick(env, r, d)
+    oid = f"stop:{HAIKU}:{BTC}:veille:{r}"
+    assert oid in rep.stops
+    fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
+    assert base_close(env) * 9995 // 10_000 > S  # la dernière clôture x (1 - glissement) serait au-dessus du stop
+    assert fill["price_ueur"] == S and fill["fee_ueur"] == fee_of(qty, S)
+
+
+def test_bougie_aberrante_isolee_aucune_vente(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    base = base_close(env)
+    env.kraken.bar_override[(BTC, T0 + 1080)] = (base, base, 1, base)  # un plus bas à 1 µEUR, une seule minute
+    for t in (T0 + 1200, T0 + 1500):
+        assert tick(env, t, d).stops == []
+    assert BTC in replay(env.events())[HAIKU].positions
+    env.kraken.bar_override[(BTC, T0 + 1560)] = (base, base, 1, base)  # deux bougies distinctes dans la fenêtre : la vente part
+    env.kraken.bar_override[(BTC, T0 + 1620)] = (base, base, 1, base)
+    r = T0 + 1800
+    assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env, r, d).stops
+
+
+def test_glitch_du_ticker_repete_sans_transactions_sous_le_stop_aucune_vente(tmp_path: Path):
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
     S = stop_of(env)
-    env.kraken.override[BTC] = (S - 1_000_000, S - 900_000)
-    tick(env, T0 + 600, d)
-    rep = tick(env, T0 + 1200, d)  # tick précédent à 600 s : confirmé (borne incluse)
-    assert rep.stops == [f"stop:{HAIKU}:{BTC}:veille:{T0 + 1200}"]
-    env2 = make_env(tmp_path, "e2")
-    cycle(env2, 0, d)
-    env2.kraken.override[BTC] = (S - 1_000_000, S - 900_000)
-    tick(env2, T0 + 600, d)
-    rep2 = tick(env2, T0 + 1500, d)  # tick précédent à 900 s : pas confirmé
-    assert rep2.stops == [] and BTC in replay(env2.events())[HAIKU].positions
+    env.kraken.override[BTC] = (S - 1_000_000, S - 900_000)  # le ticker annonce un bid sous le stop, tick après tick
+    for k in range(5):
+        rep = tick(env, T0 + 600 + 300 * k, d)
+        assert rep.stops == [] and rep.rejets == {}
+        assert veille_p(env)["quotes"][BTC][0] == S - 1_000_000  # le quote erroné est bien accepté par le contrôle du ticker
+    assert BTC in replay(env.events())[HAIKU].positions and not [f for f in pl(env, "fill") if f["reason"] == "stop"]
+
+
+def test_krach_a_moins_3_pct_par_tick_spread_enorme_vente_au_premier_tick_avec_2_bougies(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    qty = replay(env.events())[HAIKU].positions[BTC].qty
+    S = stop_of(env)
+    base = base_close(env)
+    p1, p2, p3 = base * 97 // 100, base * 97 // 100 * 97 // 100, base * 97 // 100 * 97 // 100 * 97 // 100
+    assert p1 > S > p2
+    t1, t2, t3 = T0 + 900, T0 + 1200, T0 + 1500
+    stops = []
+    for t, price in ((t1, p1), (t2, p2), (t3, p3)):
+        set_trades(env, BTC, price, at=t - 240)  # chaque tick, -3 % de plus
+        env.kraken.override[BTC] = (price * 985 // 1000, price * 1015 // 1000)  # ticker : spread de 3 %
+        stops.append(tick(env, t, d).stops)
+    oid = f"stop:{HAIKU}:{BTC}:veille:{t2}"
+    assert oid not in stops[0] and oid in stops[1] and not [x for x in stops[2] if HAIKU in x]
+    fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
+    px = p2 * 9995 // 10_000 // 100_000 * 100_000  # dernière clôture 1 min x (1 - glissement)
+    assert (fill["price_ueur"], fill["fee_ueur"], fill["qty"]) == (px, fee_of(qty, px), qty) and px < S
+    assert BTC not in replay(env.events())[HAIKU].positions
+    ref = env.kraken.minute_bar(BTC, t3 - 3600).close  # clôture 1 min d'il y a 1 h (avant tout mouvement)
+    assert veille_p(env)["variations_bp"][BTC] == -(((ref - p3) * 20_000 + ref) // (2 * ref))
+
+
+def test_lecture_ohlc_en_echec_ni_stop_ni_declencheur_sur_le_symbole(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    set_trades(env, BTC, S - 1_000_000, at=T0 + 840)
+    env.kraken.fail_ohlc.add(BTC)
+    rep = tick(env, T0 + 1200, d)
+    assert rep.rejets == {BTC: "ohlc"} and rep.stops == [] and BTC in replay(env.events())[HAIKU].positions
+    p = veille_p(env)
+    assert p["rejets"] == {BTC: "ohlc"} and BTC in p["quotes"] and BTC not in p["clotures_1m"] and BTC not in p["variations_bp"]
+    env.kraken.fail_ohlc.clear()  # la lecture revient : le filet de veille reprend (bougies depuis T0+900)
+    r = T0 + 1500
+    assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env, r, d).stops
+    assert veille_p(env)["rejets"] == {}
 
 
 def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
@@ -606,12 +752,11 @@ def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
     d = deciders(plan)
     cycle(env, 0, d)
     stop0 = stop_of(env)
-    env.kraken.override[BTC] = (stop0 - 1_000_000, stop0 - 900_000)
-    tick(env, T0 + 600, d)
-    r = T0 + 900
-    assert tick(env, r, d).stops == [f"stop:{HAIKU}:{BTC}:veille:{r}"]
+    set_trades(env, BTC, stop0 - 1_000_000, at=T0 + 840)
+    r = T0 + 1200
+    assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env, r, d).stops
     assert BTC not in replay(env.events())[HAIKU].positions
-    env.kraken.override.clear()
+    clear_market(env)
     env.kraken.crash(BTC, T0, 940)  # la barre T0 est sous l'ancien stop
     cycle(env, 1, d)  # rachat
     pos = replay(env.events())[HAIKU].positions[BTC]
@@ -631,73 +776,77 @@ def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
     check_journal(env)
 
 
-def test_reference_et_tick_precedent_fonctions_pures():
+def test_precedent_fonction_pure():
     h = [H(1000, 10, 12, True, None), H(1900, 20, 22, True, None), H(2800, 30, 32, False, "saut")]
-    assert reference_a(h, 2500) == h[1]
-    assert reference_a(h, 2800) == h[1]  # un quote rejeté n'est jamais une référence
-    assert reference_a([H(1000, 1, 2, True, None)], 1900) == H(1000, 1, 2, True, None)  # 900 s : accepté
-    assert reference_a([H(1000, 1, 2, True, None)], 1901) is None  # 901 s : trop vieux
-    assert reference_a([H(1000, 1, 2, True, None)], 999) is None  # jamais après la cible
     assert precedent(h, 3100) == h[2]  # le tick précédent compte même rejeté (quote brut)
     assert precedent([H(100, 1, 2, True, None)], 700) is not None and precedent([H(100, 1, 2, True, None)], 701) is None
     assert precedent([H(100, 1, 2, True, None)], 100) is None  # strictement avant
     assert precedent([H(100, None, None, False, "invalide")], 200) is None
 
 
-@pytest.mark.parametrize(
-    ("p_bp", "x_bp", "trigger"),
-    [(300, 300, True), (0, 300, False), (300, 0, False), (-300, 300, False), (299, 300, False), (300, 299, False)],
-)
-def test_mouvement_confirme_sur_deux_ticks_meme_sens_chacun_contre_sa_reference(tmp_path, p_bp, x_bp, trigger):
-    env = make_env(tmp_path)
-    d = deciders()
-    cycle(env, 0, d)
-    set_btc(env, BTC_REF)
-    for t in (X - 3900, X - 3600):
-        tick(env, t, d)
-    set_btc(env, up(p_bp))
-    tick(env, X - 300, d)
-    set_btc(env, up(x_bp))
-    rep = tick(env, X, d)
-    assert (rep.declencheur is not None) is trigger and (rep.reveil == "completed") is trigger
+def test_variation_bougies_reference_a_2_minutes_et_seuils_exacts():
+    # Référence : la bougie la plus proche de tick - fenêtre, à 2 min près ; la plus récente close fixe le cours.
+    tick = 7200
+    cur = b1(7140, 1_030_000, 1_030_000, 1_030_000, 1_030_000)
+    assert variation_bougies([b1(3600 + 120, 1, 1, 1, 1_000_000), cur], tick, 3600) == (1_030_000, 1_000_000)
+    assert variation_bougies([b1(3600 + 121, 1, 1, 1, 1_000_000), cur], tick, 3600) is None
+    assert variation_bougies([b1(3600 - 120, 1, 1, 1, 1_000_000), cur], tick, 3600) == (1_030_000, 1_000_000)
+    near = [b1(3600 - 60, 1, 1, 1, 900_000), b1(3600 + 60, 1, 1, 1, 800_000), b1(3600 + 120, 1, 1, 1, 700_000), cur]
+    assert variation_bougies(near, tick, 3600)[1] == 900_000  # à égale distance : la plus ancienne
+    assert variation_bougies([b1(3600, 1, 1, 1, 1_000_000), b1(7141, 1, 1, 1, 5)], tick, 3600) is None  # pas encore close
+    old = b1(7200 - 60 - 901, 1, 1, 1, 7)  # dernière bougie close vieille de plus de 15 min : pas de mesure
+    assert variation_bougies([b1(3600, 1, 1, 1, 1_000_000), old], tick, 3600) is None
 
 
-def test_mouvement_fonction_pure_le_plus_grand_l_emporte_et_le_tick_precedent_rejete_confirme(tmp_path: Path):
-    def hist(mids: dict[int, int], rejected: tuple[int, ...] = ()):
-        return [H(t, m - 5, m + 5, t not in rejected, "saut" if t in rejected else None) for t, m in sorted(mids.items())]
+def minute_path(changes: dict[int, int], start: int = 3000, end: int = 7200) -> list[Bar]:
+    """Bougies plates par minute ; `changes` : {à partir de ts: cours}."""
+    out = []
+    for ts in range(start, end, 60):
+        price = [p for frm, p in sorted(changes.items()) if frm <= ts][-1]
+        out.append(b1(ts, price, price, price, price))
+    return out
 
-    # A : +4 % ; B : -10 % ; C : plat, tous deux ticks confirmés contre leur référence (tick 7200 et 6900).
-    h = {
-        "A": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 1_040_000}),
-        "B": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 900_000}),
-        "C": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 1_000_000}),
+
+def test_mouvement_sur_les_bougies_variations_seuils_exacts_et_confirmation():
+    ref = 1_000_000
+    mb = {  # A +4 % et B -10 % depuis 6000 (confirmés aux deux ticks 7200 et 6900), C plat
+        "A": minute_path({0: ref, 6000: 1_040_000}), "B": minute_path({0: ref, 6000: 900_000}), "C": minute_path({0: ref}),
     }
-    cur = {"A": (1_040_000 - 5, 1_040_000 + 5), "B": (899_995, 900_005), "C": (999_995, 1_000_005)}
-    out = mouvement(cur, h, 7200, 300, 3600)
-    assert out == {"type": "mouvement", "symbole": "B", "variation_bp": -1000, "fenetre_s": 3600}
-    assert mouvement(cur, {}, 7200, 300, 3600) is None  # pas d'historique : pas de déclencheur
-    assert mouvement(cur, {k: v[:2] for k, v in h.items()}, 7200, 300, 3600) is None  # pas de tick précédent
-    # Le tick précédent REJETÉ confirme s'il va dans le même sens (milieu brut) ; en sens inverse, non.
-    rej = {"B": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 900_000}, rejected=(6900,))}
-    assert mouvement({"B": cur["B"]}, rej, 7200, 300, 3600)["symbole"] == "B"
-    inv = {"B": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 1_100_000}, rejected=(6900,))}
-    assert mouvement({"B": cur["B"]}, inv, 7200, 300, 3600) is None
+    for sym, bars in mb.items():
+        mb[sym] = [Bar(sym, 60, b.ts, b.open, b.high, b.low, b.close, 1) for b in bars]
+    trig, var = mouvement(mb, 7200, 300, 3600, 300)
+    assert trig == {"type": "mouvement", "symbole": "B", "variation_bp": -1000, "fenetre_s": 3600}
+    assert var == {"A": 400, "B": -1000, "C": 0}
+    # Seuil exact : +3 % déclenche, +2,9999 % non (aux deux ticks).
+    for price, expected in ((1_030_000, True), (1_029_999, False), (970_000, True), (970_001, False)):
+        bars = {"A": [Bar("A", 60, b.ts, b.open, b.high, b.low, b.close, 1) for b in minute_path({0: ref, 6000: price})]}
+        assert (mouvement(bars, 7200, 300, 3600, 300)[0] is not None) is expected, price
+    # Confirmation : le tick précédent (6900) était encore plat -> pas de déclencheur, la variation reste mesurée.
+    late = {"A": [Bar("A", 60, b.ts, b.open, b.high, b.low, b.close, 1) for b in minute_path({0: ref, 7000: 1_050_000})]}
+    trig, var = mouvement(late, 7200, 300, 3600, 300)
+    assert trig is None and var == {"A": 500}
+    # Sens opposés (-3 % au tick précédent, +3 % au courant) : aucun déclencheur.
+    opp = {"A": [Bar("A", 60, b.ts, b.open, b.high, b.low, b.close, 1) for b in minute_path({0: ref, 6000: 970_000, 7000: 1_030_000})]}
+    assert mouvement(opp, 7200, 300, 3600, 300)[0] is None
+    assert mouvement({}, 7200, 300, 3600, 300) == (None, {})
 
 
 # ---------------------------------------------------------------------------------------------- 4. déclencheur de stop supprimé
 
 
+def buy_btc_stop_1pct(i: int, snap: dict):
+    return [action(BTC, size=10, stop=1)] if i == 0 and snap["contexte"]["type"] == "rendez_vous" else None
+
+
 def test_un_stop_de_veille_n_est_plus_un_declencheur_et_le_prompt_le_dit(tmp_path: Path):
     env = make_env(tmp_path)
-    d = deciders(buy_btc_at_cycle_0)
+    d = deciders(buy_btc_stop_1pct)
     cycle(env, 0, d)
-    S = stop_of(env)
-    env.kraken.override[BTC] = (S - 1_000_000, S - 900_000)
-    tick(env, X - 300, d)
-    rep = tick(env, X, d)  # stop confirmé et exécuté sur un portefeuille LLM
-    assert rep.stops == [f"stop:{HAIKU}:{BTC}:veille:{X}"]
+    set_trades(env, BTC, base_close(env) * 98 // 100, at=X - 420)  # -2 % : sous le stop de 1 %, sous le seuil de 3 %
+    rep = tick(env, X, d)  # stop exécuté sur un portefeuille LLM
+    assert f"stop:{HAIKU}:{BTC}:veille:{X}" in rep.stops
     assert rep.declencheur is None and rep.reveil is None and not reveil_events(env)
-    p = of(env, "veille")[-1]["payload"]
+    p = veille_p(env)
     assert p["reveil"] is None and p["refus"] is None
     text = load_system_prompt()
     assert "stop" not in text.split("## Ce que tu reçois")[0].lower().replace("stop obligatoire", "")
@@ -712,12 +861,11 @@ def test_un_stop_de_veille_n_est_plus_un_declencheur_et_le_prompt_le_dit(tmp_pat
 def test_stop_d_un_temoin_execute_sans_reveil(tmp_path: Path):
     env = make_env(tmp_path)
     cycle(env, 0)
-    low = 2_000_000_000
+    base = base_close(env)
     Journal(env.paths.journal).append(
-        "stop_set", {"portfolio": "temoin:panier", "symbol": BTC, "stop_ueur": low + 5_000_000}, T0 + 400
+        "stop_set", {"portfolio": "temoin:panier", "symbol": BTC, "stop_ueur": base * 99 // 100}, T0 + 400
     )
-    env.kraken.override[BTC] = (low, low + 100_000)
-    tick(env, X - 300)
+    set_trades(env, BTC, base * 98 // 100, at=X - 420)
     rep = tick(env, X)
     assert f"stop:temoin:panier:{BTC}:veille:{X}" in rep.stops
     assert BTC not in replay(env.events())["temoin:panier"].positions
@@ -734,6 +882,7 @@ def test_declencheur_de_mouvement_au_seuil_exact(tmp_path: Path, bp: int, reveil
     d = prepare(env, X, bp=bp)
     rep = tick(env, X, d)
     trig = {"type": "mouvement", "symbole": BTC, "variation_bp": bp, "fenetre_s": 3600}
+    assert veille_p(env)["variations_bp"][BTC] == bp and set(veille_p(env)["variations_bp"]) == set(SYMBOLS)
     if reveil:
         assert rep.declencheur == trig and rep.reveil == "completed"
         assert of(env, "veille")[-1]["payload"]["reveil"] == trig
@@ -744,29 +893,40 @@ def test_declencheur_de_mouvement_au_seuil_exact(tmp_path: Path, bp: int, reveil
         assert not reveil_events(env)
 
 
-def test_mouvement_mesure_au_milieu_et_stop_au_bid_avec_un_spread_large(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("p_bp", "x_bp", "trigger"),
+    [(300, 300, True), (0, 300, False), (300, 0, False), (-300, 300, False), (299, 300, False), (300, 299, False)],
+)
+def test_mouvement_confirme_sur_deux_ticks_meme_sens_chacun_contre_sa_reference(tmp_path, p_bp, x_bp, trigger):
     env = make_env(tmp_path)
-    d = prepare(env, X, bp=300, wide=True)  # ask > bid de 3 % : le bid ne bouge que de 1,455 %, le milieu de 3 %
-    q = env.kraken.override[BTC]
-    assert q[0] * 10_000 < BTC_REF * 10_300 and sum(q) // 2 == up(300)
+    d = deciders()
+    cycle(env, 0, d)
+    set_btc(env, BTC_REF, at=0)
+    set_btc(env, up(p_bp), at=X - 420)  # cours du tick X-300
+    set_btc(env, up(x_bp), at=X - 240)  # cours du tick X
+    assert tick(env, X - 300, d).declencheur is None
     rep = tick(env, X, d)
-    assert rep.declencheur == {"type": "mouvement", "symbole": BTC, "variation_bp": 300, "fenetre_s": 3600}
-    assert rep.reveil == "completed" and rep.rejets == {}
+    assert (rep.declencheur is not None) is trigger and (rep.reveil == "completed") is trigger
 
 
-def test_pas_de_declencheur_de_mouvement_sans_reference_a_moins_de_15_minutes(tmp_path: Path):
-    for ref_ts, trig in [(X - 3600 - 900, True), (X - 3600 - 1200, False)]:  # 900 s avant la cible : accepté
-        env = make_env(tmp_path, f"ref{ref_ts}")
-        d = deciders()
-        cycle(env, 0, d)
-        set_btc(env, BTC_REF)
-        tick(env, ref_ts, d)
-        # tick précédent : sa référence est la même (à cible - 300, tolérance 900 s) ou plus loin
-        set_btc(env, up(300))
-        tick(env, X - 300, d)
-        rep = tick(env, X, d)
-        # tick précédent X-300 : cible X-3900, ref à ref_ts (X-4500 -> 600 s) ; tick courant : cible X-3600 (900 s ou plus)
-        assert (rep.declencheur is not None) is trig, ref_ts
+def test_mouvement_mesure_sur_les_transactions_le_ticker_est_ignore(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders()
+    cycle(env, 0, d)
+    set_btc(env, BTC_REF, at=0)
+    for t in (X - 300, X):  # le ticker s'envole de 7 % (accepté par son contrôle), les transactions restent plates
+        set_ticker_btc(env, up(700))
+        rep = tick(env, t, d)
+        assert rep.declencheur is None and rep.reveil is None
+    assert veille_p(env)["quotes"][BTC] == [up(700) * 9995 // 10000, up(700) * 10005 // 10000]
+    assert veille_p(env)["variations_bp"][BTC] == 0 and not reveil_events(env)
+    # Inversement : les transactions montent de 3 %, le ticker reste normal : le déclencheur part.
+    env2 = make_env(tmp_path, "e2")
+    d2 = prepare(env2, X, bp=300)
+    del env2.kraken.override[BTC]
+    rep2 = tick(env2, X, d2)
+    assert rep2.declencheur == {"type": "mouvement", "symbole": BTC, "variation_bp": 300, "fenetre_s": 3600}
+    assert rep2.reveil == "completed"
 
 
 # ---------------------------------------------------------------------------------------------- garde-fous
@@ -976,7 +1136,7 @@ def test_contexte_ronde_et_budget_partage_entre_cycles_et_reveils(tmp_path: Path
 # ---------------------------------------------------------------------------------------------- 8. PRICE_SANITY au réveil
 
 
-def test_price_sanity_au_reveil_compare_au_tick_precedent_pas_a_la_cloture_de_4_h(tmp_path: Path):
+def test_price_sanity_au_reveil_compare_au_dernier_cours_des_transactions(tmp_path: Path):
     env = make_env(tmp_path)
 
     def plan(i, snap):
@@ -986,12 +1146,46 @@ def test_price_sanity_au_reveil_compare_au_tick_precedent_pas_a_la_cloture_de_4_
     close = max((b for b in env.kraken.ohlc(BTC, "XBTEUR", H4, None)), key=lambda b: b.ts).close
     assert abs(up(500) - close) * 10_000 > 300 * close  # la clôture 4 h aurait déclenché PRICE_SANITY
     rep = tick(env, X, d)
-    assert rep.reveil == "completed"
+    assert rep.reveil == "completed" and veille_p(env)["clotures_1m"][BTC] == up(500)
     intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
     verdict = next(v for v in pl(env, "risk_verdict") if v["intent_id"] == intent["intent_id"])
     assert verdict["approved"] and "PRICE_SANITY" not in verdict["reasons"]
     assert BTC in replay(env.events())[HAIKU].positions
-    # Au cycle suivant, la comparaison reste faite à la clôture de 4 h : rien n'a changé.
+    check_journal(env)
+
+
+def test_un_ticker_errone_bloque_les_entrees_au_reveil(tmp_path: Path):
+    env = make_env(tmp_path)
+
+    def plan(i, snap):
+        return [action(BTC, size=10, stop=5, move=8)] if snap["contexte"]["type"] == "reveil" else None
+
+    d = prepare(env, X, deciders(plan), bp=300)
+    set_ticker_btc(env, up(700))  # ticker +7 % (accepté : moins de 15 % du tick précédent), transactions à +3 %
+    rep = tick(env, X, d)
+    assert rep.reveil == "completed" and rep.rejets == {} and veille_p(env)["clotures_1m"][BTC] == up(300)
+    intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
+    verdict = next(v for v in pl(env, "risk_verdict") if v["intent_id"] == intent["intent_id"])
+    assert not verdict["approved"] and "PRICE_SANITY" in verdict["reasons"]
+    assert not [f for f in pl(env, "fill") if f["portfolio"] == HAIKU and f["side"] == "buy"]
+
+
+def test_symbole_sans_quote_accepte_verdict_no_quote_jamais_de_continue_muet(tmp_path: Path):
+    env = make_env(tmp_path)
+
+    def plan(i, snap):
+        return [action(BTC, size=10, stop=5, move=8)] if snap["contexte"]["type"] == "reveil" else None
+
+    d = prepare(env, X, deciders(plan), bp=300)
+    env.kraken.override[BTC] = (0, 10)  # ticker invalide : pas de quote accepté ; les transactions déclenchent le réveil
+    rep = tick(env, X, d)
+    assert rep.reveil == "completed" and rep.rejets == {BTC: "invalide"}
+    intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
+    verdict = next(v for v in pl(env, "risk_verdict") if v["intent_id"] == intent["intent_id"])
+    assert verdict == {**verdict, "approved": False, "reasons": ["NO_QUOTE"], "qty": 0, "reserved_ueur": 0}
+    states = [(o["state"], o["detail"]) for o in pl(env, "order_state") if o["order_id"] == intent["intent_id"]]
+    assert states == [("RISK_REJECTED", "NO_QUOTE")]
+    assert BTC not in replay(env.events())[HAIKU].positions and BTC not in {q["payload"]["symbol"] for q in of(env, "quote_reveil")}
     check_journal(env)
 
 
@@ -1143,7 +1337,7 @@ def test_reprise_sur_les_quotes_d_origine_jamais_reecrits(tmp_path: Path):
     check_journal(env)
 
 
-def test_reprise_apres_un_crash_pendant_l_ecriture_des_quotes_garde_ceux_deja_ecrits(tmp_path: Path, monkeypatch):
+def test_reprise_apres_un_crash_pendant_l_ecriture_des_quotes_complete_depuis_le_tick_d_origine(tmp_path: Path, monkeypatch):
     env = make_env(tmp_path)
     d = prepare(env, X, deciders(buy_eth_at_reveil))
     real, n = Journal.append, []
@@ -1158,13 +1352,16 @@ def test_reprise_apres_un_crash_pendant_l_ecriture_des_quotes_garde_ceux_deja_ec
     monkeypatch.setattr(Journal, "append", flaky)
     assert tick(env, X, d).status == "reveil_failed"
     monkeypatch.undo()
-    assert [e["payload"]["symbol"] for e in of(env, "quote_reveil")] == n and len(n) == 2
+    first = [e["payload"] for e in of(env, "quote_reveil")]
+    assert [q["symbol"] for q in first] == n and len(n) == 2
+    origine = veille_p(env)["quotes"]
+    env.kraken.override["SOL/EUR"] = (1, 2)  # le marché a changé depuis (et c'est invalide) : sans effet sur la reprise
     rep = tick(env, X + 300, d)
     assert rep.reveil == "resumed"
-    assert [e["payload"]["symbol"] for e in of(env, "quote_reveil")] == n  # jamais réécrits, jamais complétés
-    # Les symboles sans quote journalisé ne sont pas négociables dans cette ronde.
-    traded = {f["symbol"] for f in pl(env, "fill") if f["ts"] == X and f["side"] == "buy"}
-    assert traded <= set(n)
+    after = [e["payload"] for e in of(env, "quote_reveil")]
+    assert after[:2] == first and len(after) == 6  # jamais réécrits ; les 4 manquants complétés
+    assert {q["symbol"]: [q["bid"], q["ask"]] for q in after} == origine  # depuis les quotes acceptés du tick d'origine
+    assert {q["ts"] for q in after[2:]} == {X}
     check_journal(env)
 
 
@@ -1280,7 +1477,7 @@ def test_replay_et_verify_apres_une_journee_de_veille_et_de_reveils(tmp_path: Pa
     cycle(env, 1, d)
     for k in range(1, 6):
         tick(env, T0 + H4 + 600 + 300 * k, d)
-    assert len(of(env, "veille")) == 3 + 1 + 11 + 5
+    assert len(of(env, "veille")) == 1 + 1 + 11 + 5
     check_journal(env)
 
 
