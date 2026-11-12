@@ -39,6 +39,13 @@ from recherche.moteur.journal import JournalRecherche, params_canoniques
 from recherche.moteur.panneau import synthetique
 from recherche.portes import dsr, evaluer, selection, stats
 from recherche.portes.adaptateur import vers_essai
+
+
+@pytest.fixture(autouse=True)
+def _k_fixe(monkeypatch):
+    """Équivalences exactes entre exécutions (reprise, référence) : k = 0 jour retiré, tiré ailleurs."""
+    from recherche.moteur import bac_a_sable
+    monkeypatch.setattr(bac_a_sable, "tirer_jours_retires", lambda *a, **k: 0)
 from recherche.portes.evaluer import Essai
 from tests.recherche.test_integration import (
     DEBUT_2019_09,
@@ -499,7 +506,7 @@ def test_v_utilise_tous_les_essais_du_journal_pas_seulement_la_vague(tmp_path, j
     def essai(eid, fam, classe, univers, statut, sr):
         journal.debut({"id": eid, "famille": fam, "classe": classe, "fiche_sha256": "f", "code_sha256": "c",
                        "params": eid, "univers": univers})
-        journal.fin({"id": eid, "statut": statut, **({"sr_jour": sr} if statut == "OK" else {})})
+        journal.fin({"id": eid, "statut": statut, **({"sr_jour": sr, "portes_sr_jour": sr} if statut == "OK" else {})})
 
     essai("R0001", "A", "directionnel", "principal", "OK", "0.05")
     essai("R0002", "A", "directionnel", "principal", "OK", "0.07")

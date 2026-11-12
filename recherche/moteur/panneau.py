@@ -89,6 +89,20 @@ class Panneau:
             funding_idx=self.funding_idx[sl], funding_taux=self.funding_taux[sl],
             funding_ts=self.funding_ts[sl])
 
+    def retirer_debut(self, k: int) -> Panneau:
+        """Panneau sans ses `k` premiers jours (échauffement retiré du flux envoyé à la stratégie)."""
+        if k <= 0:
+            return self
+        sl = slice(k, None)
+        return self._remplacer(
+            jours=self.jours[sl], spot_1d=self.spot_1d[sl],
+            spot_1h=None if self.spot_1h is None else self.spot_1h[sl],
+            perp_1h=None if self.perp_1h is None else self.perp_1h[sl],
+            eligibles=self.eligibles[sl],
+            eligibles_perp=None if self.eligibles_perp is None else self.eligibles_perp[sl],
+            funding_idx=self.funding_idx[sl], funding_taux=self.funding_taux[sl],
+            funding_ts=self.funding_ts[sl])
+
     def mettre_a_l_echelle(self, facteurs: np.ndarray) -> Panneau:
         """Prix × facteur (par paire), volumes et achats taker ÷ facteur (même valeur échangée)."""
         f = np.asarray(facteurs, dtype=np.float64)
@@ -181,7 +195,12 @@ class Panneau:
         """Message `Jour` du jour i."""
         from recherche.moteur.contrat import Jour
 
-        idx, tx = self.funding_idx[i], self.funding_taux[i]
+        idx, tx, ts = self.funding_idx[i], self.funding_taux[i], self.funding_ts[i]
+        # Ordre des échéances : (indice de colonne PERMUTÉ, horodatage). L'ordre d'origine (par paire du fichier
+        # d'univers puis par échéance) révélerait la permutation : la liste envoyée à la stratégie est
+        # triée par colonne du flux, donc indépendante de l'identité des paires.
+        ordre = np.lexsort((ts, idx)) if len(idx) else np.zeros(0, dtype=np.int64)
+        idx, tx = idx[ordre], tx[ordre]
         return Jour(
             i=i, spot_1d=self.spot_1d[i],
             spot_1h=None if self.spot_1h is None else self.spot_1h[i],
@@ -251,7 +270,9 @@ def panneau_depuis_tables(
         for k, s in enumerate(symboles):
             df = spot_1h[s]
             sec = _secondes(df.index) - d0
-            s1h[sec // JOUR_S, k, (sec % JOUR_S) // 3600] = df[_COLS].to_numpy()
+            ok = (sec >= 0) & (sec // JOUR_S < T)  # une barre 1 h hors de la grille 1 j serait rangée au mauvais jour
+            sec = sec[ok]
+            s1h[sec // JOUR_S, k, (sec % JOUR_S) // 3600] = df[_COLS].to_numpy()[ok]
     p1h, elp = None, None
     fi = [[] for _ in range(T)]
     ft = [[] for _ in range(T)]
@@ -288,10 +309,19 @@ def panneau_depuis_tables(
 def panneau_depuis_donnees(donnees, univers: str = "principal", *, avec_1h: bool = True,
                            avec_perp: bool = True, symboles_arene: tuple[str, ...] | None = None) -> Panneau:
     """`univers` : "principal" (les 15 paires), "arene" (`symboles_arene`, sinon les 6 des critères via
-    l'appelant) ou "controle:<SYM>" (un symbole de contrôle, barres 1 j seulement)."""
+    l'appelant) ou "controle:<SYM>" (un symbole de contrôle : barres 1 j, 1 h, perp et funding du chargeur
+    quand ils existent)."""
     if univers.startswith("controle:"):
         sym = univers.split(":", 1)[1]
-        return panneau_depuis_tables([sym], {sym: donnees.controle_1d[sym]})
+        h1 = getattr(donnees, "controle_1h", None) or {}
+        pp = getattr(donnees, "controle_perp_1h", None) or {}
+        fd = getattr(donnees, "controle_funding", None) or {}
+        # mêmes tables, mêmes colonnes et mêmes `connue_a` que l'univers principal ; None si absentes.
+        return panneau_depuis_tables(
+            [sym], {sym: donnees.controle_1d[sym]},
+            {sym: h1[sym]} if avec_1h and h1.get(sym) is not None else None,
+            {sym: pp[sym]} if avec_perp and pp.get(sym) is not None else None,
+            {sym: fd.get(sym)} if avec_perp and pp.get(sym) is not None else None)
     syms = list(donnees.univers)
     pan = panneau_depuis_tables(
         syms, donnees.spot_1d, donnees.spot_1h if avec_1h else None,

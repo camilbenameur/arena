@@ -225,7 +225,9 @@ def test_poids_constants_rendent_le_rapport_non_evaluable(crit):
     assert r["evaluable"] is False
     assert vers_rapport_causalite(r, crit).invariances_ok is False
     r2 = verifier_causalite((STRAT / "memoire_sens.py").read_bytes(), {}, crit, n_paires=6, avec_1h=False)
-    assert r2["evaluable"] is True and vers_rapport_causalite(r2, crit).invariances_ok is True
+    assert r2["evaluable"] is True and vers_rapport_causalite(r2, crit).invariances_ok is False  # sans reel_ok
+    r2["reel_ok"] = True  # le rejeu sur données réelles est ajouté par executer_essai
+    assert vers_rapport_causalite(r2, crit).invariances_ok is True
 
 
 def test_controle_reel_detecte_une_fuite_que_le_synthetique_ne_voit_pas(tmp_path, journal, crit, monkeypatch):

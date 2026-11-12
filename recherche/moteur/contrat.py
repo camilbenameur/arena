@@ -67,9 +67,18 @@ class Causalite(ErreurEssai):
 
 @dataclass(frozen=True, slots=True)
 class Jour:
-    """Message du jour. `i` = décalage entier aléatoire (>= 10 000, tiré par essai) + rang du jour dans le flux :
-    la stratégie peut compter les jours, pas en déduire la date. Prix et volumes sont REBASÉS par paire
-    (`Panneau.rebaser`) : prix ÷ premier close de la paire, volumes ÷ volume moyen des 30 premiers jours cotés."""
+    """Message du jour. `i` = décalage entier aléatoire (>= 10 000, tiré par essai) + rang du jour dans le flux.
+    Prix et volumes sont REBASÉS par paire (`Panneau.rebaser`) : prix ÷ premier close de la paire, volumes ÷
+    volume moyen des 30 premiers jours cotés. Les k premiers jours de l'échauffement (k tiré par essai dans
+    [0, 365), `os.urandom`, identique pour l'exécution principale et ses rejeux) ne sont pas envoyés : le rang
+    du jour ne donne donc pas la date par compte de jours depuis le début, public, des données.
+
+    Ce qui reste déductible d'une date, honnêtement : `eligibles` / `eligibles_perp` (les dates de cotation des
+    15 paires sont publiques : p. ex. les perpétuels de 9 paires apparaissent le même jour, 2022-04-03, et la
+    grille de prix/tick de chaque paire survit au rebasage) ; un rang de jour relatif entre deux cotations
+    (écart exact en jours entre deux événements du flux) ; la saisonnalité interne aux données (jour de semaine
+    par le volume, échéances de funding). Le flux ne cache pas l'époque à une stratégie qui reconnaît ces
+    événements : il empêche seulement de lire la date dans `i`."""
 
     i: int
     spot_1d: np.ndarray  # (n_paires, 6) o,h,l,c,v,taker_buy_base ; zéros tant que la paire n'est pas cotée

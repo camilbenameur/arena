@@ -163,7 +163,7 @@ VERSION_CAUSALITE = "c9-v2"  # dans la clé du cache : changer le test invalide 
 
 
 def _courir(source: bytes, params: dict, pan: Panneau, classe: str, marge: float, timeout: float,
-            strict: bool, jusqu_a: int | None = None):
+            strict: bool, jusqu_a: int | None = None, jours_retires: int = 0):
     cotee = np.maximum.accumulate(pan.eligibles, axis=0)
 
     def valider(i, ws, wp):
@@ -171,13 +171,14 @@ def _courir(source: bytes, params: dict, pan: Panneau, classe: str, marge: float
             valider_poids(classe, i, ws, wp, cotee[i], None if pan.eligibles_perp is None
                           else pan.eligibles_perp[i], marge)
 
-    return bac_a_sable.executer_flux(source, params, pan, valider, timeout, jusqu_a_erreur=jusqu_a)
+    return bac_a_sable.executer_flux(source, params, pan, valider, timeout, jusqu_a_erreur=jusqu_a,
+                                     jours_retires=jours_retires)
 
 
 def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "directionnel",
                        n_paires: int = 15, avec_1h: bool = True, avec_perp: bool = False,
                        graine_donnees: int | None = None, rng: np.random.Generator | None = None,
-                       threads: int = 4) -> dict:
+                       threads: int = 4, jours_retires: int | None = None) -> dict:
     """C9 sur données synthétiques (jamais réelles). Compare, dans le bac à sable :
     - déterminisme : deux exécutions complètes identiques ;
     - `coupures_aleatoires` + `coupures_fixes` coupures sur `connue_a` : toute donnée connue après la coupure
@@ -191,7 +192,9 @@ def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "
     élevé positif soutenu ou négatif, base négative, paires qui entrent en cotation) et une graine tirée de
     `os.urandom` À CHAQUE APPEL (`graine_donnees` n'est donné que par les tests) : une stratégie ne peut pas
     reconnaître le jeu de test. Si les poids sont constants sur toute la série, le rapport porte
-    `evaluable: False` (rien ne prouve alors la causalité : `adaptateur.vers_rapport_causalite` fait échouer C9)."""
+    `evaluable: False` (rien ne prouve alors la causalité : `adaptateur.vers_rapport_causalite` fait échouer C9).
+    `jours_retires` : nombre de jours d'échauffement retirés du flux (None : tiré par appel, un seul tirage
+    pour tous les rejeux ; les tests passent 0)."""
     cfg = criteres.portes.C9_causalite
     rng = rng or np.random.default_rng(int.from_bytes(os.urandom(16), "big"))
     if graine_donnees is None:
@@ -217,13 +220,16 @@ def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "
     non_pleines = sum(1 for c in coupures if c % 3600 != 0)
     perm = _permutation_sans_point_fixe(rng, n_paires)
     facteurs = np.exp(rng.uniform(math.log(0.1), math.log(10.0), n_paires))
+    # k jours d'échauffement retirés : UN seul tirage pour tous les rejeux de ce contrôle (sinon deux rejeux
+    # d'une stratégie qui compte les jours ne seraient pas comparables).
+    k_ret = bac_a_sable.tirer_jours_retires(pan, criteres) if jours_retires is None else int(jours_retires)
 
     def base(_):
-        return _courir(source, params, pan, classe, marge, timeout, True)
+        return _courir(source, params, pan, classe, marge, timeout, True, jours_retires=k_ret)
 
     def coupee(c):
         corr = pan.corrompre_apres(c, rng_local(c))
-        ws, wp, n_ok = _courir(source, params, corr, classe, marge, timeout, False, jusqu_a=1)
+        ws, wp, n_ok = _courir(source, params, corr, classe, marge, timeout, False, jusqu_a=1, jours_retires=k_ret)
         return c, ws, wp, n_ok
 
     def rng_local(c):
@@ -231,13 +237,14 @@ def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "
 
     def permutee(_):
         p = pan.permuter(perm)
-        ws, wp, _n = _courir(source, params, p, classe, marge, timeout, True)
+        ws, wp, _n = _courir(source, params, p, classe, marge, timeout, True, jours_retires=k_ret)
         o_s, o_p = np.empty_like(ws), np.empty_like(wp)
         o_s[:, perm], o_p[:, perm] = ws, wp
         return o_s, o_p
 
     def echelle(_):
-        ws, wp, _n = _courir(source, params, pan.mettre_a_l_echelle(facteurs), classe, marge, timeout, True)
+        ws, wp, _n = _courir(source, params, pan.mettre_a_l_echelle(facteurs), classe, marge, timeout, True,
+                             jours_retires=k_ret)
         return ws, wp
 
     res = {"ok": False, "n_coupures": len(coupures), "coupures_heure_non_pleine": non_pleines}
@@ -333,17 +340,33 @@ def _permutation_sans_point_fixe(rng: np.random.Generator, n: int) -> np.ndarray
             return perm
 
 
+def _derangement(rng: np.random.Generator, ref: np.ndarray) -> np.ndarray:
+    """Permutation `p` avec `p[k] != ref[k]` pour tout k : aucune colonne du rejeu ne porte la même paire que
+    dans l'exécution de référence (sinon une stratégie qui fuit l'indice de colonne ne serait pas détectée
+    sur ces colonnes). Impossible pour n = 1 (une seule paire) : renvoie alors `ref`."""
+    n = len(ref)
+    if n < 2:
+        return np.asarray(ref).copy()
+    while True:
+        p = rng.permutation(n)
+        if (p != ref).all():
+            return p
+
+
 def _controle_reel(source: bytes, params: dict, pan: Panneau, classe: str, marge: float, timeout: float,
-                   ws_o: np.ndarray, wp_o: np.ndarray) -> float:
+                   ws_o: np.ndarray, wp_o: np.ndarray, perm_ref: np.ndarray | None = None,
+                   jours_retires: int = 0) -> float:
     """Second contrôle de causalité/invariance, sur les données RÉELLES de l'essai : rejoue la stratégie avec une
     autre permutation et d'autres facteurs d'échelle par paire (tirés par appel, `os.urandom`) ; renvoie l'écart
-    maximal des poids, dans le repère des paires réelles, avec ceux de l'exécution principale."""
+    maximal des poids, dans le repère des paires réelles, avec ceux de l'exécution principale.
+    `perm_ref` : permutation de l'exécution principale ; le rejeu en tire un dérangement relatif (chaque colonne
+    change de paire entre les deux exécutions). `jours_retires` : le même k que l'exécution principale."""
     rng = np.random.default_rng(int.from_bytes(os.urandom(16), "big"))
     n = pan.n_paires
-    perm = _permutation_sans_point_fixe(rng, n)
+    perm = _permutation_sans_point_fixe(rng, n) if perm_ref is None else _derangement(rng, np.asarray(perm_ref))
     facteurs = np.exp(rng.uniform(math.log(0.1), math.log(10.0), n))
     p2 = pan.mettre_a_l_echelle(facteurs).permuter(perm)
-    ws, wp, _ = _courir(source, params, p2, classe, marge, timeout, True)
+    ws, wp, _ = _courir(source, params, p2, classe, marge, timeout, True, jours_retires=jours_retires)
     o_s, o_p = np.empty_like(ws), np.empty_like(wp)
     o_s[:, perm], o_p[:, perm] = ws, wp
     return float(max(np.abs(o_s - ws_o).max(), np.abs(o_p - wp_o).max()))
@@ -354,7 +377,8 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
                    convention_rotation: str = "derive", permutation: np.ndarray | None = None,
                    causalite: bool = True, timeout_s: float | None = None,
                    cout_spot_bp: int | None = None, cout_perp_bp: int | None = None,
-                   test: bool = False) -> ResultatEssai:
+                   test: bool = False, jours_retires: int | None = None,
+                   tirage_k: int | None = None) -> ResultatEssai:
     """Un essai complet. `donnees` : `Donnees` du chargeur ou `Panneau`. Lève `PlafondError` (plafond total),
     `CanariError` (bac à sable défaillant), `AncrageError` (journal incohérent, ou `journal_arene` absent sans
     `test=True`) : ce ne sont pas des essais. Tout autre échec est un essai : `debut` et `fin` sont écrits
@@ -367,7 +391,13 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
 
     Si `causalite`, deux contrôles : C9 sur synthétique (`verifier_causalite`, graine tirée par appel) puis,
     sur les données réelles de l'essai, rejeu avec une autre permutation et d'autres facteurs d'échelle par
-    paire (poids identiques à 1e-9 près) ; un écart donne le code CAUSALITE."""
+    paire (poids identiques à 1e-9 près) ; un écart donne le code CAUSALITE.
+
+    `jours_retires` : nombre k de jours d'échauffement retirés au DÉBUT du flux envoyé à la stratégie. None :
+    tiré une fois par essai (`os.urandom`, dans [0, 365), échauffement restant >= 365 jours, fenêtre
+    d'évaluation intacte), le même pour l'exécution principale et son rejeu sur données réelles. Les tests
+    d'acceptation de reproduction exacte du labo (E0065, panier) passent `jours_retires=0` : le labo
+    démarrait sa série au premier jour des données et la phase de rebalancement (H = 10 jours) en dépend."""
     classe = _champ(fiche, "classe")
     if classe not in CLASSES:
         raise ValueError(f"classe {classe!r} inconnue")
@@ -387,15 +417,19 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
         "moteur": VERSION_MOTEUR,
         "surcharges": {"causalite": bool(causalite), "cout_spot_bp": cout_spot_bp, "cout_perp_bp": cout_perp_bp,
                        "convention_rotation": convention_rotation, "timeout_s": timeout_s,
-                       "permutation_imposee": permutation is not None, "test": bool(test)}})
+                       "permutation_imposee": permutation is not None, "test": bool(test),
+                       "jours_retires": jours_retires}})
     journal.ancrer(journal_arene)
     res = ResultatEssai(id=eid, code=ERREUR, univers=univers)
+    k_ret = None
     try:
         bac_a_sable.verifier_source(source.decode("utf-8", "replace"), Path(code_path).name)
         signaux = _signaux_perp(fiche, classe)
         pan = _panneau(donnees, univers, classe, criteres, avec_perp=signaux)
         if not signaux and pan.perp_1h is not None:
             pan = _sans_perp(pan)
+        k_ret = (bac_a_sable.tirer_jours_retires(pan, criteres, tirage=tirage_k) if jours_retires is None
+                 else int(jours_retires))
         if causalite:
             cle = (hashlib.sha256(source).hexdigest(), params_canoniques(params), criteres.sha256, pan.n_paires,
                    pan.spot_1h is not None, pan.perp_1h is not None, classe, _JOURS_SYNTH, VERSION_CAUSALITE)
@@ -416,11 +450,13 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
                 if permutation is None else np.asarray(permutation))
         ppan = pan.permuter(perm)
         delai = timeout_s or float(criteres.timeout_essai_s)
-        ws, wp, _ = _courir(source, params, ppan, classe, criteres.marge_perp_part, delai, True)
+        ws, wp, _ = _courir(source, params, ppan, classe, criteres.marge_perp_part, delai, True,
+                            jours_retires=k_ret)
         ws_o, wp_o = np.empty_like(ws), np.empty_like(wp)
         ws_o[:, perm], wp_o[:, perm] = ws, wp
         if causalite:
-            ecart = _controle_reel(source, params, pan, classe, criteres.marge_perp_part, delai, ws_o, wp_o)
+            ecart = _controle_reel(source, params, pan, classe, criteres.marge_perp_part, delai, ws_o, wp_o,
+                                   perm_ref=perm, jours_retires=k_ret)
             res.causalite["ecart_reel"] = ecart
             res.causalite["reel_ok"] = bool(ecart <= _TOL_CAUSALITE)
             if not res.causalite["reel_ok"]:
@@ -437,6 +473,8 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
         res.code, res.detail = ERREUR, type(e).__name__  # jamais le message (canal de sortie)
     finally:
         fin = {"id": eid, "statut": res.code}
+        if k_ret is not None:
+            fin["jours_retires"] = int(k_ret)  # k tiré pour cet essai (reproductibilité)
         if res.code == OK:
             for k, v in res.metriques.items():
                 fin[k] = {a: decimal12(x) for a, x in v.items()} if isinstance(v, dict) else \

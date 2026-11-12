@@ -202,7 +202,9 @@ def test_acceptation_panier_un_quinzieme_reel(tmp_path, journal, crit, panneau_r
     i0 = int(np.argmax(pan.eligibles.all(axis=1)))  # première date où les 15 paires sont cotées
     assert pan.eligibles[i0:].all(), "trou d'éligibilité après la dernière cotation"
     sous = _depuis(pan, i0)
-    r = executer_essai(FICHE, STRAT / "constante.py", {}, sous, journal, crit, causalite=False, test=True)
+    # jours_retires=0 : reproduction exacte du panier recalculé depuis la première date à 15 paires
+    r = executer_essai(FICHE, STRAT / "constante.py", {}, sous, journal, crit, causalite=False, test=True,
+                       jours_retires=0)
     assert r.code == "OK", r.detail
     _verifier_panier(r, sous, crit)
 
@@ -212,7 +214,8 @@ def test_acceptation_panier_un_quinzieme_reel(tmp_path, journal, crit, panneau_r
 def test_acceptation_e0065_reel(tmp_path, journal, crit, panneau_reel):
     """E0065 du labo : F1 L=20 k=3 H=10, 15 paires, rotation sur cibles, 15 pb, fenêtre 2020-01-01 -> 2026-06-30."""
     r = executer_essai(FICHE, STRAT / "f1_labo.py", {"L": 20, "k": 3, "H": 10}, panneau_reel, journal, crit,
-                       convention_rotation="cible", cout_spot_bp=15, causalite=False, test=True)
+                       convention_rotation="cible", cout_spot_bp=15, causalite=False, test=True,
+                       jours_retires=0)  # le labo démarre à la 1re date : la phase H=10 en dépend
     assert r.code == "OK", r.detail
     assert float(r.metriques["sharpe_net"]) == pytest.approx(E0065_SHARPE, abs=1e-6)
     assert journal.essais()[r.id]["fin"]["statut"] == "OK"

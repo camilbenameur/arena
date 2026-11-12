@@ -60,7 +60,7 @@ def vers_rapport_causalite(causalite: dict | None, criteres) -> RapportCausalite
                             # poids constants sur toute la série synthétique : rien ne prouve la causalité
                             and causalite.get("evaluable", False)
                             # second contrôle, sur les données réelles de l'essai (permutation + échelles)
-                            and causalite.get("reel_ok", True)))
+                            and causalite.get("reel_ok", False)))
 
 
 def vers_serie_panier(panier_serie) -> pd.Series:

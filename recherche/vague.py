@@ -42,6 +42,8 @@ import hashlib
 import itertools
 import json
 import math
+import os
+import re
 import subprocess
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -66,6 +68,7 @@ CHAMPS_FICHE = ("famille", "nom", "mecanisme", "classe", "strategie", "grille")
 MANIFESTE_FICHES = "MANIFESTE.json"
 DECISION_OWNER = "DECISION-OWNER.md"
 EVT_VAGUE_DEBUT, EVT_VAGUE_FIN, EVT_DECISION = "vague_debut", "vague_fin", "decision_owner"
+MOTIF_FAMILLE = re.compile(r"[A-Za-z0-9]+(-[A-Za-z0-9]+)*")
 # Portes évaluées avant d'aller chercher C15 et C16 (PROTOCOLE : « pour chaque essai qui passe C1-C14 »).
 _PORTES_AVANT = ("C1", "C5", "C6", "C7", "C8", "C9", "C11", "C12", "C13", "C14")
 
@@ -204,6 +207,9 @@ def lire_fiches(fiches_dir: Path | str, strategies_dir: Path | str, numero: int,
         manque = [c for c in CHAMPS_FICHE if not isinstance(doc, dict) or c not in doc]
         if manque:
             raise VagueError(f"{p.name} : champs manquants {manque}")
+        if not isinstance(doc["famille"], str) or not MOTIF_FAMILLE.fullmatch(doc["famille"]):
+            raise VagueError(f"{p.name} : famille {doc['famille']!r} hors du motif {MOTIF_FAMILLE.pattern} "
+                             "(lettres ASCII, chiffres, tirets : un nom = une famille pour les plafonds et V)")
         out.append(Fiche(p.name, _sha(octets), str(doc["famille"]), str(doc["nom"]), str(doc["mecanisme"]),
                          str(doc["classe"]), str(doc["strategie"]), dict(doc["grille"]),
                          dict(doc.get("params_fixes") or {}), bool(doc.get("signaux_perp", False))))
@@ -215,8 +221,11 @@ def points_de_grille(grille: dict) -> list[dict]:
     return [dict(zip(noms, vals, strict=True)) for vals in itertools.product(*(sorted(grille[n]) for n in noms))]
 
 
-def _valider_fiche(f: Fiche, criteres, numero: int, strat_dir: Path) -> str | None:
-    """Raison du refus, ou None. Le moteur applique les règles chiffrées ; l'auditeur de fiche juge le reste."""
+def _valider_fiche(f: Fiche, criteres, numero: int, strat_dir: Path,
+                   variantes_famille: dict[str, int] | None = None) -> str | None:
+    """Raison du refus, ou None. Le moteur applique les règles chiffrées ; l'auditeur de fiche juge le reste.
+    `variantes_famille` : variantes déjà acceptées par NOM de famille (vague 1) ; le plafond par famille est
+    cumulé sur toutes les fiches de même famille, pas par fichier. Mis à jour si la fiche est acceptée."""
     ess = criteres.essais
     if f.classe not in ("directionnel", "couvert"):
         return f"classe inconnue {f.classe!r}"
@@ -229,8 +238,13 @@ def _valider_fiche(f: Fiche, criteres, numero: int, strat_dir: Path) -> str | No
     if not ok:
         return f"grille non géométrique : {raison}"
     n = math.prod(len(v) for v in f.grille.values())
-    if numero == 1 and n > ess.variantes_max_par_famille_vague_1:
-        return f"{n} variantes > {ess.variantes_max_par_famille_vague_1} (vague 1)"
+    if numero == 1:
+        total = n + (variantes_famille or {}).get(f.famille, 0)
+        if total > ess.variantes_max_par_famille_vague_1:
+            return (f"{total} variantes pour la famille {f.famille!r} (toutes fiches de cette famille) > "
+                    f"{ess.variantes_max_par_famille_vague_1} (vague 1)")
+        if variantes_famille is not None:
+            variantes_famille[f.famille] = total
     return None
 
 
@@ -308,9 +322,14 @@ def sr_jours_du_journal(journal) -> dict[str, dict[str, list[float]]]:
         d, f = e["debut"], e["fin"]
         if f is None or f.get("statut") != "OK" or d.get("univers") != "principal":
             continue
+        # V se calcule sur la MÊME série que C1 : pour `couvert`, la série rapportée au capital immobilisé
+        # (`portes_sr_jour`) ; pour `directionnel`, le capital total (`sr_jour`, identique).
+        cle_sr = "portes_sr_jour" if d["classe"] == "couvert" else "sr_jour"
+        if cle_sr not in f:  # jamais de repli sur `sr_jour` : moins dispersé, il abaisserait V
+            raise VagueError(f"essai {d.get('id')} ({d['classe']}) : `fin` sans `{cle_sr}`")
         try:
-            x = float(f["sr_jour"])
-        except (KeyError, ValueError):
+            x = float(f[cle_sr])
+        except (ValueError, TypeError):
             continue
         if math.isfinite(x):
             out.setdefault(d["classe"], {}).setdefault(d["famille"], []).append(x)
@@ -397,6 +416,7 @@ class _Ctx:
     cout_spot_bp: int | None = None
     test: bool = False  # tests seulement : autorise un journal d'arène absent (ancrage externe)
     clos: dict = field(default_factory=dict)
+    tirages_k: dict = field(default_factory=dict)  # famille -> tirage (vague_debut) : même k pour ses variantes
 
     def verifier_plafonds(self, univers: str) -> None:
         """Plafonds cumulatifs sur le journal, vérifiés AVANT de lancer la ligne."""
@@ -422,7 +442,8 @@ class _Ctx:
         res = executer_essai(
             _fiche_essai(f), code, params, self.donnees, self.journal, self.criteres, univers=univers,
             journal_arene=self.journal_arene, causalite=self.causalite if causalite is None else causalite,
-            timeout_s=self.timeout_s, cout_spot_bp=self.cout_spot_bp, test=self.test)
+            timeout_s=self.timeout_s, cout_spot_bp=self.cout_spot_bp, test=self.test,
+            tirage_k=self.tirages_k.get(f.famille))
         _sauver(self.cache, res)
         self.clos[cle] = (res.id, self.journal.essais()[res.id]["fin"])
         return res
@@ -470,11 +491,13 @@ def executer_vague(
     _controler_numero(journal, numero, criteres, rapports, decision)
     rapports.mkdir(parents=True, exist_ok=True)
 
-    if len(fiches) > ess.familles_max_par_vague:
-        raise VagueError(f"{len(fiches)} familles > {ess.familles_max_par_vague}")
+    noms_familles = {f.famille for f in fiches}
+    if len(noms_familles) > ess.familles_max_par_vague:
+        raise VagueError(f"{len(noms_familles)} familles > {ess.familles_max_par_vague}")
     valides = []
+    variantes_famille: dict[str, int] = {}
     for f in fiches:
-        raison = _valider_fiche(f, criteres, numero, strat_dir)
+        raison = _valider_fiche(f, criteres, numero, strat_dir, variantes_famille)
         if raison:
             rap.refusees[f.fichier] = raison
         else:
@@ -499,15 +522,31 @@ def executer_vague(
             raise VagueError(f"{n1} variantes déjà commencées + {nouveaux} à lancer > plafond de la vague 1 "
                              f"({ess.plafond_vague_1})")
         familles = familles_journal | {f.famille for f in valides}
+        plies: dict[str, set[str]] = {}
+        for fam in familles:
+            plies.setdefault(fam.casefold(), set()).add(fam)
+        doublons = sorted(sorted(v) for v in plies.values() if len(v) > 1)
+        if doublons:
+            raise VagueError(f"familles qui ne diffèrent que par la casse (une seule famille) : {doublons}")
         if len(familles) > ess.familles_max_par_vague:
             raise VagueError(f"{len(familles)} familles (journal compris) > {ess.familles_max_par_vague}")
 
     # --- marqueurs chaînés : lancement de la vague, décision du propriétaire -------------------------------
     debuts, _, decisions = _etat_vagues(journal)
     if numero not in debuts:
+        # Un tirage par famille, écrit AVANT tout essai et relu à la reprise : toutes les variantes d'une famille
+        # (et leurs univers arène et contrôle) retirent le même k jours d'échauffement (borné par panneau), donc
+        # C7 compare des voisins à la même phase, et une reprise ne retire pas un nouveau k.
+        tirages = {fam: int.from_bytes(os.urandom(4), "big") for fam in sorted({f.famille for f in valides})}
         _ecrire_evenement(journal, EVT_VAGUE_DEBUT, {
             "numero": numero, "criteres_sha256": criteres.sha256,
-            "fiches": {f.fichier: f.sha256 for f in fiches}}, journal_arene)
+            "fiches": {f.fichier: f.sha256 for f in fiches}, "tirages_k": tirages}, journal_arene)
+    else:
+        tirages = {k: int(v) for k, v in (debuts[numero].get("tirages_k") or {}).items()}
+        absentes = sorted({f.famille for f in valides} - set(tirages))
+        if absentes:
+            raise VagueError(f"vague {numero} reprise : familles sans tirage k dans vague_debut : {absentes}")
+    ctx.tirages_k = tirages
     if numero > 1 and arret_apres(journal, numero - 1, criteres) and numero not in decisions:
         _ecrire_evenement(journal, EVT_DECISION, {"numero": numero, "sha256": _sha(decision.read_bytes()),
                                                   "fichier": f"{DECISION_OWNER}"}, journal_arene)
