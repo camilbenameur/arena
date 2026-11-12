@@ -1,0 +1,649 @@
+{
+ "S01_long_round_trip": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 70964000000,
+    "fee_ueur": 451590,
+    "realized_ueur": 8426506
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 1007529226,
+   "realized_pnl_ueur": 8426506,
+   "fees_paid_ueur": 897280,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S02_short_round_trip": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 69965000000,
+    "fee_ueur": 445232,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 69036000000,
+    "fee_ueur": 439320,
+    "realized_ueur": 8444686
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 1007560134,
+   "realized_pnl_ueur": 8444686,
+   "fees_paid_ueur": 884552,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S03_increase": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 500000,
+    "price_uusd": 72038000000,
+    "fee_ueur": 229212,
+    "realized_ueur": 0
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 999325098,
+   "realized_pnl_ueur": 0,
+   "fees_paid_ueur": 674902,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": [
+    {
+     "instrument": "BTC",
+     "qty": 1500000,
+     "entry_uusd": 70704000000
+    }
+   ]
+  }
+ },
+ "S04_partial_reduce": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 2000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 891380,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": -500000,
+    "price_uusd": 70964000000,
+    "fee_ueur": 225795,
+    "realized_ueur": 4213253
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 1003096078,
+   "realized_pnl_ueur": 4213253,
+   "fees_paid_ueur": 1117175,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": [
+    {
+     "instrument": "BTC",
+     "qty": 1500000,
+     "entry_uusd": 70037000000
+    }
+   ]
+  }
+ },
+ "S05_flip_refused": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   }
+  ],
+  "fundings": [],
+  "error_raised": true,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 999554310,
+   "realized_pnl_ueur": 0,
+   "fees_paid_ueur": 445690,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": [
+    {
+     "instrument": "BTC",
+     "qty": 1000000,
+     "entry_uusd": 70037000000
+    }
+   ]
+  }
+ },
+ "S06_funding_long_and_short": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "ETH",
+    "qty": -50000000,
+    "price_uusd": 1999000000,
+    "fee_ueur": 636046,
+    "realized_ueur": 0
+   }
+  ],
+  "fundings": [
+   {
+    "instrument": "BTC",
+    "stamp": 3600,
+    "amount_ueur": 4597
+   },
+   {
+    "instrument": "ETH",
+    "stamp": 3600,
+    "amount_ueur": -6564
+   },
+   {
+    "instrument": "BTC",
+    "stamp": 7200,
+    "amount_ueur": -3181
+   },
+   {
+    "instrument": "ETH",
+    "stamp": 7200,
+    "amount_ueur": 4546
+   }
+  ],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 998918866,
+   "realized_pnl_ueur": 0,
+   "fees_paid_ueur": 1081736,
+   "funding_paid_ueur": -602,
+   "absorbed_deficit_ueur": 0,
+   "positions": [
+    {
+     "instrument": "BTC",
+     "qty": 1000000,
+     "entry_uusd": 70037000000
+    },
+    {
+     "instrument": "ETH",
+     "qty": -50000000,
+     "entry_uusd": 1999000000
+    }
+   ]
+  }
+ },
+ "S07a_long_stop_gap": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "stop",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 67466000000,
+    "fee_ueur": 429330,
+    "realized_ueur": -23372728
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 975752252,
+   "realized_pnl_ueur": -23372728,
+   "fees_paid_ueur": 875020,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S07b_short_stop": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 69965000000,
+    "fee_ueur": 445232,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "stop",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 72036000000,
+    "fee_ueur": 458411,
+    "realized_ueur": -18827273
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 980269084,
+   "realized_pnl_ueur": -18827273,
+   "fees_paid_ueur": 903643,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S08_stop_before_take_profit": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "stop",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 67966000000,
+    "fee_ueur": 432511,
+    "realized_ueur": -18827273
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 980294526,
+   "realized_pnl_ueur": -18827273,
+   "fees_paid_ueur": 878201,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S09_take_profit_traversed": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "take_profit",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 72000000000,
+    "fee_ueur": 458182,
+    "realized_ueur": 17843832
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 1016939960,
+   "realized_pnl_ueur": 17843832,
+   "fees_paid_ueur": 903872,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S10_margin_closeout_no_deficit": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 3000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 1337070,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "margin_closeout",
+    "instrument": "BTC",
+    "qty": -3000000,
+    "price_uusd": 39980000000,
+    "fee_ueur": 55281437,
+    "realized_ueur": -819736364
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": true,
+  "final": {
+   "collateral_ueur": 123645129,
+   "realized_pnl_ueur": -819736364,
+   "fees_paid_ueur": 56618507,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S11_margin_closeout_with_deficit": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 3000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 1337070,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "margin_closeout",
+    "instrument": "BTC",
+    "qty": -3000000,
+    "price_uusd": 29985000000,
+    "fee_ueur": 41461078,
+    "realized_ueur": -1092327273
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": true,
+  "final": {
+   "collateral_ueur": 0,
+   "realized_pnl_ueur": -1092327273,
+   "fees_paid_ueur": 42798148,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 135125421,
+   "positions": []
+  }
+ },
+ "S12_fx_moves": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 76961000000,
+    "fee_ueur": 448940,
+    "realized_ueur": 57695192
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 1056800562,
+   "realized_pnl_ueur": 57695192,
+   "fees_paid_ueur": 894630,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S13_max_holding": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "max_holding",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 68965000000,
+    "fee_ueur": 438869,
+    "realized_ueur": -9745455
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 989369986,
+   "realized_pnl_ueur": -9745455,
+   "fees_paid_ueur": 884559,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S14_funding_prorated_late": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 69965000000,
+    "fee_ueur": 445232,
+    "realized_ueur": -654546
+   }
+  ],
+  "fundings": [
+   {
+    "instrument": "BTC",
+    "stamp": 3600,
+    "amount_ueur": 1591
+   }
+  ],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 998452941,
+   "realized_pnl_ueur": -654546,
+   "fees_paid_ueur": 890922,
+   "funding_paid_ueur": 1591,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S15_stop_in_opening_minute": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "stop",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 67966000000,
+    "fee_ueur": 432511,
+    "realized_ueur": -18827273
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 980294526,
+   "realized_pnl_ueur": -18827273,
+   "fees_paid_ueur": 878201,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S16_take_profit_armed_mid_minute": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "take_profit",
+    "instrument": "BTC",
+    "qty": -1000000,
+    "price_uusd": 72000000000,
+    "fee_ueur": 458182,
+    "realized_ueur": 17843832
+   }
+  ],
+  "fundings": [],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 1016939960,
+   "realized_pnl_ueur": 17843832,
+   "fees_paid_ueur": 903872,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": []
+  }
+ },
+ "S17_initial_margin_refused": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 2000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 891380,
+    "realized_ueur": 0
+   },
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 500000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 222846,
+    "realized_ueur": 0
+   }
+  ],
+  "fundings": [],
+  "error_raised": true,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 998885774,
+   "realized_pnl_ueur": 0,
+   "fees_paid_ueur": 1114226,
+   "funding_paid_ueur": 0,
+   "absorbed_deficit_ueur": 0,
+   "positions": [
+    {
+     "instrument": "BTC",
+     "qty": 2500000,
+     "entry_uusd": 70037000000
+    }
+   ]
+  }
+ },
+ "S18_missing_funding_hour": {
+  "fills": [
+   {
+    "reason": "intent",
+    "instrument": "BTC",
+    "qty": 1000000,
+    "price_uusd": 70037000000,
+    "fee_ueur": 445690,
+    "realized_ueur": 0
+   }
+  ],
+  "fundings": [
+   {
+    "instrument": "BTC",
+    "stamp": 7200,
+    "amount_ueur": 6364
+   }
+  ],
+  "error_raised": false,
+  "margin_closeout": false,
+  "final": {
+   "collateral_ueur": 999547946,
+   "realized_pnl_ueur": 0,
+   "fees_paid_ueur": 445690,
+   "funding_paid_ueur": 6364,
+   "absorbed_deficit_ueur": 0,
+   "positions": [
+    {
+     "instrument": "BTC",
+     "qty": 1000000,
+     "entry_uusd": 70037000000
+    }
+   ]
+  }
+ }
+}

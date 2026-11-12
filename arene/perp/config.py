@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from arene.perp.kraken_futures import RESOLUTIONS
+from arene.perp.sim import FILL_MODEL_VERSION, SimParams
 from arene.perp.types import CANDLE_KINDS, PerpInstrument
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -34,6 +35,7 @@ class PerpConfig:
     funding_retry_s: int
     fx_pair: str
     instruments: tuple[PerpInstrument, ...]
+    simulation: SimParams = field(default_factory=SimParams)
     sha256: str = ""
 
 
@@ -56,7 +58,14 @@ def load_perp_config(path: str | Path = DEFAULT_CONFIG) -> PerpConfig:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise PerpConfigError(f"unreadable perp config {p}: {exc}") from exc
 
-    expected = set(_INTS) | {"venue_mode", "data_source", "candle_kinds", "fx_pair", "instruments"}
+    expected = set(_INTS) | {
+        "venue_mode",
+        "data_source",
+        "candle_kinds",
+        "fx_pair",
+        "instruments",
+        "simulation",
+    }
     missing, unknown = sorted(expected - data.keys()), sorted(data.keys() - expected)
     if missing:
         raise PerpConfigError(f"missing keys: {', '.join(missing)}")
@@ -98,10 +107,12 @@ def load_perp_config(path: str | Path = DEFAULT_CONFIG) -> PerpConfig:
         if not row["kraken_symbol"].startswith("PF_"):
             raise PerpConfigError(f"only linear perpetuals (PF_*) are allowed: {row['kraken_symbol']}")
         insts.append(PerpInstrument(**row))
-    for field in ("symbol", "kraken_symbol", "spot_symbol"):
-        values = [getattr(i, field) for i in insts]
+    for attr in ("symbol", "kraken_symbol", "spot_symbol"):
+        values = [getattr(i, attr) for i in insts]
         if len(set(values)) != len(values):
-            raise PerpConfigError(f"duplicate {field} in instruments")
+            raise PerpConfigError(f"duplicate {attr} in instruments")
+
+    simulation = _simulation(data["simulation"])
 
     return PerpConfig(
         venue_mode=data["venue_mode"],
@@ -109,9 +120,46 @@ def load_perp_config(path: str | Path = DEFAULT_CONFIG) -> PerpConfig:
         candle_kinds=tuple(kinds),
         fx_pair=data["fx_pair"],
         instruments=tuple(insts),
+        simulation=simulation,
         sha256=hashlib.sha256(raw).hexdigest(),
         **{k: data[k] for k in _INTS},
     )
+
+
+_SIM_KEYS = {
+    "fill_model_version",
+    "capital_eur",
+    "taker_fee_bp",
+    "slippage_bp",
+    "liquidation_fee_bp",
+    "closeout_margin_bp",
+    "initial_margin_bp",
+    "max_holding_s",
+}
+
+
+def _simulation(table: object) -> SimParams:
+    if not isinstance(table, dict) or set(table) != _SIM_KEYS:
+        raise PerpConfigError(f"[simulation] needs exactly the keys {sorted(_SIM_KEYS)}")
+    if table["fill_model_version"] != FILL_MODEL_VERSION:
+        raise PerpConfigError(f"[simulation] fill_model_version must be {FILL_MODEL_VERSION!r}")
+    for k in _SIM_KEYS - {"fill_model_version"}:
+        if type(table[k]) is not int:
+            raise PerpConfigError(f"[simulation] {k} must be an integer")
+    if table["capital_eur"] <= 0:
+        raise PerpConfigError("[simulation] capital_eur must be > 0")
+    try:
+        return SimParams(
+            taker_fee_bp=table["taker_fee_bp"],
+            slippage_bp=table["slippage_bp"],
+            liquidation_fee_bp=table["liquidation_fee_bp"],
+            closeout_margin_bp=table["closeout_margin_bp"],
+            initial_margin_bp=table["initial_margin_bp"],
+            max_holding_s=table["max_holding_s"],
+            capital_ueur=table["capital_eur"] * 1_000_000,
+        )
+    except ValueError as exc:
+        raise PerpConfigError(f"[simulation] {exc}") from exc
 
 
 def default_var() -> Path:

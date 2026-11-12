@@ -38,3 +38,14 @@ spot_symbol = "LINK/EUR"
 symbol = "LTC-PERP"
 kraken_symbol = "PF_LTCUSD"
 spot_symbol = "LTC/EUR"
+
+# Simulated execution (docs/SPEC-PERP-LEDGER.md §2): fill model pessimiste-perp-v1.
+[simulation]
+fill_model_version = "pessimiste-perp-v1"
+capital_eur = 1000
+taker_fee_bp = 7               # Kraken taker 0.05 % + 25 %, rounded up
+slippage_bp = 5
+liquidation_fee_bp = 500       # added on a margin close-out (Kraken would charge about 2.5 %)
+closeout_margin_bp = 2500      # close everything when equity < 25 % of gross exposure (AMF rule: half of the 50 % margin)
+initial_margin_bp = 5000       # an entry must leave equity >= 50 % of gross exposure (AMF rule for crypto CFDs: 2:1)
+max_holding_s = 604800         # 7 days

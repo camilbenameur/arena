@@ -1,0 +1,822 @@
+{
+ "about": "Golden scenarios of the perp ledger and simulator, specified in docs/SPEC-PERP-LEDGER.md. All amounts are integers: prices in micro-USD, quantities in 1e-8 units (signed), funding rates in nano-USD per unit per hour, fx in micro-USD per EUR [bid, ask], euros in micro-EUR. Parameters: taker_fee_bp=7, slippage_bp=5, liquidation_fee_bp=500, closeout_margin_bp=2500, initial_margin_bp=5000, max_holding_s=604800, capital 1000 EUR. Ticks: BTC 1000000, ETH 100000. Every scenario uses one portfolio 'P'. A 'minute' step gives closed one-minute candles [open, high, low, close]; 'trade' may be null.",
+ "params": {
+  "taker_fee_bp": 7,
+  "slippage_bp": 5,
+  "liquidation_fee_bp": 500,
+  "closeout_margin_bp": 2500,
+  "max_holding_s": 604800,
+  "capital_ueur": 1000000000,
+  "initial_margin_bp": 5000
+ },
+ "ticks": {
+  "BTC": 1000000,
+  "ETH": 100000
+ },
+ "scenarios": {
+  "S01_long_round_trip": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2000,
+    "instrument": "BTC",
+    "qty": -1000000,
+    "bid": 71000000000,
+    "ask": 71001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S02_short_round_trip": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": -1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2000,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 69000000000,
+    "ask": 69001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S03_increase": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2000,
+    "instrument": "BTC",
+    "qty": 500000,
+    "bid": 72000000000,
+    "ask": 72001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S04_partial_reduce": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": 2000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2000,
+    "instrument": "BTC",
+    "qty": -500000,
+    "bid": 71000000000,
+    "ask": 71001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S05_flip_refused": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2000,
+    "instrument": "BTC",
+    "qty": -2000000,
+    "bid": 71000000000,
+    "ask": 71001000000,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "expect_error": true
+   }
+  ],
+  "S06_funding_long_and_short": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "ETH",
+    "qty": -50000000,
+    "bid": 2000000000,
+    "ask": 2000100000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "funding",
+    "instrument": "BTC",
+    "stamp": 3600,
+    "rate_nusd": 700000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "funding",
+    "instrument": "ETH",
+    "stamp": 3600,
+    "rate_nusd": 20000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "funding",
+    "instrument": "BTC",
+    "stamp": 7200,
+    "rate_nusd": -350000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "funding",
+    "instrument": "ETH",
+    "stamp": 7200,
+    "rate_nusd": -10000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S07a_long_stop_gap": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "conditional",
+    "ts": 0,
+    "instrument": "BTC",
+    "kind": "stop",
+    "price": 68000000000
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       69000000000,
+       69100000000,
+       67000000000,
+       67200000000
+      ],
+      "trade": [
+       67500000000,
+       67600000000,
+       66900000000,
+       67100000000
+      ]
+     }
+    }
+   }
+  ],
+  "S07b_short_stop": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": -1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "conditional",
+    "ts": 0,
+    "instrument": "BTC",
+    "kind": "stop",
+    "price": 72000000000
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       71500000000,
+       72500000000,
+       71400000000,
+       72300000000
+      ],
+      "trade": [
+       71600000000,
+       72600000000,
+       71500000000,
+       72400000000
+      ]
+     }
+    }
+   }
+  ],
+  "S08_stop_before_take_profit": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "conditional",
+    "ts": 0,
+    "instrument": "BTC",
+    "kind": "stop",
+    "price": 68000000000
+   },
+   {
+    "op": "conditional",
+    "ts": 0,
+    "instrument": "BTC",
+    "kind": "take_profit",
+    "price": 72000000000
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       70000000000,
+       72400000000,
+       67900000000,
+       70000000000
+      ],
+      "trade": [
+       70000000000,
+       72500000000,
+       67950000000,
+       70000000000
+      ]
+     }
+    }
+   }
+  ],
+  "S09_take_profit_traversed": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "conditional",
+    "ts": 0,
+    "instrument": "BTC",
+    "kind": "take_profit",
+    "price": 72000000000
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       71000000000,
+       72000000000,
+       70900000000,
+       71900000000
+      ],
+      "trade": [
+       71000000000,
+       72000000000,
+       70950000000,
+       71950000000
+      ]
+     }
+    }
+   },
+   {
+    "op": "minute",
+    "ts": 120,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       71900000000,
+       72100000000,
+       71800000000,
+       72050000000
+      ],
+      "trade": [
+       71950000000,
+       72001000000,
+       71900000000,
+       72000000000
+      ]
+     }
+    }
+   }
+  ],
+  "S10_margin_closeout_no_deficit": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 3000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       70000000000,
+       70000000000,
+       50000000000,
+       51000000000
+      ],
+      "trade": [
+       70000000000,
+       70000000000,
+       49900000000,
+       51000000000
+      ]
+     }
+    }
+   },
+   {
+    "op": "minute",
+    "ts": 120,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       51000000000,
+       51000000000,
+       40000000000,
+       41000000000
+      ],
+      "trade": [
+       51000000000,
+       51000000000,
+       39900000000,
+       41000000000
+      ]
+     }
+    }
+   }
+  ],
+  "S11_margin_closeout_with_deficit": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 3000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       70000000000,
+       70000000000,
+       30000000000,
+       31000000000
+      ],
+      "trade": [
+       70000000000,
+       70000000000,
+       29000000000,
+       31000000000
+      ]
+     }
+    }
+   }
+  ],
+  "S12_fx_moves": [
+   {
+    "op": "market",
+    "ts": 1000,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2000,
+    "instrument": "BTC",
+    "qty": -1000000,
+    "bid": 77000000000,
+    "ask": 77001000000,
+    "fx": [
+     1200000,
+     1200100
+    ]
+   }
+  ],
+  "S13_max_holding": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "max_holding",
+    "ts": 604799,
+    "quotes": {
+     "BTC": [
+      69000000000,
+      69001000000
+     ]
+    },
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "max_holding",
+    "ts": 604800,
+    "quotes": {
+     "BTC": [
+      69000000000,
+      69001000000
+     ]
+    },
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S14_funding_prorated_late": [
+   {
+    "op": "market",
+    "ts": 1800,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 2700,
+    "instrument": "BTC",
+    "qty": -1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "funding",
+    "instrument": "BTC",
+    "stamp": 3600,
+    "rate_nusd": 700000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "funding",
+    "instrument": "BTC",
+    "stamp": 7200,
+    "rate_nusd": 700000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S15_stop_in_opening_minute": [
+   {
+    "op": "market",
+    "ts": 90,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "conditional",
+    "ts": 90,
+    "instrument": "BTC",
+    "kind": "stop",
+    "price": 68000000000
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       70000000000,
+       70100000000,
+       67900000000,
+       70000000000
+      ],
+      "trade": [
+       70000000000,
+       70050000000,
+       69900000000,
+       70000000000
+      ]
+     }
+    }
+   }
+  ],
+  "S16_take_profit_armed_mid_minute": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "conditional",
+    "ts": 90,
+    "instrument": "BTC",
+    "kind": "take_profit",
+    "price": 72000000000
+   },
+   {
+    "op": "minute",
+    "ts": 60,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       71000000000,
+       72400000000,
+       70900000000,
+       72000000000
+      ],
+      "trade": [
+       71000000000,
+       72500000000,
+       70950000000,
+       72000000000
+      ]
+     }
+    }
+   },
+   {
+    "op": "minute",
+    "ts": 120,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "candles": {
+     "BTC": {
+      "mark": [
+       72000000000,
+       72100000000,
+       71900000000,
+       72000000000
+      ],
+      "trade": [
+       72000000000,
+       72100000000,
+       71950000000,
+       72000000000
+      ]
+     }
+    }
+   }
+  ],
+  "S17_initial_margin_refused": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 2000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "market",
+    "ts": 10,
+    "instrument": "BTC",
+    "qty": 4000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ],
+    "expect_error": true
+   },
+   {
+    "op": "market",
+    "ts": 20,
+    "instrument": "BTC",
+    "qty": 500000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ],
+  "S18_missing_funding_hour": [
+   {
+    "op": "market",
+    "ts": 0,
+    "instrument": "BTC",
+    "qty": 1000000,
+    "bid": 70000000000,
+    "ask": 70001000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   },
+   {
+    "op": "missing_funding",
+    "instrument": "BTC",
+    "stamp": 3600
+   },
+   {
+    "op": "funding",
+    "instrument": "BTC",
+    "stamp": 7200,
+    "rate_nusd": 700000000,
+    "fx": [
+     1100000,
+     1100100
+    ]
+   }
+  ]
+ }
+}
