@@ -1,5 +1,6 @@
 /* Graphique du rendement cumulé (uPlot). Les données, en base 100, sont lues dans <script id="equity-data">.
-   - un point par cycle réel, graduations de l'axe des temps posées sur les cycles, jamais entre deux ;
+   - un point par cycle, plus les relevés de la veille (toutes les 30 min et le dernier) : axe en temps réel,
+     graduations sur des heures rondes UTC (4 h, 12 h, 1 jour…) choisies selon la largeur ;
    - axe vertical en écart au départ (« −0,5 % »), comme le tableau ;
    - légende HTML à boutons (clavier, tactile, lecteurs d'écran) qui montre les valeurs du dernier cycle
      ou du cycle survolé, à la place de la légende uPlot. */
@@ -30,9 +31,12 @@
   }
   function jour(d) { return d.getUTCDate() + " " + MOIS[d.getUTCMonth()]; }
   function heure(d) { return d.getUTCHours() + " h"; }
+  var KINDS = data.kinds || [];
+  function hm(d) { var m = d.getUTCMinutes(); return d.getUTCHours() + ":" + (m < 10 ? "0" : "") + m; }
   function quand(i) {
-    if (i === 0) return "Départ (capital initial)";
+    if (i === 0 && KINDS[0] === "depart") return "Départ";
     var d = new Date(data.x[i] * 1000);
+    if (KINDS[i] === "veille") return (i === LAST ? "En direct : " : "Relevé du ") + jour(d) + ", " + hm(d) + " UTC";
     return (i === LAST ? "Dernier cycle : " : "Cycle du ") + jour(d) + ", " + heure(d) + " UTC";
   }
 
@@ -46,14 +50,23 @@
     });
   }
 
+  /* Graduations sur des heures rondes UTC : le plus petit pas (4 h, 8 h, 12 h, 1 j, 2 j, 7 j) qui laisse assez de place. */
+  var PAS = [14400, 28800, 43200, 86400, 172800, 604800];
   function splits(u) {
     var xs = data.x, n = xs.length;
     if (n < 2) return xs.slice();
+    var lo = xs[0], hi = xs[LAST], span = Math.max(1, hi - lo);
     var width = u.bbox.width / uPlot.pxRatio;
     var minPx = width < 420 ? 70 : 90;
-    var every = Math.max(1, Math.ceil(minPx / (width / (n - 1))));
+    var pas = PAS[PAS.length - 1];
+    for (var k = 0; k < PAS.length; k++) {
+      if (width * PAS[k] / span >= minPx) { pas = PAS[k]; break; }
+    }
     var out = [];
-    for (var i = LAST; i >= 0; i -= every) out.unshift(xs[i]);
+    for (var t = Math.ceil(lo / pas) * pas; t <= hi; t += pas) out.push(t);
+    // Le départ garde sa graduation : ajoutée si elle a la place, sinon elle remplace la première (départ de saison).
+    if (!out.length || (out[0] - lo) * width / span >= minPx * 0.8) out.unshift(lo);
+    else if (KINDS[0] === "depart") out[0] = lo;
     return out;
   }
 
@@ -202,7 +215,7 @@
           values: function (u, vals) {
             var prevDay = null;
             return vals.map(function (v) {
-              if (v === data.x[0]) { return "départ"; }
+              if (v === data.x[0] && KINDS[0] === "depart") { return "départ"; }
               var d = new Date(v * 1000);
               var day = jour(d);
               var label = day === prevDay ? heure(d) : heure(d) + "\n" + day;

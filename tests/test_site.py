@@ -59,12 +59,40 @@ FABLE_DEBUT = 40  # cycle d'ouverture du cinquième modèle, arrivé en cours de
 FABLE_RAISON = "RAISON_FABLE : le momentum du bitcoin justifie une petite position"
 
 
-def synthetic_journal(path: Path, avec_fable: bool = False) -> Journal:
+REVEIL_CYCLE = 50  # le réveil a lieu 2 h après ce cycle
+REVEIL_RAISON = "REVEIL_RAISON : l'ether décroche, j'achète la baisse"
+SAISON_A = 40  # cycle de début de la saison synthétique
+DEROGATION = "DEROGATION_TEST : correctif d'un prix aberrant"
+XRP_BRUT_ABSURDE = 987_654_321  # quote brut rejeté : ne doit jamais devenir un prix affiché
+LINK_REVEIL_ABSURDE = 777_777_777_777  # quote_reveil : ignoré pour les marks
+
+
+def synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = False, saison_a: int | None = None) -> Journal:
     with mock.patch("arene.journal.os.fsync"):  # 3 000 écritures : sans fsync le test reste rapide
-        return _synthetic_journal(path, avec_fable)
+        return _synthetic_journal(path, avec_fable, veille, saison_a)
 
 
-def _synthetic_journal(path: Path, avec_fable: bool = False) -> Journal:
+def _bids(i: int) -> dict[str, int]:
+    return {s: _mid(s, i)[0] for s in SYMBOLS}
+
+
+def _veille(j: Journal, tick: int, i: int, *, bruts: dict | None = None, rejets: dict | None = None, hausse: int = 0,
+            reveil: dict | None = None) -> None:
+    states = replay(j.iter_events())
+    q = {s: list(_mid(s, i)) for s in SYMBOLS}
+    if hausse:
+        q = {s: [b * (10_000 + hausse) // 10_000, a * (10_000 + hausse) // 10_000] for s, (b, a) in q.items()}
+    bids = {s: b for s, (b, _a) in q.items()}
+    acceptes = {s: v for s, v in q.items() if s not in (rejets or {})}
+    j.append("veille", {
+        "tick": tick, "quotes": acceptes, "quotes_bruts": {**q, **(bruts or {})}, "rejets": rejets or {},
+        "confirmes": [], "variations_bp": {s: 0 for s in SYMBOLS}, "clotures_1m": {s: (b + a) // 2 for s, (b, a) in q.items()},
+        "equity": {pf: equity_ueur(st, bids) for pf, st in states.items()}, "stops": [], "reveil": reveil,
+        "refus": None, "gel": False,
+    }, tick)  # fmt: skip
+
+
+def _synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = False, saison_a: int | None = None) -> Journal:
     j = Journal(path)
     j.append("config_loaded", {"policy_sha256": "a" * 64, "config_sha256": "b" * 64, "prompt_sha256": "c" * 64,
                                "git_head": "d" * 40}, T0 - 600)  # fmt: skip
@@ -75,6 +103,19 @@ def _synthetic_journal(path: Path, avec_fable: bool = False) -> Journal:
         c = T0 + i * CYCLE_S
         ts = c + 300
         j.append("cycle_started", {"cycle": c}, c)
+        if saison_a is not None and i == saison_a:
+            states = replay(j.iter_events())
+            j.append("saison_debut", {"numero": 1, "nom": "Saison test", "cycle": c, "fin_prevue_cycle": c + 56 * 86_400,
+                                      "debut_ts": c + 300, "duree_jours": 56, "config_sha256": "b" * 64,
+                                      "policy_sha256": "a" * 64, "prompt_sha256": "c" * 64, "code_sha256": "e" * 64,
+                                      "git_head": "d" * 40, "claude_cli_version": None,
+                                      "portefeuilles": LLMS + TEMOINS}, c + 2)  # fmt: skip
+            j.append("saison_reference", {"numero": 1, "cycle": c, "equity": {
+                pf: equity_ueur(states[pf], _bids(i)) for pf in LLMS + TEMOINS}}, c + 3)  # fmt: skip
+        if saison_a is not None and i == saison_a + 2:
+            h = {"config_sha256": "b" * 64, "policy_sha256": "a" * 64, "prompt_sha256": "c" * 64, "code_sha256": "e" * 64}
+            j.append("saison_derogation", {"numero": 1, "raison": DEROGATION, "hashes_avant": h,
+                                           "hashes_apres": {**h, "code_sha256": "f" * 64}}, c + 2)  # fmt: skip
         if avec_fable and i == FABLE_DEBUT:
             j.append("portfolio_opened", {"portfolio": FABLE, "kind": "llm", "capital_ueur": CAPITAL,
                                           "venue_mode": "paper"}, c + 1)  # fmt: skip
@@ -147,7 +188,46 @@ def _synthetic_journal(path: Path, avec_fable: bool = False) -> Journal:
                                 "positions_value_ueur": equity_ueur(st, marks) - st.cash_ueur,
                                 "equity_ueur": equity_ueur(st, marks)}, ts + 5)  # fmt: skip
         j.append("cycle_completed", {"cycle": c}, ts + 10)
+        if veille and i == REVEIL_CYCLE:
+            _reveil(j, c, i)
+        if veille and i == N_CYCLES - 1:
+            _veille(j, c + 1800, i)
+            # Stop de la veille sur l'ETH acheté au réveil, puis un dernier relevé (equity vivante) avec un XRP brut absurde.
+            pf = "llm:claude-sonnet-5-5"
+            pos = replay(j.iter_events())[pf].positions["ETH/EUR"]
+            tick = c + 2400
+            _fill(j, pf, "ETH/EUR", "sell", pos.qty, _mid("ETH/EUR", i)[0] * 99 // 100, tick,
+                  f"stop:{pf}:ETH/EUR:veille:{tick}", reason="stop")
+            _veille(j, tick, i, hausse=100, bruts={"XRP/EUR": [XRP_BRUT_ABSURDE, XRP_BRUT_ABSURDE + 10]},
+                    rejets={"XRP/EUR": "saut"})
     return j
+
+
+def _reveil(j: Journal, c: int, i: int) -> None:
+    """Réveil 2 h après le cycle `c` : Sonnet achète de l'ETH ; LTC n'a pas de quote au réveil."""
+    r = c + 7200
+    decl = {"type": "mouvement", "symbole": "ETH/EUR", "variation_bp": -340, "fenetre_s": 3600}
+    _veille(j, c + 1800, i)
+    j.append("reveil_started", {"reveil": r, "declencheur": decl}, r + 31)
+    _veille(j, r, i, reveil=decl)
+    for sym in SYMBOLS:
+        if sym == "LTC/EUR":
+            continue
+        bid, ask = _mid(sym, i)
+        if sym == "LINK/EUR":
+            bid, ask = LINK_REVEIL_ABSURDE, LINK_REVEIL_ABSURDE + 10
+        j.append("quote_reveil", {"symbol": sym, "ts": r, "bid": bid, "ask": ask}, r + 32)
+    pf = "llm:claude-sonnet-5-5"
+    px = _mid("ETH/EUR", i)[1] * 10_005 // 10_000
+    q = 100_000_000 * QTY_SCALE // px
+    _intent(j, pf, r, "ETH/EUR", "buy", 1000, "rv1", r + 40, qty=q)
+    _fill(j, pf, "ETH/EUR", "buy", q, px, r + 40, "rv1")
+    parsed = {"actions": [{"symbol": "ETH/EUR", "side": "buy"}], "justification": REVEIL_RAISON}
+    j.append("decision_received", {"portfolio": pf, "cycle": r, "model_requested": "claude-sonnet-5-5",
+                                   "model_returned": "claude-sonnet-5-5", "raw_text": json.dumps(parsed),
+                                   "parsed": parsed, "parse_error": None, "input_tokens": 3000,
+                                   "output_tokens": 300, "cost_uusd": 9_000, "latency_ms": 900}, r + 39)  # fmt: skip
+    j.append("reveil_completed", {"reveil": r}, r + 60)
 
 
 @pytest.fixture(scope="module")
@@ -281,9 +361,8 @@ def test_cinquieme_modele_arrive_en_cours_de_route(site_fable):
     assert COULEUR_LLM[FABLE] == 3
     out, _ = site_fable
     index = (out / "index.html").read_text(encoding="utf-8")
-    assert "Quatre IA gèrent chacune" in index
     assert "quatre modèles d’ia" in index.lower()  # méta-description dérivée du journal
-    assert "Claude Fable 5.2" in index and "Entré dans l’arène le" in index
+    assert "Claude Fable 5.2" in index and "depuis le" in index
     # courbe : pas de point à 100 avant son ouverture (spanGaps relierait sinon le départ à son premier point)
     chart = json.loads((out / "data" / "equity.json").read_text(encoding="utf-8"))
     k = [s["id"] for s in chart["series"]].index(FABLE)
@@ -291,7 +370,7 @@ def test_cinquieme_modele_arrive_en_cours_de_route(site_fable):
     assert all(v is None for v in vals[: FABLE_DEBUT + 1]) and vals[FABLE_DEBUT + 1] is not None
     assert _styles(chart, None)[k]["color"] == "--llm3"
     page = (out / "modele" / "llm-claude-fable-5-2.html").read_text(encoding="utf-8")
-    assert "Entré dans l’arène le" in page and "arrivé en cours de route" in page
+    assert "Entré dans l’arène le" in page and "arrivé en cours" in page
     assert FABLE_RAISON in page and "Achat BTC/EUR" in page
     p = json.loads((out / "data" / "modele-llm-claude-fable-5-2.json").read_text(encoding="utf-8"))
     assert p["late"] is True and p["rank_percentile"] is None
@@ -340,7 +419,8 @@ def test_chiffres_du_tableau_egaux_au_rejeu(site):
 
     for st in states.values():
         assert eur(equity_ueur(st, marks)) in index
-        assert eur(st.fees_paid_ueur) in index
+        page = read(site, f"modele/{st.portfolio.replace(':', '-')}.html")
+        assert eur(st.fees_paid_ueur) in page  # les frais sont sur la page du portefeuille
 
 
 def test_non_distinguable_du_hasard(site):
@@ -426,7 +506,7 @@ def test_pas_de_courbe_sous_trois_cycles(tmp_path):
     assert "chart.js" not in index
 
 
-def test_version_publique_sans_texte_operateur_avec_404_et_frise(site, tmp_path):
+def test_version_publique_sans_texte_operateur_avec_404(site, tmp_path):
     out_prive, j = site
     cfg = load_config(ROOT / "config" / "arene.toml")
     cfg = dataclasses.replace(cfg, temoins=dataclasses.replace(cfg.temoins, aleatoire_trajectoires=60))
@@ -438,10 +518,8 @@ def test_version_publique_sans_texte_operateur_avec_404_et_frise(site, tmp_path)
     page404 = (out / "404.html").read_text(encoding="utf-8")
     assert 'href="/arene/assets/site.css"' in page404 and "Cette page n’existe pas" in page404
     assert not (out_prive / "404.html").exists()  # sans racine, pas de 404 (le site privé n'en a pas besoin)
-    # Frise : chaque cycle affiché porte le préfixe de l'empreinte de son événement cycle_completed.
-    hashes = [e["hash"][:8] for e in j.iter_events(strict=False) if e["type"] == "cycle_completed"]
-    assert hashes and all(h in index for h in hashes[-6:])
-    assert f"Cycle {len(hashes) + 1}" in index  # le prochain cycle, à venir
+    # Épuré : pas de gros titre visible ; le h1 reste pour les lecteurs d'écran.
+    assert '<h1 class="visuellement-cache">' in index
 
 
 def test_modele_configure_pas_encore_ouvert(site):
@@ -449,4 +527,210 @@ def test_modele_configure_pas_encore_ouvert(site):
     methode = read(site, "methode.html")
     assert "Trois modèles d’IA (Claude Haiku 5.5, Sonnet 5.5 et Opus 5.5)" in methode
     assert "Claude Fable 5.2 rejoindra l’arène au prochain cycle." in methode
-    assert "Trois IA gèrent chacune" in read(site, "index.html")
+    assert "Trois modèles d’IA" in read(site, "index.html")  # méta-description et h1
+
+
+# --------------------------------------------------------------------------- veille, réveils, saison
+
+
+def _cfg(n: int = 60):
+    cfg = load_config(ROOT / "config" / "arene.toml")
+    return dataclasses.replace(cfg, temoins=dataclasses.replace(cfg.temoins, aleatoire_trajectoires=n))
+
+
+@pytest.fixture(scope="module")
+def veille_site(tmp_path_factory):
+    from arene.site.data import compute
+
+    tmp = tmp_path_factory.mktemp("veille")
+    j = synthetic_journal(tmp / "events.jsonl", veille=True)
+    pol = load_policy(ROOT / "config" / "policy.toml")
+    with mock.patch.dict("os.environ", {"ARENE_SITE_CACHE": ""}):
+        data = compute(j.path, _cfg(), pol, now_ts=NOW)
+        build(j.path, tmp / "site", config=_cfg(), policy=pol, now_ts=NOW)
+    return tmp / "site", j, data
+
+
+def test_equity_vivante_lue_dans_la_veille(veille_site):
+    out, j, data = veille_site
+    veilles = [e["payload"] for e in j.iter_events() if e["type"] == "veille"]
+    dernier = veilles[-1]
+    assert data["live"]["ts"] == dernier["tick"]
+    for p in data["portfolios"]:
+        assert p["equity_ueur"] == dernier["equity"][p["id"]] and p["equity_live"]
+        assert p["total_return"] == pytest.approx(dernier["equity"][p["id"]] / CAPITAL - 1)
+    assert data["chart"]["kinds"][-1] == "veille" and data["chart"]["x"][-1] == dernier["tick"]
+    assert data["chart"]["x"] == sorted(set(data["chart"]["x"]))  # strictement croissant
+    assert data["n_cycles"] == N_CYCLES  # ni les relevés ni le réveil ne sont des cycles
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert "Valeurs en direct" in index and "Dernier réveil" in index and "ETH −3,4" in index
+    assert ">En direct\u202f: " in index and "jusqu’après" not in index
+
+
+def test_quotes_bruts_et_quote_reveil_jamais_affiches_comme_prix(veille_site):
+    from arene.site.render import eur, prix
+
+    out, _j, data = veille_site
+    marks = {x["symbol"]: x["mark_ueur"] for p in data["portfolios"] for x in p["positions"]}
+    assert marks["XRP/EUR"] != XRP_BRUT_ABSURDE and marks["LINK/EUR"] != LINK_REVEIL_ABSURDE
+    for f in out.rglob("*.html"):
+        txt = f.read_text(encoding="utf-8")
+        for absurde in (XRP_BRUT_ABSURDE, LINK_REVEIL_ABSURDE):
+            assert str(absurde) not in txt and prix(absurde) not in txt and eur(absurde) not in txt, f.name
+
+
+def test_decision_de_reveil_avec_son_declencheur_et_stop_de_veille(veille_site):
+    out, _j, data = veille_site
+    sonnet = next(p for p in data["portfolios"] if p["id"] == "llm:claude-sonnet-5-5")
+    r = T0 + REVEIL_CYCLE * CYCLE_S + 7200
+    d = next(d for d in sonnet["decisions"] if d["cycle"] == r)
+    assert d["ronde"] == "reveil" and d["declencheur"]["symbole"] == "ETH/EUR" and d["actions"][0]["fills"]
+    stop = next(d for d in sonnet["decisions"] if d["kind"] == "stop_veille")
+    assert stop["sorties"][0]["reason"] == "stop" and ":veille:" in stop["sorties"][0]["order_id"]
+    page = (out / "modele" / "llm-claude-sonnet-5-5.html").read_text(encoding="utf-8")
+    assert "réveil · ETH −3,4\u00a0% en 1\u00a0h" in page
+    assert html.escape(REVEIL_RAISON, quote=True) in page
+    assert "Vente sur stop, détectée par la veille" in page
+
+
+def test_trajectoires_rejouent_les_reveils_completes(veille_site):
+    from arene.site.data import _cycle_data, _reveils
+
+    _out, j, _data = veille_site
+    events = list(j.iter_events())
+    rondes = _cycle_data(events, CYCLE_S, _reveils(events))
+    r = T0 + REVEIL_CYCLE * CYCLE_S + 7200
+    rv = next(x.data for x in rondes if x.data.ts == r and x.reveil)
+    assert set(rv.quotes) == set(SYMBOLS) - {"LTC/EUR"}  # seuls les symboles cotés au réveil sont négociables
+    assert "LTC/EUR" in rv.marks and not rv.bars
+    assert len(rondes) == N_CYCLES + 1
+    assert [x.data.ts for x in rondes] == sorted(x.data.ts for x in rondes)
+    # Un réveil abandonné n'est pas rejoué.
+    sans = _cycle_data(events, CYCLE_S, {r: {"statut": "abandonne"}})
+    assert all(x.data.ts != r for x in sans)
+
+
+def test_rejeu_du_hasard_identique_au_moteur_sans_reveil(site):
+    """Sans réveil, le rejeu du site rend exactement les nombres du simulateur du moteur (garde-fou de dérive)."""
+    from arene.site.data import _cycle_data, _instruments
+    from arene.site.hasard import trajectoires
+    from arene.temoins.trajectoires import simulate_random_trajectories
+
+    _out, j = site
+    events = list(j.iter_events())
+    rondes = _cycle_data(events, CYCLE_S, {})
+    cfg, pol = _cfg(), load_policy(ROOT / "config" / "policy.toml")
+    kw = {"policy": pol, "instruments": _instruments(cfg), "fee_bp": cfg.taker_fee_bp,
+          "slippage_bp": cfg.slippage_bp, "capital_ueur": CAPITAL}  # fmt: skip
+    assert trajectoires(rondes, 25, **kw) == simulate_random_trajectories([r.data for r in rondes], 25, **kw)
+
+
+def test_rejeu_du_hasard_avec_reveil_sans_quote_ne_tombe_pas(veille_site):
+    """Au réveil, un symbole sans quote n'est pas négociable (le simulateur du moteur levait KeyError)."""
+    from arene.site.data import _cycle_data, _instruments, _reveils
+    from arene.site.hasard import trajectoires
+
+    _out, j, data = veille_site
+    events = list(j.iter_events())
+    cfg, pol = _cfg(), load_policy(ROOT / "config" / "policy.toml")
+    finals = trajectoires(_cycle_data(events, CYCLE_S, _reveils(events)), 200, policy=pol,
+                          instruments=_instruments(cfg), fee_bp=cfg.taker_fee_bp, slippage_bp=cfg.slippage_bp,
+                          capital_ueur=CAPITAL)  # fmt: skip
+    assert len(finals) == 200 and data["distribution"] is not None and data["distribution_note"] is None
+
+
+def test_cache_des_trajectoires(tmp_path, veille_site):
+    from arene.site.data import compute
+
+    _out, j, data = veille_site
+    pol = load_policy(ROOT / "config" / "policy.toml")
+    with mock.patch.dict("os.environ", {"ARENE_SITE_CACHE": str(tmp_path / "cache")}):
+        a = compute(j.path, _cfg(), pol, now_ts=NOW)
+        assert (tmp_path / "cache" / "trajectoires.json").is_file()
+        with mock.patch("arene.site.data.trajectoires_depuis", side_effect=AssertionError("recalcul")):
+            b = compute(j.path, _cfg(), pol, now_ts=NOW)
+    assert a["distribution"] == b["distribution"] == data["distribution"]
+
+
+@pytest.fixture(scope="module")
+def saison_site(tmp_path_factory):
+    from arene.site.data import compute
+
+    tmp = tmp_path_factory.mktemp("saison")
+    j = synthetic_journal(tmp / "events.jsonl", saison_a=SAISON_A)
+    pol = load_policy(ROOT / "config" / "policy.toml")
+    with mock.patch.dict("os.environ", {"ARENE_SITE_CACHE": ""}):
+        data = compute(j.path, _cfg(), pol, now_ts=NOW)
+        build(j.path, tmp / "site", config=_cfg(), policy=pol, now_ts=NOW)
+    return tmp / "site", j, data
+
+
+def test_saison_classe_depuis_la_reference(saison_site):
+    out, j, data = saison_site
+    ref = next(e["payload"] for e in j.iter_events() if e["type"] == "saison_reference")
+    c0 = T0 + SAISON_A * CYCLE_S
+    assert data["saison"]["statut"] == "ouverte" and data["saison"]["cycle"] == c0
+    assert data["n_cycles"] == N_CYCLES - SAISON_A
+    for p in data["portfolios"]:
+        assert p["base_ueur"] == ref["equity"][p["id"]]
+        assert p["total_return"] == pytest.approx(p["equity_ueur"] / ref["equity"][p["id"]] - 1)
+        assert not p["late"] and p["rank_percentile"] is not None
+    assert data["chart"]["x"][0] == c0 - 1 and data["chart"]["kinds"][0] == "depart"
+    assert all(s["values"][0] == 100.0 for s in data["chart"]["series"])
+    assert all(x >= c0 - 1 for x in data["chart"]["x"])  # le rodage n'est pas sur la courbe
+    rod = {r["id"]: r["total_return"] for r in data["rodage"]["portfolios"]}
+    assert rod["temoin:panier"] == pytest.approx(ref["equity"]["temoin:panier"] / CAPITAL - 1)
+    assert data["rodage"]["n_cycles"] == SAISON_A
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert "Saison test" in index and "jour " in index and "Rodage, hors classement" in index
+    assert "depuis le début de la saison" in index
+    assert html.escape(DEROGATION.split(" : ")[1], quote=True) in index
+    methode = (out / "methode.html").read_text(encoding="utf-8")
+    assert html.escape(DEROGATION.split(" : ")[1], quote=True) in methode and "(code)" in methode
+
+
+def test_saison_prevue_annoncee_avant_son_debut(site):
+    index = read(site, "index.html")
+    assert "Saison 1" in index and "rodage en cours, hors classement" in index
+
+
+def test_stop_sur_barre_ignore_une_barre_commencee_avant_un_achat_au_reveil():
+    """Un achat au réveil (09:35) n'est pas stoppé par le plus bas d'une barre ouverte à 08:00 (garde du moteur)."""
+    from arene.site.data import _instruments
+    from arene.site.hasard import Ronde, trajectoires
+    from arene.temoins import aleatoire
+    from arene.temoins.trajectoires import CycleData
+    from arene.types import Bar, Quote, Side
+
+    cfg, pol = _cfg(), load_policy(ROOT / "config" / "policy.toml")
+    c0, r, c1 = T0, T0 + 7200, T0 + CYCLE_S
+    bid, ask = _mid("BTC/EUR", 0)
+    mid = (bid + ask) // 2
+    q = {"BTC/EUR": Quote("BTC/EUR", c0, bid, ask)}
+    barre = Bar("BTC/EUR", CYCLE_S, c0, mid, mid, mid // 2, mid, 100 * QTY_SCALE)  # plus bas à -50 %, AVANT l'achat
+
+    def decide(ts, state, marks, context):
+        if ts != r:
+            return []
+        return [aleatoire.make_intent(aleatoire.PORTFOLIO, ts, 0, "BTC/EUR", Side.BUY, 1000, stop_bp=500,
+                                      expected_move_bp=900)]  # fmt: skip
+
+    rondes = [
+        Ronde(CycleData(c0, q, {"BTC/EUR": mid}, {"BTC/EUR": mid}, {})),
+        Ronde(CycleData(r, {"BTC/EUR": Quote("BTC/EUR", r, bid, ask)}, {"BTC/EUR": mid}, {"BTC/EUR": mid}, {}), True),
+        Ronde(CycleData(c1, {"BTC/EUR": Quote("BTC/EUR", c1, bid, ask)}, {"BTC/EUR": mid}, {"BTC/EUR": mid},
+                        {"BTC/EUR": [barre]})),
+    ]
+    with mock.patch("arene.site.hasard.aleatoire.decide", side_effect=decide):
+        [final] = trajectoires(rondes, 1, policy=pol, instruments={"BTC/EUR": _instruments(cfg)["BTC/EUR"]},
+                               fee_bp=cfg.taker_fee_bp, slippage_bp=cfg.slippage_bp, capital_ueur=CAPITAL)  # fmt: skip
+    assert final > CAPITAL * 0.99  # la position est toujours là (un stop aurait coûté 5 % de 10 %, plus les frais)
+
+
+def test_raison_de_derogation_filtree_en_public():
+    from arene.site.render import raison_derogation
+
+    assert raison_derogation({"public": False}, "voir /srv/x/notes") == "voir /srv/x/notes"
+    assert raison_derogation({"public": True}, "voir /srv/x/notes") == "raison consignée dans le journal"
+    assert raison_derogation({"public": True}, "contact a@b.fr") == "raison consignée dans le journal"
+    assert raison_derogation({"public": True}, "correctif d’un prix aberrant") == "correctif d’un prix aberrant"

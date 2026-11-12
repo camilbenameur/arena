@@ -70,7 +70,7 @@ main:focus { outline: none; }
 .bandeau.reel { background: var(--perte); color: #fff; font-size: .95rem; padding: 8px 20px; }
 .venue { font-family: var(--mono); font-size: .8rem; }
 .entete { border-bottom: 1px solid var(--border); }
-.entete-haut { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 24px; padding-top: 14px; }
+.entete-haut { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 24px; padding-top: 14px; }
 .marque { font-family: var(--serif); font-size: 1.45rem; letter-spacing: -.01em; color: var(--text); text-decoration: none; padding: 4px 0; }
 .marque-sous { color: var(--muted); font-size: 1rem; }
 .nav { display: flex; flex-wrap: wrap; gap: 4px 22px; }
@@ -92,17 +92,7 @@ section { margin: 0; }
 .etiquette { display: block; font-size: .8rem; color: var(--muted); margin: 0 0 6px; font-weight: 500; }
 .chapo { margin: 0; font-size: 1.15rem; line-height: 1.55; max-width: 62ch; text-wrap: pretty; }
 .chapo b, .chapo strong { font-weight: 600; }
-.sous-titre { margin: 0 0 18px; color: var(--muted); font-size: .92rem; max-width: 72ch; }
 
-/* Premier écran */
-.hero { padding: 0 0 4px; }
-.hero h1 { max-width: 23ch; }
-@media (min-width: 1024px) {
-  .hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 0 56px; align-items: end; }
-  .hero h1 { margin: 0; }
-  .hero-texte .chapo { font-size: 1.08rem; }
-  .courbes h2 { margin-top: 40px; }
-}
 .avancee { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 20px 0 0; color: var(--muted); font-size: .92rem; }
 .avancee .jauge { width: 200px; max-width: 40vw; margin: 0; }
 .jauge { display: block; width: 100%; max-width: 200px; height: 6px; }
@@ -110,7 +100,6 @@ section { margin: 0; }
 .releve { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 28px; margin: 14px 0 0; padding: 14px 0 0; border-top: 1px solid var(--border); font-size: .92rem; color: var(--muted); }
 .releve li { margin: 0; }
 .releve a { color: var(--gain); }
-.releve code { font-size: .86rem; }
 .releve-detail { display: block; min-height: 1.5em; color: var(--muted); font-size: .86rem; }
 
 /* Graphique */
@@ -118,7 +107,6 @@ section { margin: 0; }
 .graphique { margin: 0; }
 .graphique-zone { width: 100%; min-height: 320px; }
 @media (max-width: 560px) { .graphique-zone { min-height: 240px; } }
-.graphique figcaption { color: var(--muted); font-size: .84rem; padding: 6px 0 0; max-width: 90ch; }
 .legende-quand { margin: 14px 0 6px; font-size: .82rem; color: var(--muted); }
 .legende { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .legende-bouton { font: inherit; font-size: .86rem; color: var(--text); background: transparent; border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px 4px 8px; min-height: 44px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; transition: border-color .15s var(--ease), background-color .15s var(--ease), opacity .15s var(--ease); }
@@ -136,17 +124,6 @@ section { margin: 0; }
 .vide-court { padding: 10px 14px; font-size: .92rem; }
 .vide { color: var(--muted); border: 1px dashed var(--border); border-radius: var(--r); padding: 14px 16px; margin: 0; }
 
-/* Signature : la frise des cycles scellés */
-.frise-bloc { margin-top: 28px; }
-.frise { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); border-top: 3px solid var(--rule); }
-.frise li { position: relative; padding: 12px 10px 0 12px; border-left: 1px solid var(--border); font-size: .84rem; min-width: 0; }
-.frise li::before { content: ""; position: absolute; top: -8.5px; left: -7px; width: 14px; height: 14px; border-radius: 50%; background: var(--rule); }
-.frise li:nth-last-child(2)::before { background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent); }
-.frise li.a-venir::before { background: var(--bg); border: 2px dashed var(--rule); }
-.frise b { display: block; font-weight: 600; }
-.frise span { display: block; color: var(--muted); }
-.frise code { display: inline-block; color: var(--text); font-size: .9rem; letter-spacing: .04em; margin-top: 6px; padding: 2px 6px; background: var(--sunken); border-radius: 3px; }
-.frise-legende { margin: 12px 0 0; font-size: .84rem; color: var(--muted); max-width: 80ch; }
 
 /* Tableaux : des filets, pas de boîte */
 .table-scroll { position: relative; overflow-x: auto; border-top: 2px solid var(--rule); }
@@ -284,9 +261,7 @@ main section > p, .liste-simple, .alerte, .note, .lecture { max-width: 66ch; }
 @media (max-width: 640px) {
   .wrap { padding-left: 16px; padding-right: 16px; }
   main { padding-top: 22px; }
-  .frise li:nth-last-child(n + 5) { display: none; }
   .nav-modeles { display: none; }
-  .frise code { font-size: .72rem; }
   .nav-modeles { gap: 4px 16px; }
   .stat dd.grand { font-size: 1.5rem; }
   .stat { padding: 10px 12px 12px 0; }
@@ -326,3 +301,18 @@ main section > p, .liste-simple, .alerte, .note, .lecture { max-width: 66ch; }
   body { background: #fff; }
   .table-scroll { overflow: visible; }
 }
+
+/* Épure : ligne d'état en tête, notes courtes dans les titres */
+.etat { padding: 4px 0 8px; }
+.etat .avancee { margin: 0; color: var(--text); }
+.etat .avancee strong { font-weight: 600; margin-right: 6px; }
+.h-note { font-family: var(--sans); font-size: .9rem; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.etat { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 32px; }
+.etat .releve { margin: 0; padding: 0; border: 0; }
+.etat .a-faire { flex-basis: 100%; }
+.marque-bloc { margin: 0; display: flex; flex-direction: column; gap: 2px; }
+.accroche { color: var(--muted); font-size: .88rem; }
+.saison { margin: 0; flex-basis: 100%; }
+.pastille.reveil { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
+.rodage { margin-top: 12px; }
+.rodage-table { max-width: 420px; margin-top: 8px; }

@@ -98,4 +98,5 @@ def build(
 def _model_chart(data: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
     """Courbe d'un portefeuille avec le panier en référence."""
     keep = {p["id"], "temoin:panier"}
-    return {"x": data["chart"]["x"], "series": [s for s in data["chart"]["series"] if s["id"] in keep]}
+    return {"x": data["chart"]["x"], "kinds": data["chart"].get("kinds", []),
+            "series": [s for s in data["chart"]["series"] if s["id"] in keep]}
