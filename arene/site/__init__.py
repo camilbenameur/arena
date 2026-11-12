@@ -62,7 +62,7 @@ def build(
         for f in FONTS.iterdir():
             shutil.copyfile(f, tmp / "fonts" / f.name)
 
-        # JSON publiés (chacun avec venue_mode ; les justifications < 24 h y sont déjà absentes).
+        # JSON publiés (chacun avec venue_mode ; justifications publiées dès la décision).
         meta = {"venue_mode": vm, "generated_ts": gen}
         _json(tmp / "data" / "summary.json", {
             **meta, "n_cycles": data["n_cycles"], "first_cycle_ts": data["first_cycle_ts"],

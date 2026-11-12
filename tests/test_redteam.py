@@ -318,7 +318,7 @@ def test_texte_du_modele_journal_verifiable_et_html_echappe(env: Env, texte: str
     assert verify(env.paths.journal).ok
     cfg, pol = load_config(env.paths.config), load_policy(env.paths.policy)
     out = env.root / "site"
-    build_site(env.paths.journal, out, config=cfg, policy=pol, now_ts=T0 + 10 * 86_400)  # > 24 h : justification publiée
+    build_site(env.paths.journal, out, config=cfg, policy=pol, now_ts=T0 + 10 * 86_400)
     for page in list((out).rglob("*.html")):
         html_text = page.read_text(encoding="utf-8")
         assert "<script>alert(1)" not in html_text
@@ -332,19 +332,22 @@ def test_texte_du_modele_journal_verifiable_et_html_echappe(env: Env, texte: str
     assert all("<" not in p.name and "\n" not in p.name for p in out.rglob("*"))
 
 
-def test_justification_masquee_avant_24h(env: Env):
+def test_justification_publiee_sans_delai_et_bornee(env: Env):
+    """Décision du propriétaire (12/11/2026) : la justification est publiée dès la décision, tronquée à 2 000 caractères."""
     def plan(idx: int, snap: dict):
-        return json.dumps({"actions": [], "justification": "SECRET-JUSTIF"})
+        return json.dumps({"actions": [], "justification": "JUSTIF-IMMEDIATE " + "x" * 5000})
 
     run_cycles(env, 2, deciders=make_deciders(plan))
     cfg, pol = load_config(env.paths.config), load_policy(env.paths.policy)
     out = env.root / "site"
-    build_site(env.paths.journal, out, config=cfg, policy=pol, now_ts=T0 + 2 * H4 + 3600)
-    assert "SECRET-JUSTIF" not in "".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file() and p.suffix != ".woff2")
+    build_site(env.paths.journal, out, config=cfg, policy=pol, now_ts=T0 + 2 * H4 + 60)
+    pages = "".join(p.read_text(encoding="utf-8") for p in out.rglob("*.html"))
+    assert "JUSTIF-IMMEDIATE" in pages
+    assert "x" * 2_001 not in pages
 
 
 def test_parse_error_ne_fait_pas_fuiter_de_texte_non_borne(env: Env):
-    """Le texte d'erreur d'un symbole invalide est tronqué à 300 caractères (pas de fuite avant 24 h)."""
+    """Le texte d'erreur d'un symbole invalide est tronqué à 300 caractères (texte borné)."""
     raw = json.dumps({"actions": [{**action("BTC/EUR"), "symbol": "X" * 5000}], "justification": "x"})
     _, err, _ = parse_decision(raw, "llm:test", NOW)
     assert err is not None and len(err) <= 300

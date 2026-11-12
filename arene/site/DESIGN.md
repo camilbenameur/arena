@@ -22,6 +22,11 @@ La question du premier écran, pour un lecteur qui ne connaît rien au sujet : q
 | Signature | La frise des cycles : chaque cycle terminé avec le préfixe de l'empreinte de son événement `cycle_completed` dans le journal chaîné | Vérifiable, propre à ce projet, lisible sans connaître le sujet |
 | Graphique d'accueil | Étiquettes en bout de courbe (valeur et nom, chaque nom dans sa couleur), courbes confondues signalées dans le sous-titre | Lecture directe, sans légende à décoder (OWID) |
 | Impression | Navigation et légende masquées, bandeau Simulation conservé | Le statut simulé doit rester sur papier |
+| Justifications | Publiées dès la décision (décision du propriétaire, 12/11/2026). Une décision avec ordres est une carte dépliée : le raisonnement du modèle à gauche, les ordres, le verdict du risque et l'exécution à droite (empilés sous 1024 px) ; les cycles « aucun ordre » restent repliés | Voir pourquoi un modèle ouvre ou ferme une position, sans noyer la page sous les « attendre » |
+| Modèle arrivé en cours de route | Courbe qui commence à son premier cycle (aucun point à 100 avant), date d'entrée sous son nom et sur sa page, pas de rang face au hasard (calculé sur toute la période) | Ne pas le comparer aux autres sur une période où il n'existait pas |
+| Couleurs des modèles | Haiku rouille, Sonnet bleu, Opus violet, Fable sarcelle (`--llm3`, 5,4:1 sur le fond clair) ; les témoins restent gris pointillé | Quatre teintes éloignées, aucune proche du vert des gains |
+| Étiquettes groupées | Quand plusieurs courbes finissent à la même valeur, les noms qui ne tiennent pas dans la marge deviennent « +N » | Aucun texte coupé au bord du graphique |
+| Cartes empilées (mobile) | Seules les cellules sans rien à lire (« — ») sont masquées ; « accepté », « refusé » et leurs motifs restent visibles | Un refus du contrôle de risque ne doit jamais disparaître sur téléphone |
 
 ## Exceptions au détecteur Impeccable
 

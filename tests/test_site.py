@@ -54,12 +54,17 @@ def _intent(j: Journal, pf: str, cyc: int, sym: str, side: str, size_bp: int, ii
                               "reserved_ueur": 0, "policy_sha256": "p"}, ts)  # fmt: skip
 
 
-def synthetic_journal(path: Path) -> Journal:
+FABLE = "llm:claude-fable-5-2"
+FABLE_DEBUT = 40  # cycle d'ouverture du cinquième modèle, arrivé en cours de route
+FABLE_RAISON = "RAISON_FABLE : le momentum du bitcoin justifie une petite position"
+
+
+def synthetic_journal(path: Path, avec_fable: bool = False) -> Journal:
     with mock.patch("arene.journal.os.fsync"):  # 3 000 écritures : sans fsync le test reste rapide
-        return _synthetic_journal(path)
+        return _synthetic_journal(path, avec_fable)
 
 
-def _synthetic_journal(path: Path) -> Journal:
+def _synthetic_journal(path: Path, avec_fable: bool = False) -> Journal:
     j = Journal(path)
     j.append("config_loaded", {"policy_sha256": "a" * 64, "config_sha256": "b" * 64, "prompt_sha256": "c" * 64,
                                "git_head": "d" * 40}, T0 - 600)  # fmt: skip
@@ -70,6 +75,9 @@ def _synthetic_journal(path: Path) -> Journal:
         c = T0 + i * CYCLE_S
         ts = c + 300
         j.append("cycle_started", {"cycle": c}, c)
+        if avec_fable and i == FABLE_DEBUT:
+            j.append("portfolio_opened", {"portfolio": FABLE, "kind": "llm", "capital_ueur": CAPITAL,
+                                          "venue_mode": "paper"}, c + 1)  # fmt: skip
         for sym in SYMBOLS:
             bid, ask = _mid(sym, i)
             j.append("quote", {"symbol": sym, "ts": ts, "bid": bid, "ask": ask}, ts)
@@ -120,10 +128,20 @@ def _synthetic_journal(path: Path) -> Journal:
                                        "parsed": {"actions": [], "justification": "attendre"}, "parse_error": None,
                                        "input_tokens": 3000, "output_tokens": 200, "cost_uusd": 16_000,
                                        "latency_ms": 1200}, ts)  # fmt: skip
+        if avec_fable and i >= FABLE_DEBUT:
+            fp = {"actions": [], "justification": "attendre encore"}
+            if i == FABLE_DEBUT + 5:
+                _intent(j, FABLE, c, "BTC/EUR", "buy", 1000, "f45", ts, qty=qty100)
+                _fill(j, FABLE, "BTC/EUR", "buy", qty100, px_btc, ts, "f45")
+                fp = {"actions": [{"symbol": "BTC/EUR", "side": "buy"}], "justification": FABLE_RAISON}
+            j.append("decision_received", {"portfolio": FABLE, "cycle": c, "model_requested": "claude-fable-5-2",
+                                           "model_returned": "claude-fable-5-2", "raw_text": json.dumps(fp),
+                                           "parsed": fp, "parse_error": None, "input_tokens": 3000,
+                                           "output_tokens": 300, "cost_uusd": 110_000, "latency_ms": 900}, ts)  # fmt: skip
         events = list(j.iter_events())
         states = replay(events)
         marks = {s: sum(_mid(s, i)) // 2 for s in SYMBOLS}
-        for p in LLMS + TEMOINS:
+        for p in LLMS + TEMOINS + ([FABLE] if avec_fable and i >= FABLE_DEBUT else []):
             st = states[p]
             j.append("equity", {"portfolio": p, "cycle": c, "cash_ueur": st.cash_ueur,
                                 "positions_value_ueur": equity_ueur(st, marks) - st.cash_ueur,
@@ -215,21 +233,76 @@ def test_formats_francais():
     assert typo_fr("<p>a : b ; « c »</p><code>x : y</code>") == "<p>a\u202f: b\u202f; «\u202fc\u202f»</p><code>x : y</code>"
 
 
-def test_justification_recente_masquee_et_ancienne_affichee(site):
-    out, _ = site
+def test_justification_publiee_des_la_decision(site):
+    """Décision du propriétaire (12/11/2026) : plus de délai de 24 h, la justification la plus récente est publiée."""
     page = read(site, "modele/llm-claude-sonnet-5-5.html")
-    assert SECRET_RECENT not in page
-    assert "publiée 24 h après la décision" in page
-    assert "prise de profit" in page  # décision ancienne : justification publiée
-    # le JSON ne fuit pas non plus la justification récente
-    for f in (out / "data").glob("*.json"):
-        assert SECRET_RECENT not in f.read_text(encoding="utf-8"), f.name
-    # une fois 24 h passées, elle devient publique
+    assert SECRET_RECENT in page  # décision prise 1 h avant la construction
+    assert "prise de profit" in page
+    assert "après la décision" not in page and "masquee" not in page
+    assert "après la décision" not in read(site, "methode.html")
+
+
+def test_decision_avec_ordres_montre_le_raisonnement_a_cote_des_ordres(site):
+    page = read(site, "modele/llm-claude-sonnet-5-5.html")
+    # la vente du cycle 10 : carte dépliée, raisonnement puis ordres dans le même bloc, jamais dans un <details>
+    i = page.index("prise de profit")
+    carte = page[page.rindex('<li class="decision">', 0, i) : page.index("</li>", i)]
+    assert '<div class="decision-corps"><blockquote class="justif">' in carte
+    assert "Raisonnement du modèle" in carte and '<div class="decision-ordres">' in carte
+    assert "<details" not in carte
+    assert carte.index("prise de profit") < carte.index("tableau actions")
+    assert '<span class="resume-ordres">Vente BTC/EUR</span>' in carte
+    # un ordre refusé garde aussi son raisonnement à côté
+    j = page.index("</span>trop gros</blockquote>")
+    refus = page[page.rindex('<li class="decision">', 0, j) : page.index("</li>", j)]
+    assert "decision-corps" in refus and "MAX_ORDER_SIZE" in refus
+    # sur mobile (cartes empilées), le verdict sans chiffre reste visible : seules les cellules « — » sont masquées
+    assert re.search(r'<td data-label="Contrôle de risque"(?! data-vide)[^>]*><span class="pastille perte-bg">refusé', refus)
+    assert re.search(r'<td data-label="Contrôle de risque"(?! data-vide)[^>]*><span class="pastille ok">accepté', carte)
+    # une décision « ne rien faire » reste repliée
+    k = page.index("rien à faire")
+    assert "<details>" in page[page.rindex('<li class="ligne">', 0, k) : k]
+
+
+@pytest.fixture(scope="module")
+def site_fable(tmp_path_factory) -> tuple[Path, Journal]:
+    tmp = tmp_path_factory.mktemp("site_fable")
+    j = synthetic_journal(tmp / "events.jsonl", avec_fable=True)
     cfg = load_config(ROOT / "config" / "arene.toml")
-    cfg = dataclasses.replace(cfg, temoins=dataclasses.replace(cfg.temoins, aleatoire_trajectoires=5))
-    later = out.parent / "site_later"
-    build(site[1].path, later, config=cfg, policy=load_policy(ROOT / "config" / "policy.toml"), now_ts=NOW + 86_400)
-    assert SECRET_RECENT in (later / "modele" / "llm-claude-sonnet-5-5.html").read_text(encoding="utf-8")
+    cfg = dataclasses.replace(cfg, temoins=dataclasses.replace(cfg.temoins, aleatoire_trajectoires=20))
+    out = tmp / "site"
+    build(j.path, out, config=cfg, policy=load_policy(ROOT / "config" / "policy.toml"), now_ts=NOW)
+    return out, j
+
+
+def test_cinquieme_modele_arrive_en_cours_de_route(site_fable):
+    from arene.site.render import COULEUR_LLM, _styles
+
+    assert COULEUR_LLM[FABLE] == 3
+    out, _ = site_fable
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert "Quatre IA gèrent chacune" in index
+    assert "quatre modèles d’ia" in index.lower()  # méta-description dérivée du journal
+    assert "Claude Fable 5.2" in index and "Entré dans l’arène le" in index
+    # courbe : pas de point à 100 avant son ouverture (spanGaps relierait sinon le départ à son premier point)
+    chart = json.loads((out / "data" / "equity.json").read_text(encoding="utf-8"))
+    k = [s["id"] for s in chart["series"]].index(FABLE)
+    vals = chart["series"][k]["values"]
+    assert all(v is None for v in vals[: FABLE_DEBUT + 1]) and vals[FABLE_DEBUT + 1] is not None
+    assert _styles(chart, None)[k]["color"] == "--llm3"
+    page = (out / "modele" / "llm-claude-fable-5-2.html").read_text(encoding="utf-8")
+    assert "Entré dans l’arène le" in page and "arrivé en cours de route" in page
+    assert FABLE_RAISON in page and "Achat BTC/EUR" in page
+    p = json.loads((out / "data" / "modele-llm-claude-fable-5-2.json").read_text(encoding="utf-8"))
+    assert p["late"] is True and p["rank_percentile"] is None
+    assert p["n_cycles"] == N_CYCLES - FABLE_DEBUT
+    # les autres gardent leur rang et leur point de départ à 100
+    autres = json.loads((out / "data" / "modele-llm-claude-sonnet-5-5.json").read_text(encoding="utf-8"))
+    assert autres["late"] is False and autres["rank_percentile"] is not None
+    assert chart["series"][0]["values"][0] == 100.0
+    methode = (out / "methode.html").read_text(encoding="utf-8")
+    assert "Quatre modèles d’IA (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5 et Fable 5.2)" in methode
+    assert "Claude Fable 5.2 est entré dans l’arène le" in methode
 
 
 def test_injection_html_echappee(site):
@@ -369,3 +442,11 @@ def test_version_publique_sans_texte_operateur_avec_404_et_frise(site, tmp_path)
     hashes = [e["hash"][:8] for e in j.iter_events(strict=False) if e["type"] == "cycle_completed"]
     assert hashes and all(h in index for h in hashes[-6:])
     assert f"Cycle {len(hashes) + 1}" in index  # le prochain cycle, à venir
+
+
+def test_modele_configure_pas_encore_ouvert(site):
+    """Fable est dans la config mais pas dans ce journal : Méthode compte comme l'accueil et l'annonce à part."""
+    methode = read(site, "methode.html")
+    assert "Trois modèles d’IA (Claude Haiku 5.5, Sonnet 5.5 et Opus 5.5)" in methode
+    assert "Claude Fable 5.2 rejoindra l’arène au prochain cycle." in methode
+    assert "Trois IA gèrent chacune" in read(site, "index.html")

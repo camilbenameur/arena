@@ -1,7 +1,7 @@
 """Calcul de toutes les données du dashboard à partir du journal SEUL (docs/SPEC-MVP.md §13).
 
 `compute()` renvoie un dictionnaire prêt pour JSON (floats permis : affichage seulement). Rien ici n'écrit
-de fichier. Les justifications des modèles ne sont présentes que si la décision a au moins 24 h.
+de fichier. Les justifications des modèles sont publiées dès la décision (décision du propriétaire, 12/11/2026).
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from arene.risk.policy import Policy
 from arene.temoins.trajectoires import CycleData, simulate_random_trajectories
 from arene.types import Bar, Instrument, Quote, notional_ueur
 
-DELAY_PUBLICATION_S = 24 * 3600
 MIN_CYCLES_STATS = 30  # sous ce nombre de cycles : « trop tôt » (IC du Sharpe, distinction du hasard)
 BASELINE = "temoin:panier"
 ALEATOIRE = "temoin:aleatoire"
@@ -46,6 +45,7 @@ NOMS = {
     "llm:claude-haiku-5-5": "Claude Haiku 5.5",
     "llm:claude-sonnet-5-5": "Claude Sonnet 5.5",
     "llm:claude-opus-5-5": "Claude Opus 5.5",
+    "llm:claude-fable-5-2": "Claude Fable 5.2",
     "temoin:panier": "Témoin panier",
     "temoin:6040": "Témoin 60/40",
     "temoin:e0065": "Témoin E0065 (adapté)",
@@ -175,7 +175,7 @@ def _fill_view(p: Mapping[str, Any], ts: int) -> dict[str, Any]:
     }
 
 
-def _decisions(events: list[dict[str, Any]], cycles: list[int], now_ts: int) -> dict[str, list[dict[str, Any]]]:
+def _decisions(events: list[dict[str, Any]], cycles: list[int]) -> dict[str, list[dict[str, Any]]]:
     rows: dict[tuple[str, int], dict[str, Any]] = {}
     verdicts: dict[str, dict[str, Any]] = {}
     fills_by_order: dict[str, list[dict[str, Any]]] = {}
@@ -188,7 +188,7 @@ def _decisions(events: list[dict[str, Any]], cycles: list[int], now_ts: int) -> 
                 "portfolio": portfolio, "cycle": cycle, "ts": ts, "kind": "temoin" if portfolio.startswith("temoin:") else "pending",
                 "skip_reason": None, "model_requested": None, "model_returned": None, "cost_uusd": None,
                 "input_tokens": None, "output_tokens": None, "parse_error": None, "justification": None,
-                "justification_publiee": False, "publication_ts": None, "actions": [], "sorties": [],
+                "actions": [], "sorties": [],
             }  # fmt: skip
         return rows[key]
 
@@ -214,9 +214,7 @@ def _decisions(events: list[dict[str, Any]], cycles: list[int], now_ts: int) -> 
             texte = parsed.get("justification") if isinstance(parsed, dict) else None
             if not isinstance(texte, str):
                 texte = p.get("raw_text") if isinstance(p.get("raw_text"), str) else None
-            r["publication_ts"] = ts + DELAY_PUBLICATION_S
-            r["justification_publiee"] = now_ts >= ts + DELAY_PUBLICATION_S
-            r["justification"] = texte[:JUSTIFICATION_MAX] if (texte and r["justification_publiee"]) else None
+            r["justification"] = texte[:JUSTIFICATION_MAX] if texte else None
             r["a_justification"] = bool(texte)
         elif t == "intent":
             r = row(p["portfolio"], p["cycle"], ts)
@@ -298,7 +296,7 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
             "n": n, "p05": srt[int(0.05 * (n - 1))], "median": srt[(n - 1) // 2], "p95": srt[int(0.95 * (n - 1))],
         }  # fmt: skip
 
-    decisions = _decisions(events, all_cycles, now)
+    decisions = _decisions(events, all_cycles)
     costs: Counter[str] = Counter()
     decided: Counter[str] = Counter()
     skipped: dict[str, Counter[str]] = {}
@@ -325,6 +323,18 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
     def rets_of(pf: str) -> list[float]:
         s = equity_by_pf.get(pf, {})
         return stats.returns([capital[pf]] + [s[c] for c in sorted(s)]) if s else []
+
+    # Un portefeuille ouvert après le premier cycle (modèle ajouté en cours d'expérience) n'est comparé
+    # qu'à partir de son départ : pas de point à 100 avant lui, pas de rang face au hasard sur toute la période.
+    opened_ts = {e["payload"]["portfolio"]: e["ts"] for e in events if e["type"] == "portfolio_opened"}
+
+    def depart(pf: str) -> int | None:
+        s = equity_by_pf.get(pf, {})
+        return min(s) if s else opened_ts.get(pf)
+
+    def tardif(pf: str) -> bool:
+        d = depart(pf)
+        return bool(all_cycles) and d is not None and d > all_cycles[0]
 
     portfolios: list[dict[str, Any]] = []
     for pf in ids:
@@ -362,7 +372,8 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
             "sharpe": sh if enough else None, "sharpe_ci": list(ci) if ci else None, "too_early": not enough,
             "fees_paid_ueur": st.fees_paid_ueur, "realized_pnl_ueur": st.realized_pnl_ueur,
             "n_trades": len(trades.get(pf, ())), "api_cost_uusd": costs[pf] if kinds[pf] == "llm" else None,
-            "rank_percentile": stats.rank_in_distribution(tr, distribution) if distribution else None,
+            "rank_percentile": stats.rank_in_distribution(tr, distribution) if distribution and not tardif(pf) else None,
+            "start_ts": depart(pf), "late": tardif(pf),
             "distinguishable": dist, "cash_ueur": st.cash_ueur, "halted": st.halted,
             "frozen_until_ts": st.frozen_until_ts if st.frozen_until_ts > now else 0,
             "positions": positions,
@@ -376,7 +387,7 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
     chart = []
     for p in portfolios:
         s = equity_by_pf.get(p["id"], {})
-        vals: list[float | None] = [100.0] if x0 is not None else []
+        vals: list[float | None] = ([None if p["late"] else 100.0]) if x0 is not None else []
         vals += [round(s[c] / capital[p["id"]] * 100, 4) if c in s else None for c in all_cycles]
         chart.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "values": vals})
 

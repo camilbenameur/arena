@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from arene.site.data import CODES_RISQUE, SAUTS
+from arene.site.data import CODES_RISQUE, SAUTS, nom
 
 NBSP = "\u00a0"
 NNBSP = "\u202f"
@@ -21,10 +21,20 @@ MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sep
 
 BANDEAU = "Simulation\u202f: argent fictif, aucun ordre réel"
 BANDEAU_REEL = "ARGENT RÉEL"
-DESCRIPTION = (
-    "Trois modèles d’IA gèrent chacun un portefeuille crypto fictif, comparés à quatre règles simples. "
-    "Journal d’expérience mis à jour toutes les 4 h, en simulation."
-)
+NOMBRES_MIN = {1: "un", 2: "deux", 3: "trois", 4: "quatre", 5: "cinq", 6: "six", 7: "sept", 8: "huit"}
+
+
+def description(data: dict[str, Any]) -> str:
+    """Méta-description : le nombre de modèles et de témoins vient du journal, pas d'une constante."""
+    n_llm = sum(1 for p in data.get("portfolios", ()) if p["kind"] == "llm")
+    n_tem = sum(1 for p in data.get("portfolios", ()) if p["kind"] != "llm")
+    llm = f"{NOMBRES_MIN.get(n_llm, n_llm)} modèle{'s' if n_llm > 1 else ''} d’IA"
+    gere = "gèrent chacun un portefeuille" if n_llm > 1 else "gère un portefeuille"
+    return (
+        f"{llm[:1].upper() + llm[1:]} {gere} crypto fictif, comparé{'s' if n_llm > 1 else ''} à "
+        f"{NOMBRES_MIN.get(n_tem, n_tem)} règle{'s' if n_tem > 1 else ''} simple{'s' if n_tem > 1 else ''}. "
+        "Journal d’expérience mis à jour toutes les 4 h, en simulation."
+    )
 AVERTISSEMENT = (
     "Expérience personnelle, pas un conseil en investissement. Les décisions sont produites par des IA, "
     "en simulation ; des pertes sont possibles. Chiffres avant impôt."
@@ -193,7 +203,7 @@ def layout(*, title: str, body: str, root: str, active: str, data: dict[str, Any
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="{CSP}">
 <title>{e(title)} · Arène de trading</title>
-<meta name="description" content="{e(DESCRIPTION)}">
+<meta name="description" content="{e(description(data))}">
 <link rel="preload" href="{root}fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="{root}fonts/ibm-plex-serif-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}vendor/uPlot.min.css">
@@ -248,8 +258,10 @@ def empiler(table: str, libelles: list[str]) -> str:
     import re
 
     def cellule(m: re.Match[str], i: Any) -> str:
-        texte = re.sub(r"<[^>]+>", "", m.group(2))
-        vide = "" if re.search(r"\d", texte) else ' data-vide=""'
+        # Vide = rien de visible à lire (« — », « sans objet » caché) ; « accepté » ou « refusé » restent affichés.
+        visible = re.sub(r'<span class="visuellement-cache">.*?</span>', "", m.group(2), flags=re.DOTALL)
+        texte = re.sub(r"<[^>]+>", "", visible)
+        vide = "" if re.search(r"\w", texte) else ' data-vide=""'
         return f'<td data-label="{e(next(i, ""))}"{vide}{m.group(1)}>{m.group(2)}</td>'
 
     def ligne(m: re.Match[str]) -> str:
@@ -260,7 +272,8 @@ def empiler(table: str, libelles: list[str]) -> str:
 
 
 DASHES = [[6, 4], [2, 3], [10, 3, 2, 3], [1, 3]]
-COULEUR_LLM = {"llm:claude-haiku-5-5": 0, "llm:claude-sonnet-5-5": 1, "llm:claude-opus-5-5": 2}
+COULEUR_LLM = {"llm:claude-haiku-5-5": 0, "llm:claude-sonnet-5-5": 1, "llm:claude-opus-5-5": 2, "llm:claude-fable-5-2": 3}
+N_COULEURS_LLM = 4
 COULEUR_TEMOIN = {"temoin:6040": 0, "temoin:e0065": 1, "temoin:aleatoire": 2}
 MIN_POINTS_COURBE = 3  # sous 3 cycles terminés, une courbe ne montre qu'une droite : le tableau suffit
 
@@ -272,7 +285,7 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
         focused = focus is not None and s["id"] == focus
         if s["kind"] == "llm":
             k = COULEUR_LLM.get(s["id"], llm)
-            st = {"color": f"--llm{k % 3}", "dash": None, "width": 2.5}
+            st = {"color": f"--llm{k % N_COULEURS_LLM}", "dash": None, "width": 2.5}
             llm += 1
         elif s["id"] == "temoin:panier":
             st = {"color": "--tem-ref", "dash": [8, 4], "width": 2}
@@ -426,6 +439,8 @@ def _rank_cell(p: dict[str, Any]) -> str:
     r = p["rank_percentile"]
     if jamais_decide(p):
         return '<span class="muted">—</span><small class="sous">sans décision</small>'
+    if r is None and p.get("late"):
+        return '<span class="muted">—</span><small class="sous">arrivé en cours de route</small>'
     if r is None:
         return NON_APPLICABLE
     sans = ", sans aucun achat" if p["kind"] == "llm" and not p["n_trades"] else ""
@@ -470,6 +485,8 @@ def overview_table(data: dict[str, Any]) -> str:
         verdict_html = f'<span class="verdict-ligne">{verdict}</span>' if verdict else ""
         if p["kind"] != "llm" and p.get("description"):
             verdict_html += f'<small class="desc">{e(p["description"])}</small>'
+        elif p.get("late") and p.get("start_ts"):
+            verdict_html += f'<small class="desc">Entré dans l’arène le {quand(p["start_ts"], annee=False)} : chiffres depuis cette date.</small>'
         inactif = " inactif" if jamais_decide(p) else ""
         rows.append(
             f'<tr class="{e(p["kind"])}{inactif}"><th scope="row"><a href="modele/{e(p["slug"])}.html">{e(p["name"])}</a>{statut}{verdict_html}</th>'
@@ -615,7 +632,7 @@ def _a_faire(data: dict[str, Any], llms: list[dict[str, Any]]) -> str:
     halted = [p["name"] for p in data["portfolios"] if p["halted"]]
     if sauts:
         raisons = sorted(set(sauts.values()))
-        qui = "les 3 modèles" if len(sauts) == 3 else ", ".join(sorted(sauts))
+        qui = f"les {len(llms)} modèles" if len(sauts) == len(llms) > 1 else ", ".join(sorted(sauts))
         if raisons == ["no_key"] and data.get("decider_backend") == "abonnement":
             nxt = data["last_cycle_ts"] + data["interval_s"] if data.get("interval_s") else None
             apres = f"après le cycle du {when(nxt, annee=False)}" if nxt else "après le prochain cycle"
@@ -838,9 +855,7 @@ def _sorties(fills: list[dict[str, Any]]) -> str:
 def _justif(d: dict[str, Any]) -> str:
     if not d.get("a_justification"):
         return ""
-    if d["justification_publiee"]:
-        return f'<blockquote class="justif"><span class="etiquette">Justification du modèle</span>{e(d["justification"])}</blockquote>'
-    return f'<p class="justif masquee">Justification publiée 24{NBSP}h après la décision, le {quand(d["publication_ts"])}.</p>'
+    return f'<blockquote class="justif"><span class="etiquette">Raisonnement du modèle</span>{e(d["justification"])}</blockquote>'
 
 
 def _meta(d: dict[str, Any], equivalent: bool = False) -> str:
@@ -893,10 +908,25 @@ def _decision_html(d: dict[str, Any], equivalent: bool = False) -> str:
     actions = _actions_table(d["actions"], d["cycle"]) if d["actions"] else ""
     if d["kind"] == "decided" and not d["actions"]:
         actions = '<p class="muted">Aucune action ce cycle.</p>'
+    if d["actions"]:
+        tete = f"{tete}<span class=\"resume-ordres\">{e(_resume_ordres(d['actions']))}</span>"
+    justif = _justif(d)
+    ordres = f"{actions}{_sorties(d['sorties'])}"
+    corps = (
+        f'<div class="decision-corps">{justif}<div class="decision-ordres">{ordres}</div></div>'
+        if justif and d["actions"] else f"{ordres}{justif}"
+    )
     return (
         f'<li class="decision"><article><header><h3>{quand(d["cycle"])}</h3>{tete}{_meta(d, equivalent)}</header>'
-        f'{actions}{_sorties(d["sorties"])}{_justif(d)}</article></li>'
+        f"{corps}</article></li>"
     )
+
+
+def _resume_ordres(actions: list[dict[str, Any]]) -> str:
+    """En-tête d'une décision avec ordres : « Achat BTC/EUR, vente ETH/EUR »."""
+    mots = [f'{"achat" if a["side"] == "buy" else "vente"} {a["symbol"]}' for a in actions]
+    txt = ", ".join(mots)
+    return txt[:1].upper() + txt[1:]
 
 
 def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str, Any]) -> str:
@@ -970,11 +1000,16 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
         "le contrôle de risque valide chaque ordre, le simulateur l’exécute."
     )
     note_dec = (
-        f"Du plus récent au plus ancien. Le raisonnement du modèle n’est publié que 24{NBSP}h après la décision ; "
-        "les actions et les verdicts du contrôle de risque sont visibles tout de suite."
+        "Du plus récent au plus ancien. Quand le modèle passe des ordres, son raisonnement est affiché à côté, "
+        "avec le verdict du contrôle de risque et l’exécution ; les cycles sans ordre sont repliés."
         if llm
         else "Du plus récent au plus ancien. Les témoins appliquent une règle fixe ; le contrôle de risque les vérifie comme les modèles."
     )
+    if p.get("late") and p.get("start_ts"):
+        alertes.append(
+            f'<p class="alerte info">Entré dans l’arène le {quand(p["start_ts"])}, après les autres portefeuilles : '
+            "ses chiffres courent depuis cette date et il n’est pas classé face au hasard, calculé sur toute la période.</p>"
+        )
     titre_h1 = f'<h1>{e(p["name"])}</h1>'
     verdict_html = f'<p class="verdict-tete">{verdict}</p>' if verdict else ""
     body = f"""
@@ -1043,8 +1078,28 @@ def _policy_value(key: str, v: Any) -> tuple[str, str]:
     return str(v), ""
 
 
+def _liste_modeles(data: dict[str, Any]) -> tuple[str, str]:
+    """(« Quatre modèles d’IA (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5 et Fable 5.2) », phrase sur les arrivées).
+    Compte les portefeuilles ouverts, comme l'accueil ; un modèle configuré mais pas encore ouvert est annoncé à part."""
+    ouverts = [p for p in data["portfolios"] if p["kind"] == "llm"]
+    ids = {p["id"] for p in ouverts}
+    noms = [p["name"] if i == 0 else p["name"].removeprefix("Claude ") for i, p in enumerate(ouverts)]
+    k = len(noms)
+    liste = (noms[0] if k == 1 else ", ".join(noms[:-1]) + " et " + noms[-1]) if noms else ""
+    tete = f"{NOMBRES.get(k, str(k))} modèle{'s' if k > 1 else ''} d’IA" + (f" ({liste})" if liste else "")
+    notes = [
+        f"{p['name']} est entré dans l’arène le {quand(p['start_ts'], annee=False)}, après les autres ; ses chiffres courent depuis cette date."
+        for p in ouverts
+        if p.get("late") and p.get("start_ts")
+    ]
+    notes += [f"{nom(mo['portfolio'])} rejoindra l’arène au prochain cycle." for mo in data["method"]["models"] if mo["portfolio"] not in ids]
+    return tete, (" " + " ".join(notes)) if notes else ""
+
+
 def methode_page(data: dict[str, Any]) -> str:
     m, j, pv = data["method"], data["journal"], data["provenance"]
+    n_tem = sum(1 for p in data["portfolios"] if p["kind"] != "llm")
+    phrase_modeles, arrivees = _liste_modeles(data)
     pol_rows = "".join(
         f'<tr><th scope="row">{e(POLITIQUE_LIBELLES[k][0])}</th><td class="n" data-label="Valeur">{e(_policy_value(k, v)[0])}</td>'
         f'<td class="muted" data-label="Base">{e(_policy_value(k, v)[1])}</td></tr>'
@@ -1088,9 +1143,9 @@ def methode_page(data: dict[str, Any]) -> str:
 </header>
 
 <section aria-labelledby="m-arene"><h2 id="m-arene">Ce que fait l’arène</h2>
-<p>Trois modèles d’IA (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5) et quatre témoins gèrent chacun {eur(m["capital_ueur"], decimals=0)} fictifs sur 6 paires cotées en euros
+<p>{phrase_modeles} et {NOMBRES_MIN.get(n_tem, n_tem)} témoins gèrent chacun {eur(m["capital_ueur"], decimals=0)} fictifs sur 6 paires cotées en euros
 chez Kraken. Toutes les {duree(m["interval_s"])}, chaque portefeuille décide ; un module de contrôle des risques accepte ou refuse chaque ordre voulu ;
-un simulateur pessimiste exécute les ordres acceptés. Achats uniquement (pas de vente à découvert), sans effet de levier. Chaque événement est écrit dans un journal chaîné.</p></section>
+un simulateur pessimiste exécute les ordres acceptés. Achats uniquement (pas de vente à découvert), sans effet de levier. Chaque événement est écrit dans un journal chaîné.{arrivees}</p></section>
 
 <section aria-labelledby="m-temoins"><h2 id="m-temoins">Les témoins</h2>
 <dl class="regles">

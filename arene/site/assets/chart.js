@@ -130,6 +130,18 @@
       var noms = g.noms.length > 1 || compact ? g.noms.map(court) : g.noms;
       var couleurs = g.couleurs;
       if (compact && noms.length > 1) { noms = [noms.length + (g.llm ? " IA" : " courbes")]; couleurs = [g.couleur]; }
+      // Ce qui ne tient pas dans la marge droite devient « +N » (les noms complets restent dans la légende).
+      var place = ctx.canvas.width - x - w - 4 * r;
+      var largeur = function (liste, reste) {
+        return ctx.measureText(liste.join(", ") + (reste ? ", +" + reste : "")).width;
+      };
+      var garde = noms.length;
+      while (garde > 1 && largeur(noms.slice(0, garde), noms.length - garde) > place) garde--;
+      if (garde < noms.length) {
+        var reste = noms.length - garde;
+        noms = noms.slice(0, garde).concat(["+" + reste]);
+        couleurs = couleurs.slice(0, garde).concat([css("--muted")]);
+      }
       var cx = x + w;
       noms.forEach(function (n, k) {
         var morceau = n + (k < noms.length - 1 ? ", " : "");
