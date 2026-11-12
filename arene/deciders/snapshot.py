@@ -16,7 +16,7 @@ from typing import Any
 
 from arene.types import Bar, PortfolioState, notional_ueur
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 WINDOW_BARS = 42  # 7 jours de barres 4 h
 RECENT_CLOSES = 12
 RECENT_DECISIONS = 5
@@ -223,10 +223,13 @@ def build_snapshot(
     marks: dict[str, int],
     recent_decisions: list[dict],
     policy_summary: str,
+    contexte: dict | None = None,
 ) -> dict:
     """Instantané déterministe (sans float) donné au décideur pour le cycle `cycle_ts`.
 
     `marks` : prix de valorisation en µEUR par symbole (milieu du quote) ; à défaut, dernière clôture.
+    `contexte` : {"type": "rendez_vous", ...} au cycle de 4 h, {"type": "reveil", "declencheur": ...} à un réveil,
+    avec `prochain_rendez_vous_ts` ; à défaut, un rendez-vous 4 h après `cycle_ts`.
     Lève `FuturLeakError` si une barre n'est pas close à `cycle_ts`.
     """
     symbols = {sym: _symbol_features(sym, bars_by_symbol[sym], cycle_ts) for sym in sorted(bars_by_symbol)}
@@ -237,6 +240,9 @@ def build_snapshot(
         "schema_version": SCHEMA_VERSION,
         "cycle_ts": int(cycle_ts),
         "bar_interval_s": 14_400,
+        "contexte": _check_str_len(
+            contexte if contexte is not None else {"type": "rendez_vous", "prochain_rendez_vous_ts": cycle_ts + 14_400}
+        ),
         "market": symbols,
         "portfolio": _portfolio_block(cycle_ts, state, marks, fallback),
         "recent_decisions": _check_str_len(list(recent_decisions)[-RECENT_DECISIONS:]),

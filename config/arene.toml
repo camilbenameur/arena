@@ -9,6 +9,15 @@ fill_model_version = "pessimiste-v1"
 taker_fee_bp = 50           # 0,40 % Kraken Pro de base, majoré de 25 %
 slippage_bp = 5
 
+# Veille continue et réveils sur événement (docs/VEILLE.md) : un tick sans LLM toutes les 5 min.
+[veille]
+tick_s = 300
+seuil_mouvement_bp = 300      # 3 %
+fenetre_mouvement_s = 3600    # sur 1 h
+cooldown_s = 3600             # délai minimal depuis la dernière ronde LLM (cycle ou réveil)
+max_reveils_jour = 6          # par jour UTC
+garde_avant_cycle_s = 1800    # aucun réveil à moins de 30 min du prochain rendez-vous
+
 [[instruments]]
 symbol = "BTC/EUR"
 kraken_pair = "XBTEUR"

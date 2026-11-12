@@ -1,8 +1,12 @@
 {
  "name": "haussier",
- "sha256": "2aab3ee20a32f2f7e6f282de393ef61dc0b2c823e50a09e6aa298b4d8fde3bfa",
+ "sha256": "81ecca2084a7b85639c968a095928b96c65cfccafb0ad575cc9c02061a35c197",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -207,6 +211,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

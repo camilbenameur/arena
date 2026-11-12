@@ -1,8 +1,12 @@
 {
  "name": "pic_de_volume",
- "sha256": "4d5d64d02b4af6156b256e39d76ea99e5e9f94a29ec66e294640cc0506658f42",
+ "sha256": "618b16936b0726852f2004a7f9dddc0de66263ebc6d07a9204c604ababbc8317",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -207,6 +211,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

@@ -1,8 +1,12 @@
 {
  "name": "volatile_plein",
- "sha256": "a77d088ef8525be7ab29bf18ecb3eaa7183ebcbe5aa3c7b17cd28d6aca8c8fac",
+ "sha256": "46a6e15d99dca8672f168541bf9ea57972dcfe337c0cd26dfe92c3153847f5b0",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -256,6 +260,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

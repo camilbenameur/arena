@@ -1,8 +1,12 @@
 {
  "name": "haussier_stop_proche",
- "sha256": "3269be439598b254076b7ddd2954b5836ece28fb3dd41989fdc8ae75192ab757",
+ "sha256": "cfb88d729535f4955c9b96e256774d24d6b9f4238a758bef231718baa566d4c3",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -220,6 +224,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -54,6 +54,18 @@ class TemoinsConfig:
 
 
 @dataclass(frozen=True)
+class VeilleConfig:
+    """Table [veille] (docs/VEILLE.md §2) : tick de la veille, déclencheurs et garde-fous des réveils."""
+
+    tick_s: int = 300
+    seuil_mouvement_bp: int = 300
+    fenetre_mouvement_s: int = 3600
+    cooldown_s: int = 3600
+    max_reveils_jour: int = 6
+    garde_avant_cycle_s: int = 1800
+
+
+@dataclass(frozen=True)
 class Config:
     venue_mode: VenueMode
     capital_ueur: int
@@ -67,6 +79,7 @@ class Config:
     temoins: TemoinsConfig
     sha256: str  # hash du fichier brut (journalisé dans config_loaded)
     decider_backend: str = "api"  # "api" (clé Console) ou "abonnement" (claude -p)
+    veille: VeilleConfig = VeilleConfig()
 
     def enrich(self, pairs: dict[str, PairInfo]) -> tuple[Instrument, ...]:
         """Instruments complets (tick, ordre min, coût min) à partir de `KrakenClient.asset_pairs`."""
@@ -96,6 +109,32 @@ def _micro(x: float | str) -> int:
     return int(d)
 
 
+def _veille(raw: object) -> VeilleConfig:
+    """Table [veille] facultative : valeurs par défaut pour les clés absentes ; entiers stricts, bornes vérifiées."""
+    if raw is None:
+        return VeilleConfig()
+    if not isinstance(raw, dict):
+        raise TypeError("[veille] doit être une table")
+    known = {f.name for f in fields(VeilleConfig)}
+    unknown = set(raw) - known
+    if unknown:
+        raise ValueError(f"[veille] clés inconnues : {sorted(unknown)}")
+    vals = {}
+    for k, v in raw.items():
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise TypeError(f"[veille] {k} doit être un entier, reçu {v!r}")
+        vals[k] = v
+    out = VeilleConfig(**vals)
+    for k in ("tick_s", "seuil_mouvement_bp", "fenetre_mouvement_s", "cooldown_s"):
+        if getattr(out, k) <= 0:
+            raise ValueError(f"[veille] {k} doit être > 0")
+    if out.max_reveils_jour < 0 or out.garde_avant_cycle_s < 0:
+        raise ValueError("[veille] max_reveils_jour et garde_avant_cycle_s doivent être >= 0")
+    if out.fenetre_mouvement_s % out.tick_s:
+        raise ValueError("[veille] fenetre_mouvement_s doit être un multiple de tick_s")
+    return out
+
+
 def load_config(path: Path | str = DEFAULT_PATH) -> Config:
     raw = Path(path).read_bytes()
     try:
@@ -110,6 +149,7 @@ def load_config(path: Path | str = DEFAULT_PATH) -> Config:
             taker_fee_bp=int(t["taker_fee_bp"]),
             slippage_bp=int(t["slippage_bp"]),
             decider_backend=str(t.get("decider_backend", "api")),
+            veille=_veille(t.get("veille")),
             instrument_refs=tuple(
                 InstrumentRef(i["symbol"], i["kraken_pair"], i["binance_symbol"]) for i in t["instruments"]
             ),
@@ -132,6 +172,8 @@ def load_config(path: Path | str = DEFAULT_PATH) -> Config:
         )
     except (KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"config invalide ({path}): {exc!r}") from exc
+    if cfg.interval_s % cfg.veille.tick_s:
+        raise ConfigError("[veille] tick_s doit diviser interval_s")
     if cfg.decider_backend not in ("api", "abonnement"):
         raise ConfigError("decider_backend doit valoir 'api' ou 'abonnement'")
     if cfg.venue_mode != "paper":

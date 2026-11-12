@@ -86,7 +86,7 @@ BINANCE_HISTORY_S = 30 * DAY_S
 LLM_TIMEOUT_S = 150.0
 UNKNOWN_MAX_CYCLES = 2
 SPREAD_WINDOW = 20
-LOCK_WAIT_S = 120.0
+LOCK_WAIT_S = 600.0  # un cycle attend la fin d'un réveil ou d'un autre cycle (docs/VEILLE.md §3)
 
 TEMOIN_MODULES = {
     "temoin:panier": panier,
@@ -262,6 +262,9 @@ class _Runner:
         self.on_portfolio_done = on_portfolio_done
         self.alerts: list[tuple[str, str]] = []
         self.t = 0  # cycle_ts
+        # Réglages que la ronde de réveil (arene/veille.py) surcharge ; au cycle ils restent aux valeurs d'origine.
+        self.prefetched_quotes: dict[str, Quote] | None = None  # quotes du tick, sinon ticker Kraken
+        self.fetch_binance = True
 
     # -------------------------------------------------------------- écriture
 
@@ -387,6 +390,7 @@ class _Runner:
     def _market(self, resume: bool, started_seq: int | None) -> None:
         """Barres et quotes. À la reprise, les quotes déjà journalisées sont réutilisées (cache disque conservé)."""
         t, interval = self.t, self.cfg.interval_s
+        bound = t // interval * interval  # = t au cycle ; au réveil, fin de la dernière barre qui doit être close
         self.store = BarStore(self.paths.data, "kraken")
         self.bstore = BarStore(self.paths.data, "binance")
         quotes: dict[str, Quote] = {}
@@ -406,15 +410,21 @@ class _Runner:
 
                 self.store.update(inst.symbol, interval, fetch)
             for inst in self.instruments.values():
-                quotes[inst.symbol] = self.clients.kraken.ticker(inst.symbol, inst.kraken_pair)
-            self._update_binance()
+                if self.prefetched_quotes is not None:
+                    quotes[inst.symbol] = self.prefetched_quotes[inst.symbol]
+                else:
+                    quotes[inst.symbol] = self.clients.kraken.ticker(inst.symbol, inst.kraken_pair)
+            if self.fetch_binance:
+                self._update_binance()
         self.quotes = quotes
         self.bars: dict[str, list[Bar]] = {}
         for sym in self.symbols:
             bars = self.store.load(sym, interval, t)
-            if not bars or bars[-1].ts < t - interval:
+            if not bars or bars[-1].ts < bound - interval:
                 last = bars[-1].ts if bars else None
-                raise CycleAbort("action", "data_stale", f"{sym} : dernière barre close {last}, attendue {t - interval}")
+                raise CycleAbort(
+                    "action", "data_stale", f"{sym} : dernière barre close {last}, attendue {bound - interval}"
+                )
             self.bars[sym] = bars
 
     def _update_binance(self) -> None:
@@ -469,10 +479,21 @@ class _Runner:
             if state == "UNKNOWN":
                 self.executor.resolve_unknown(oid, self.t)
         self.log.refresh()
-        for p in self.llm_portfolios + self.temoin_portfolios:
+        for p in self._round_portfolios():
             age = self.executor.unknown_age_cycles(p, self.t, self.cfg.interval_s)
             if age > UNKNOWN_MAX_CYCLES:
                 self._freeze(p, "unknown_order", f"ordre UNKNOWN depuis {age} cycles")
+
+    def _round_portfolios(self) -> tuple[str, ...]:
+        """Portefeuilles concernés par la ronde (tous au cycle ; LLM et aléatoire au réveil)."""
+        return self.llm_portfolios + self.temoin_portfolios
+
+    def _temoins_to_run(self) -> tuple[str, ...]:
+        return self.temoin_portfolios
+
+    def _contexte(self) -> dict[str, Any]:
+        """Champ `contexte` de l'instantané : ici le rendez-vous de 4 h."""
+        return {"type": "rendez_vous", "prochain_rendez_vous_ts": self.t + self.cfg.interval_s + self.cfg.cycle_delay_s}
 
     def _freeze(self, portfolio: str, reason: str, detail: str) -> None:
         st = self.states()[portfolio]
@@ -658,7 +679,8 @@ class _Runner:
                 self._decision_skip(p, "kill_switch", "coupe-circuit" if self.kill else "dormance")
             else:
                 snap = build_snapshot(
-                    t, self.bars, st, self.marks, self._recent_decisions(p), policy_summary(self.policy)
+                    t, self.bars, st, self.marks, self._recent_decisions(p), policy_summary(self.policy),
+                    contexte=self._contexte(),
                 )
                 if self._has_key(decider) and not self._own_events("decision_requested", p):
                     self.w(
@@ -668,7 +690,7 @@ class _Runner:
                 futures[pool.submit(decider.decide, snap, self._spent_today(p))] = p
 
         # Témoins pendant que les modèles réfléchissent.
-        for p in self.temoin_portfolios:
+        for p in self._temoins_to_run():
             self._temoin(p)
 
         results: dict[str, Any] = {}

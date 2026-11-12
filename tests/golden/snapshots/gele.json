@@ -1,8 +1,12 @@
 {
  "name": "gele",
- "sha256": "e00cfe37212e321c592b4258a41b2ec50e8d850c0680348132bea5cc6c177c56",
+ "sha256": "42a997dafc30ca895b7dd0840dbcb34dee0cae296f70ba2f614b418cc685d451",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -207,6 +211,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

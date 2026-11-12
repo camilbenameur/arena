@@ -319,6 +319,24 @@ class SimExecutor:
                 done.add(oid)
         return out
 
+    def process_live_stops(self, quotes: Mapping[str, Quote], tick: int) -> list[Fill]:
+        """Stops en direct de la veille : toute position dont le bid est au niveau du stop (ou en dessous) est
+        vendue tout de suite, au bid avec glissement et frais taker. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick},
+        idempotent. Le contrôle sur barres du cycle suivant part des positions rejouées : il ne revend rien."""
+        out: list[Fill] = []
+        _, done_fills = self._scan()
+        for pname, st in sorted(replay(self.journal.iter_events()).items()):
+            for sym, pos in sorted(st.positions.items()):
+                inst, q = self.instruments.get(sym), quotes.get(sym)
+                if inst is None or q is None or pos.stop_ueur is None or q.bid > pos.stop_ueur:
+                    continue
+                oid = f"stop:{pname}:{sym}:veille:{tick}"
+                if oid in done_fills:
+                    continue
+                px, fee = market_fill(Side.SELL, pos.qty, q, inst, self.fee_bp, self.slippage_bp)
+                out.append(self._forced_sell(oid, pname, sym, pos.qty, px, fee, tick, "stop"))
+        return out
+
     def flatten(self, portfolio: str, quotes: Mapping[str, Quote], now_ts: int, reason: str) -> list[Fill]:
         """Vend toutes les positions au bid (reason : "kill_switch" ou "halt"). Idempotent par (now_ts, reason)."""
         st = replay(self.journal.iter_events()).get(portfolio)

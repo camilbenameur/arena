@@ -1,8 +1,12 @@
 {
  "name": "baissier",
- "sha256": "920d07abe5ced324569d42590490b85b913a2a37697bbb162c55bf792e3f41b6",
+ "sha256": "c33a456f80022d9afcc5c84fc2d64547bd8b449c1a0be34dc21e94146467471f",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -207,6 +211,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

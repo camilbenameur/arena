@@ -1,8 +1,12 @@
 {
  "name": "portefeuille_plein",
- "sha256": "4d0a0a29a51f6e2967c8cb61c8f29bd096ae1a5648f1bae32c494105ea3e4a8c",
+ "sha256": "1c6eff350386a4bcd3b957e3e402a57d00e8c0e6738ff6e588f84a8a2ab9f4fc",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -256,6 +260,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

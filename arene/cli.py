@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
 from arene import cycle as cyc
+from arene import veille as vei
 from arene.config import ConfigError, load_config
 from arene.journal import Journal, JournalError, verify
 from arene.ledger import rebuild_sqlite, replay
@@ -60,6 +61,21 @@ def cmd_cycle(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: in
     if rep.error:
         print(f"erreur : {rep.error}", file=sys.stderr)
     if rep.status == "completed" and not a.no_site:
+        _build_site(paths, clients, now, quiet_missing=True)
+    return 0 if rep.ok else 1
+
+
+def cmd_veille(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
+    rep = vei.run_veille(paths, clients, now)
+    extra = f"  stops={len(rep.stops)}" if rep.stops else ""
+    if rep.declencheur:
+        extra += f"  declencheur={rep.declencheur['type']}" + (f" (refusé : {rep.refus})" if rep.refus else "")
+    if rep.reveil:
+        extra += f"  reveil={rep.reveil}"
+    print(f"veille {_iso(rep.tick)} : {rep.status}  événements={rep.n_events}{extra}")
+    if rep.error:
+        print(f"erreur : {rep.error}", file=sys.stderr)
+    if rep.reveil in ("completed", "resumed") and not a.no_site:
         _build_site(paths, clients, now, quiet_missing=True)
     return 0 if rep.ok else 1
 
@@ -221,6 +237,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
     c = sub.add_parser("cycle", help="exécute (ou reprend) le cycle courant")
     c.add_argument("--no-site", action="store_true", help="ne reconstruit pas le site après le cycle")
+    w = sub.add_parser("veille", help="un tick de veille (stops en direct, réveil éventuel), sans LLM sauf réveil")
+    w.add_argument("--no-site", action="store_true", help="ne reconstruit pas le site après un réveil")
     k = sub.add_parser("kill", help="arme le coupe-circuit")
     k.add_argument("--now", action="store_true", help="met à plat tout de suite (LLM et aléatoire)")
     sub.add_parser("unkill", help="lève le coupe-circuit")
@@ -238,6 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS: dict[str, Callable[..., int]] = {
     "cycle": cmd_cycle,
+    "veille": cmd_veille,
     "kill": cmd_kill,
     "unkill": cmd_unkill,
     "ack": cmd_ack,

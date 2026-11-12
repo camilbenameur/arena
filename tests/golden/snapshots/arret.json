@@ -1,8 +1,12 @@
 {
  "name": "arret",
- "sha256": "ede1a93e961aa833e24d0ad4caf5dbef052b8c8e398590d0dd67f218f5de24a6",
+ "sha256": "65553e56dfda1f56710bf63997251f3de61839d3fb4c378cc0c188106d7e3555",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -207,6 +211,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }
