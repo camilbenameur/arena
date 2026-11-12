@@ -216,7 +216,7 @@ def _reveil(j: Journal, c: int, i: int) -> None:
         bid, ask = _mid(sym, i)
         if sym == "LINK/EUR":
             bid, ask = LINK_REVEIL_ABSURDE, LINK_REVEIL_ABSURDE + 10
-        j.append("quote_reveil", {"symbol": sym, "ts": r, "bid": bid, "ask": ask}, r + 32)
+        j.append("quote_reveil", {"symbol": sym, "ts": r + 25, "bid": bid, "ask": ask}, r + 32)  # ts ≠ tick
     pf = "llm:claude-sonnet-5-5"
     px = _mid("ETH/EUR", i)[1] * 10_005 // 10_000
     q = 100_000_000 * QTY_SCALE // px

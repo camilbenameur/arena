@@ -152,10 +152,15 @@ def _cycle_data(
         if t == "reveil_started":
             cur_reveil = p["reveil"]
             continue
+        if t in ("reveil_completed", "reveil_abandonne"):
+            if p.get("reveil") == cur_reveil:
+                cur_reveil = None
+            continue
         if t == "quote_reveil":
-            r = p["ts"] if p.get("ts") in reveils else cur_reveil
-            if r is not None:
-                rq.setdefault(r, {})[p["symbol"]] = Quote(p["symbol"], p["ts"], p["bid"], p["ask"])
+            # Rattaché au réveil ouvert qui le précède (les réveils ne se chevauchent pas) ; `ts` est l'instant du
+            # quote, pas forcément le tick du réveil (COORDINATION-dashboard, réponses du moteur du 12/11).
+            if cur_reveil is not None:
+                rq.setdefault(cur_reveil, {})[p["symbol"]] = Quote(p["symbol"], p["ts"], p["bid"], p["ask"])
             continue
         if t == "veille":
             if p.get("tick") in reveils:
