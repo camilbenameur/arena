@@ -38,7 +38,7 @@ from recherche.moteur.journal import AncrageError, JournalRecherche, decimal12, 
 from recherche.moteur.panneau import JOUR_S, Panneau, panneau_depuis_donnees, synthetique_varie
 from recherche.moteur.portefeuille import CLASSES, SerieMoteur, rapporter, simuler, valider_poids
 
-VERSION_MOTEUR = "recherche-moteur-v1"
+VERSION_MOTEUR = "recherche-moteur-v2"
 
 
 class PlafondError(Exception):

@@ -320,13 +320,17 @@ def test_metriques_des_portes_distinctes_de_celles_du_capital_total(tmp_path, jo
         float(e.net.mean() / e.net.std(ddof=1) * math.sqrt(365)), rel=1e-9)
 
 
-def test_couvert_exige_une_vraie_couverture():
+def test_couvert_couverture_partielle_permise_moteur_v2():
+    from recherche.moteur.essai import VERSION_MOTEUR
+    from recherche.moteur.portefeuille import COUVERTURE_MIN
+    assert COUVERTURE_MIN == 0.0 and VERSION_MOTEUR == "recherche-moteur-v2"  # erratum 5
     cot = np.ones(3, dtype=bool)
     el = np.ones(3, dtype=bool)
     ws = np.array([0.1, 0.1, 0.0])
-    valider_poids("couvert", 0, ws, np.array([0.09, 0.1, 0.0]), cot, el, 0.5)  # 90 % : permis
+    for wp in ([0.09, 0.1, 0.0], [0.089, 0.1, 0.0], [0.0, 0.0, 0.0], [0.03, 0.07, 0.0]):  # partielle : permis
+        valider_poids("couvert", 0, ws, np.array(wp), cot, el, 0.5)
     valider_poids("couvert", 0, ws, ws.copy(), cot, el, 0.5)
-    for wp in ([0.089, 0.1, 0.0], [0.0, 0.0, 0.0], [0.1, 0.1, 0.05], [0.11, 0.1, 0.0]):
+    for wp in ([0.1, 0.1, 0.05], [0.11, 0.1, 0.0], [-0.01, 0.1, 0.0]):  # short > long, perp sans spot, négatif
         with pytest.raises(FormePoids):
             valider_poids("couvert", 0, ws, np.array(wp), cot, el, 0.5)
 

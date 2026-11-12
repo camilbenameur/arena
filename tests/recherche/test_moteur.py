@@ -259,7 +259,7 @@ def _essai_poids(tmp_path, journal, crit, corps, classe="directionnel", avec_per
     ("np.full(self.n, 0.5), np.full(self.n, 0.5)", "couvert", "FORME_POIDS"),            # capital 0,5*4 + 0,25*4 > 1
     ("np.full(self.n, 0.2), np.full(self.n, 0.2)", "couvert", "OK"),                     # 0,8 + 0,4 = 1,2 ? -> voir ci-dessous
     ("np.full(self.n, 0.25), np.zeros(self.n)", "directionnel", "OK"),
-    ("np.full(self.n, 0.25), np.zeros(self.n)", "couvert", "FORME_POIDS"),            # long spot nu : pas une couverture
+    ("np.full(self.n, 0.25), np.zeros(self.n)", "couvert", "OK"),                     # long spot nu : permis (moteur v2)
 ])
 def test_forme_poids(tmp_path, journal, crit, retour, classe, code):
     if classe == "couvert" and code == "OK" and "0.2), np.full(self.n, 0.2)" in retour:

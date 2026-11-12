@@ -28,7 +28,9 @@ CLASSES = ("directionnel", "couvert")
 
 
 #: Part minimale du long spot qui doit être couverte par le short perp, par paire et par jour (classe couvert).
-COUVERTURE_MIN = 0.9
+#: 0,9 dans `recherche-moteur-v1` ; 0 depuis `recherche-moteur-v2` (erratum 5, décision du propriétaire du 12/11/2026) :
+#: la couverture partielle est permise, la discipline vient des portes C6 (drawdown <= 20 %) et C8 (|bêta| <= 0,3).
+COUVERTURE_MIN = 0.0
 
 
 def valider_poids(classe: str, i: int, ws: np.ndarray, wp: np.ndarray, deja_cotee: np.ndarray,
@@ -37,8 +39,9 @@ def valider_poids(classe: str, i: int, ws: np.ndarray, wp: np.ndarray, deja_cote
 
     Classe `couvert` : interprétation STRICTE de la définition du protocole §3 (« long spot et short perp sur
     la même paire, avec short perp <= long spot ») : sur chaque paire et chaque jour,
-    `COUVERTURE_MIN * poids_spot <= poids_perp <= poids_spot` (couverture d'au moins 90 %). Un long spot nu,
-    ou presque, n'est pas un portage couvert : `FORME_POIDS`, jamais de rognage.
+    `COUVERTURE_MIN * poids_spot <= poids_perp <= poids_spot`. Depuis `recherche-moteur-v2`, COUVERTURE_MIN = 0 :
+    toute couverture partielle est permise, jamais un short perp supérieur au long spot ; `FORME_POIDS` sinon,
+    jamais de rognage.
 
     Les messages d'erreur ne contiennent aucune valeur issue de la stratégie (canal de sortie) : le jour et la
     règle violée seulement."""
@@ -59,7 +62,7 @@ def valider_poids(classe: str, i: int, ws: np.ndarray, wp: np.ndarray, deja_cote
     if (wp > ws + TOL_POIDS).any():
         raise FormePoids(f"jour {i} : short perp supérieur au long spot")
     if (wp < COUVERTURE_MIN * ws - TOL_POIDS).any():
-        raise FormePoids(f"jour {i} : short perp inférieur à {COUVERTURE_MIN:.0%} du long spot (couverture)")
+        raise FormePoids(f"jour {i} : short perp inférieur à la couverture minimale du long spot")
     if eligibles_perp is None:
         if wp.max(initial=0.0) > TOL_POIDS:
             raise FormePoids(f"jour {i} : poids perp sans donnée perp")
