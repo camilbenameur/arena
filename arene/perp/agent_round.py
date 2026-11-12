@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +126,28 @@ def _blocked(entries_blocked: bool | Callable[[], bool]) -> bool:
     return bool(entries_blocked()) if callable(entries_blocked) else bool(entries_blocked)
 
 
+@dataclass
+class RoundContext:
+    """What `prepare_agent_round` built and journaled, for the call and for `finish_agent_round`."""
+
+    var: Path
+    sim: PerpSimulator
+    decider: AgentDecider
+    view: PerpMarketView
+    specs: Mapping[str, InstrumentSpec]
+    policy: PerpPolicy
+    round_id: int
+    now_ts: int
+    kind: str
+    entries_blocked: bool | Callable[[], bool]
+    out_dir: Path
+    snapshot: dict[str, Any]
+
+    @property
+    def name(self) -> str:
+        return self.decider.portfolio
+
+
 def run_agent_round(
     *,
     var: Path,
@@ -142,9 +165,42 @@ def run_agent_round(
     entries_blocked: bool | Callable[[], bool],
 ) -> AgentResult:
     """`entries_blocked` may be a callable: it is then read again for every intent, after the model call."""
+    ctx = prepare_agent_round(
+        var=var, sim=sim, store=store, decider=decider, view=view, specs=specs, policy=policy,
+        config_sha256=config_sha256, round_id=round_id, now_ts=now_ts, kind=kind, trigger=trigger,
+        entries_blocked=entries_blocked,
+    )  # fmt: skip
+    if isinstance(ctx, AgentResult):
+        return ctx
+    try:
+        res = decider.decide(ctx.out_dir, ctx.snapshot)
+    except Exception as exc:  # noqa: BLE001 (the decision event is always written)
+        res = AgentResult(error=f"decider crashed: {type(exc).__name__}: {str(exc)[:200]}")
+    finish_agent_round(ctx, res)
+    return res
+
+
+def prepare_agent_round(
+    *,
+    var: Path,
+    sim: PerpSimulator,
+    store: PerpDataStore,
+    decider: AgentDecider,
+    view: PerpMarketView,
+    specs: Mapping[str, InstrumentSpec],
+    policy: PerpPolicy,
+    config_sha256: str,
+    round_id: int,
+    now_ts: int,
+    kind: str,
+    trigger: Mapping[str, Any] | None,
+    entries_blocked: bool | Callable[[], bool],
+    extra: Mapping[str, Any] | None = None,
+) -> RoundContext | AgentResult:
+    """Freezes and journals the round's data (`round_data`); an AgentResult with an error if this portfolio
+    already played this round. Thread-free: the caller may run `decider.decide` in parallel afterwards."""
     name = decider.portfolio
-    journal = sim.journal
-    events = journal.events()
+    events = sim.journal.events()
     if any(
         e["type"] == "round_data"
         and e["payload"].get("portfolio") == name
@@ -156,20 +212,9 @@ def run_agent_round(
     counters = counters_for(events, name, now_ts)
     out_dir = var / "rounds" / str(round_id) / name.replace(":", "_")
     data, sha = build_round(
-        out_dir,
-        store,
-        events,
-        view,
-        acc,
-        counters,
-        specs,
-        policy,
-        sim.params,
-        round_id,
-        now_ts,
-        config_sha256,
-        _blocked(entries_blocked),
-    )
+        out_dir, store, events, view, acc, counters, specs, policy, sim.params, round_id, now_ts,
+        config_sha256, _blocked(entries_blocked),
+    )  # fmt: skip
     snap = snapshot(data, kind, trigger)
     message = decider.message(snap)
     sim.append_event(
@@ -182,13 +227,20 @@ def run_agent_round(
             "sha256": sha,
             "message_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
             "path": str(out_dir.relative_to(var)),
+            **dict(extra or {}),
         },
         now_ts,
     )
-    try:
-        res = decider.decide(out_dir, snap)
-    except Exception as exc:  # noqa: BLE001 (the decision event is always written)
-        res = AgentResult(error=f"decider crashed: {type(exc).__name__}: {str(exc)[:200]}")
+    return RoundContext(
+        var, sim, decider, view, specs, policy, round_id, now_ts, kind, entries_blocked, out_dir, snap
+    )
+
+
+def finish_agent_round(
+    ctx: RoundContext, res: AgentResult, extra: Mapping[str, Any] | None = None, *, execute: bool = True
+) -> None:
+    """Journals the tool calls and the decision, then judges and executes each intent, in order."""
+    sim, name, round_id, now_ts, view = ctx.sim, ctx.name, ctx.round_id, ctx.now_ts, ctx.view
     for call in res.tool_calls:
         sim.append_event(
             "tool_call",
@@ -212,8 +264,8 @@ def run_agent_round(
         {
             "portfolio": name,
             "round": round_id,
-            "kind": kind,
-            "model_requested": decider.model,
+            "kind": ctx.kind,
+            "model_requested": ctx.decider.model,
             "model_returned": res.model_returned,
             "prompt_sha256": prompt_sha256(),
             "parsed": parsed,
@@ -234,6 +286,7 @@ def run_agent_round(
             "mcp_status": res.mcp_status,
             "tools_offered": res.tools_offered,
             "stream_sha256": res.stream_sha256,
+            **dict(extra or {}),
         },
         now_ts,
     )
@@ -241,9 +294,24 @@ def run_agent_round(
     marks = {s: m.mark_uusd for s, m in view.instruments.items()}
     fx = (view.fx_bid, view.fx_ask)
     for it in intents:
+        if not execute:  # no fresh market view after the call: journaled, never executed at stale prices
+            sim.append_event(
+                "perp_execution",
+                {
+                    "intent_id": it.intent_id,
+                    "portfolio": name,
+                    "instrument": it.instrument,
+                    "status": "not_executed_view_stale",
+                    "error": None,
+                },
+                now_ts,
+            )
+            continue
         acc = sim.states()[name]
-        c = counters_for(journal.events(), name, now_ts)
-        v = evaluate_perp(it, acc, view, specs, c, policy, sim.params, now_ts, _blocked(entries_blocked))
+        c = counters_for(sim.journal.events(), name, now_ts)
+        v = evaluate_perp(
+            it, acc, view, ctx.specs, c, ctx.policy, sim.params, now_ts, _blocked(ctx.entries_blocked)
+        )
         sim.append_event(
             "perp_verdict",
             {
@@ -261,7 +329,6 @@ def run_agent_round(
         )
         if v.approved:
             _execute(sim, name, it.intent_id, it.instrument, it.action, v, quotes, marks, fx, now_ts)
-    return res
 
 
 def _execute(

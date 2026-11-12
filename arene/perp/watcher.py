@@ -4,7 +4,8 @@ Run every 5 minutes by `arene-perp-watcher.timer`, after the collector. One tick
 
 1. locks: its own, and the collector's (a collection in progress defers the tick); tick id = now // 300 * 300,
    done once (`perp_tick`);
-2. the league portfolios are opened at the first tick (benchmarks only until step 7);
+2. the benchmark portfolios are opened at the first tick; the LLM portfolios (config/perp-llm.toml) at their
+   first round, all four at the same rendez-vous;
 3. closed minutes are processed IN ORDER, as far as the collector has stored them: margin close-out, stops,
    take-profits, with the worst half-spread of the last 7 days as extra exit slippage. The cursor never
    passes a minute that a held instrument still lacks (candle or EUR/USD) unless that minute is older than
@@ -18,10 +19,13 @@ Run every 5 minutes by `arene-perp-watcher.timer`, after the collector. One tick
    (drawdown >= 15 %: flatten and `portfolio_halted`), freeze (loss >= 5 % over 24 h, not re-armed by the same
    loss), maximum holding; the reference benchmarks are never stopped, frozen nor expired. Every margin
    close-out freezes its portfolio and raises a `panique` alert (idempotently, even after a crash);
-7. rounds: the 4-hour rendez-vous, and wake-ups when a mark crosses a 3 %-in-1-hour move (the crossing is kept
+7. rounds: the 4-hour rendez-vous (02:00, 06:00, ... UTC, away from the spot cycles), and wake-ups when a mark crosses a 3 %-in-1-hour move (the crossing is kept
    pending until the guards allow it or the move fades). A round is done only when `perp_round_done` is
    written: an interrupted round is resumed (its orders and intents are idempotent). The basket is set up and
    rebalanced once per month, the trend decides once per UTC day, each at the first rendez-vous able to.
+   The LLM portfolios play the rendez-vous (and the wake-ups once `wakeups = true`): their `claude -p` calls run
+   in parallel inside the tick, which holds the watcher lock meanwhile (the next ticks skip, then catch up the
+   minutes in order). See `arene/perp/llm_league.py`.
 
 Everything is written to the league's own journal (`var-perp/journal/events.jsonl`). Exit codes: 0 fine,
 3 the tick had failures (listed in `perp_tick`), 1 crash (with a `panique` alert when possible).
@@ -37,7 +41,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,11 +52,13 @@ from arene.ops import dormance, killswitch
 from arene.ops.notify import Notifier
 from arene.paths import Paths
 from arene.perp import benchmarks as B
+from arene.perp.agent import AgentDecider
 from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
 from arene.perp.counters import counters_for
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
+from arene.perp.llm_league import LlmConfigError, LlmLeague, LlmModel, load_llm_league, run_llm_round
 from arene.perp.market import market_view, worst_half_spread_bp
 from arene.perp.policy import PerpPolicy, load_perp_policy
 from arene.perp.riskd import PerpMarketView, evaluate_perp
@@ -62,6 +68,9 @@ from arene.perp.types import InstrumentSpec
 
 TICK_S = 300
 ROUND_S = 4 * HOUR_S
+# The rendez-vous fall at 02:00, 06:00, ..., 22:00 UTC: two hours away from the spot cycles (HH:05 every 4 h
+# from 00:05), so the two leagues' model calls never run at the same time.
+ROUND_OFFSET_S = 2 * HOUR_S
 MAX_CATCH_UP_S = 7 * 86_400
 MINUTE_PATIENCE_S = 1800  # a held minute without data is waited for 30 min, then processed as incomplete
 CHECKPOINT_MINUTES = 360
@@ -118,6 +127,9 @@ class PerpWatcher:
         *,
         spot_paths: Paths | None = None,
         notifier: Notifier | None = None,
+        llm: LlmLeague | None = None,
+        decider_factory: Callable[[LlmModel], AgentDecider] | None = None,
+        round_offset_s: int = ROUND_OFFSET_S,
     ) -> None:
         self.var = var
         self.cfg = cfg
@@ -129,6 +141,10 @@ class PerpWatcher:
         self.sim = PerpSimulator(self.journal, {s: specs[s].tick_uusd for s in self.symbols}, cfg.simulation)
         self.spot_paths = spot_paths or Paths.from_env()
         self.notifier = notifier
+        self.llm = llm
+        self.decider_factory = decider_factory
+        self.round_offset_s = round_offset_s
+        self._deferred: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ helpers
 
@@ -176,65 +192,118 @@ class PerpWatcher:
     def tick(self, now_ts: int) -> TickReport:
         tick = now_ts // TICK_S * TICK_S
         rep = TickReport(tick)
-        with (
-            _try_lock(self.var / "watcher.lock") as mine,
-            _try_lock(self.var / "collect.lock") as collector_idle,
-        ):
+        self._deferred: dict[str, Any] | None = None
+        with _try_lock(self.var / "watcher.lock") as mine:
             if not mine:
                 rep.skipped = "watcher lock busy"
                 return rep
-            if not collector_idle:
-                rep.skipped = "collector running"
-                return rep
-            events = self._events()
-            marks_ev = [e for e in events if e["type"] in ("perp_tick", "perp_checkpoint")]
-            if any(e["type"] == "perp_tick" and e["payload"]["tick"] == tick for e in marks_ev):
-                rep.skipped = "tick already done"
-                return rep
-            for name in B.ALL:
-                self.sim.open_portfolio(name, "benchmark", now_ts)
-            last = marks_ev[-1]["payload"] if marks_ev else None
-            last_minute = last["last_minute"] if last else None
-            pending = list(last["pending_funding"]) if last else []
-            self._closeout_followups(events, rep)
-            view = market_view(self.store, self.symbols, now_ts)
-            fresh = view is not None and now_ts - view.fx_ts <= VIEW_MAX_AGE_S and view.fx_bid > 0
-            if view is not None:
-                quote_ages = [now_ts - m.quote_ts for m in view.instruments.values()]
-                fresh = (
-                    fresh and len(view.instruments) == len(self.symbols) and max(quote_ages) <= VIEW_MAX_AGE_S
-                )
-            snaps = self.store.tickers().load((last_minute or now_ts) - 86_400, now_ts + 1)
-            snap_ts = [s.ts for s in snaps]
-            last_minute, pending = self._process_minutes(last_minute, now_ts, snaps, snap_ts, pending, rep)
-            pending = self._settle_funding(pending, now_ts, snaps, snap_ts, rep)
-            events = self._events()
-            if fresh:
-                assert view is not None
-                self._controls(now_ts, view, events, rep)
-                self._rounds(now_ts, view, rep, last_minute)
-            else:
-                rep.problems.append("market view missing or stale: no equity, no control, no round")
-                self._alert_rearmed(
-                    events, "action", "perp_data_stale", "perp league: market data stale or missing", now_ts
-                )
-                if view is not None:
-                    self._kill_and_dormance(now_ts, view, events, rep)
-            self._append(
-                "perp_tick",
-                {
-                    "tick": tick,
-                    "last_minute": last_minute,
-                    "pending_funding": pending,
-                    "minutes": rep.minutes,
-                    "fills": rep.fills,
-                    "rounds": rep.rounds,
-                    "notes": rep.notes[:20],
-                    "problems": rep.problems[:20],
-                },
-                now_ts,
-            )
+            with _try_lock(self.var / "collect.lock") as collector_idle:
+                if not collector_idle:
+                    rep.skipped = "collector running"
+                    return rep
+                self._tick_data(now_ts, tick, rep)
+                if rep.skipped:
+                    return rep
+            # the LLM calls run without the collector's lock (the collector keeps collecting meanwhile), still
+            # under the watcher's: no other tick starts before the round is finished
+            if self._deferred is not None:
+                self._llm_phase(**self._deferred, rep=rep)
         return rep
+
+    def _tick_data(self, now_ts: int, tick: int, rep: TickReport) -> None:
+        events = self._events()
+        marks_ev = [e for e in events if e["type"] in ("perp_tick", "perp_checkpoint")]
+        if any(e["type"] == "perp_tick" and e["payload"]["tick"] == tick for e in marks_ev):
+            rep.skipped = "tick already done"
+            return
+        for name in B.ALL:
+            self.sim.open_portfolio(name, "benchmark", now_ts)
+        last = marks_ev[-1]["payload"] if marks_ev else None
+        last_minute = last["last_minute"] if last else None
+        pending = list(last["pending_funding"]) if last else []
+        self._closeout_followups(events, rep)
+        view = market_view(self.store, self.symbols, now_ts)
+        fresh = self._is_fresh(view, now_ts)
+        snaps = self.store.tickers().load((last_minute or now_ts) - 86_400, now_ts + 1)
+        snap_ts = [s.ts for s in snaps]
+        last_minute, pending = self._process_minutes(last_minute, now_ts, snaps, snap_ts, pending, rep)
+        pending = self._settle_funding(pending, now_ts, snaps, snap_ts, rep)
+        events = self._events()
+        if fresh:
+            assert view is not None
+            self._controls(now_ts, view, events, rep)
+            self._rounds(now_ts, view, rep, last_minute)
+        else:
+            rep.problems.append("market view missing or stale: no equity, no control, no round")
+            self._alert_rearmed(
+                events, "action", "perp_data_stale", "perp league: market data stale or missing", now_ts
+            )
+            if view is not None:
+                self._kill_and_dormance(now_ts, view, events, rep)
+        self._append(
+            "perp_tick",
+            {
+                "tick": tick,
+                "last_minute": last_minute,
+                "pending_funding": pending,
+                "minutes": rep.minutes,
+                "fills": rep.fills,
+                "rounds": rep.rounds,
+                "notes": rep.notes[:20],
+                "problems": rep.problems[:20],
+            },
+            now_ts,
+        )
+
+    def _is_fresh(self, view: PerpMarketView | None, now_ts: int) -> bool:
+        if view is None or now_ts - view.fx_ts > VIEW_MAX_AGE_S or view.fx_bid <= 0:
+            return False
+        ages = [now_ts - m.quote_ts for m in view.instruments.values()]
+        return len(view.instruments) == len(self.symbols) and max(ages) <= VIEW_MAX_AGE_S
+
+    def _llm_phase(
+        self,
+        *,
+        round_id: int,
+        kind: str,
+        trigger: dict[str, Any] | None,
+        now_ts: int,
+        view: PerpMarketView,
+        blocked: bool,
+        ok: bool,
+        rep: TickReport,
+    ) -> None:
+        """The LLM part of a round, then `perp_round_done`. Decisions are executed on a market view read again
+        after the calls (when fresh), at that time: the models get no latency advantage."""
+        assert self.llm is not None
+        t0 = time.monotonic()
+
+        def refresh() -> tuple[PerpMarketView, int] | None:
+            now2 = now_ts + int(time.monotonic() - t0)
+            v2 = market_view(self.store, self.symbols, now2)
+            return (v2, now2) if self._is_fresh(v2, now2) else None
+
+        try:
+            res = run_llm_round(
+                league=self.llm, var=self.var, sim=self.sim, store=self.store, view=view, specs=self.specs,
+                policy=self.policy, config_sha256=self.cfg.sha256, round_id=round_id, now_ts=now_ts, kind=kind,
+                trigger=trigger, entries_blocked=lambda: blocked or self._kill_active(),
+                decider_factory=self.decider_factory, refresh=refresh,
+            )  # fmt: skip
+        except Exception as exc:  # noqa: BLE001 (the round stays open: resumed by the next tick)
+            message = f"llm round {round_id}: {type(exc).__name__}: {exc}"[:500]
+            rep.problems.append(message)
+            self._alert("action", "perp_llm_round_failed", message, now_ts)
+            return
+        rep.notes += res.notes
+        if res.failed and res.failed * 2 >= max(res.called, 1):
+            self._alert_rearmed(
+                self._events(), "action", "perp_llm_no_decision",
+                f"perp league: {res.failed} of {res.called} models without a decision at round {round_id}",
+                now_ts,
+            )  # fmt: skip
+        if ok:
+            self._append("perp_round_done", {"round": round_id}, now_ts)
 
     # ------------------------------------------------------------------ minutes and funding
 
@@ -494,7 +563,7 @@ class PerpWatcher:
             if rid not in done and now_ts - r["ts"] < ROUND_LATE_S:
                 self._round(rid, r["kind"], r.get("trigger"), now_ts, view, rep, resume=True)
                 return
-        rdv = now_ts // ROUND_S * ROUND_S
+        rdv = (now_ts - self.round_offset_s) // ROUND_S * ROUND_S + self.round_offset_s
         if now_ts - rdv < ROUND_LATE_S and rdv not in started:
             self._round(rdv, "rendezvous", None, now_ts, view, rep)
             return
@@ -569,7 +638,16 @@ class PerpWatcher:
                 ok &= self._basket(now_ts, month, marks, quotes, fx, rep)
             if (B.TREND, str(day)) not in marker:
                 ok &= self._trend(now_ts, str(day), marks, quotes, fx, rep)
-        ok &= self._random(round_id, now_ts, view, quotes, marks, fx, blocked, rep)
+        llm_plays = self.llm is not None and self.llm.enabled and (kind == "rendezvous" or self.llm.wakeups)
+        # the random benchmark plays the rounds the models play (wake-ups too only once the models have them)
+        if kind == "rendezvous" or self.llm is None or not self.llm.enabled or self.llm.wakeups:
+            ok &= self._random(round_id, now_ts, view, quotes, marks, fx, blocked, rep)
+        if llm_plays:
+            self._deferred = {
+                "round_id": round_id, "kind": kind, "trigger": trigger, "now_ts": now_ts, "view": view,
+                "blocked": blocked, "ok": ok,
+            }  # fmt: skip
+            return
         if ok:
             self._append("perp_round_done", {"round": round_id}, now_ts)
 
@@ -764,7 +842,19 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_perp_config()
         policy = load_perp_policy()
         specs = load_specs(var, [i.kraken_symbol for i in cfg.instruments], now_ts)
-        w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier)
+        try:
+            llm: LlmLeague | None = load_llm_league()
+        except LlmConfigError as exc:  # a bad LLM config disables the models, never the risk engine
+            llm = None
+            notifier.send(
+                "action", "perp_llm_config_invalid", f"perp LLM config invalid, models off: {exc}"[:900]
+            )
+            journal.append(
+                "alert",
+                {"level": "action", "code": "perp_llm_config_invalid", "message": str(exc)[:1000]},
+                now_ts,
+            )
+        w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm)
         rep = w.tick(now_ts)
     except Exception as exc:
         notifier.send(
