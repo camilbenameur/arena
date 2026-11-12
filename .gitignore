@@ -6,3 +6,4 @@ __pycache__/
 .hypothesis/
 .ruff_cache/
 recherche/rapports/series/
+*.jsonl.lock
