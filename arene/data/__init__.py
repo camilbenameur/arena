@@ -9,6 +9,7 @@ de portefeuille (frais, coûts, produits) suivent, eux, les arrondis défavorabl
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
@@ -87,8 +88,18 @@ class RateLimitedHttp:
                 self._sleep(wait)
         self._last[host] = self._clock()
 
-    def get_json(self, url: str, params: dict[str, Any] | None = None, *, retry_if: Callable[[Any], None] | None = None) -> Any:
-        """GET et décodage JSON. `retry_if(payload)` peut lever TransientDataError/DataError sur le contenu."""
+    def get_json(
+        self,
+        url: str,
+        params: dict[str, Any] | None = None,
+        *,
+        retry_if: Callable[[Any], None] | None = None,
+        parse_float: Callable[[str], Any] | None = None,
+    ) -> Any:
+        """GET et décodage JSON. `retry_if(payload)` peut lever TransientDataError/DataError sur le contenu.
+
+        `parse_float` (e.g. `Decimal`) decodes JSON decimal numbers without going through float.
+        """
         host = httpx.URL(url).host
         last_exc: DataError | None = None
         for attempt in range(MAX_ATTEMPTS):
@@ -101,7 +112,7 @@ class RateLimitedHttp:
                     raise TransientDataError(f"HTTP {resp.status_code} sur {host}")
                 if resp.status_code >= 400:
                     raise DataError(f"HTTP {resp.status_code} sur {host}")
-                payload = resp.json()
+                payload = resp.json() if parse_float is None else json.loads(resp.text, parse_float=parse_float)
                 if retry_if is not None:
                     retry_if(payload)
                 return payload

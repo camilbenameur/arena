@@ -1,0 +1,36 @@
+{
+ "result": "success",
+ "serverTime": "2026-11-12T15:43:30.845Z",
+ "rates": [
+  {
+   "timestamp": "2026-11-12T10:00:00Z",
+   "fundingRate": 0.076966522142642195,
+   "relativeFundingRate": 0.000001048370833333
+  },
+  {
+   "timestamp": "2026-11-12T11:00:00Z",
+   "fundingRate": -0.137537227728250000,
+   "relativeFundingRate": -0.000001874425000000
+  },
+  {
+   "timestamp": "2026-11-12T12:00:00Z",
+   "fundingRate": 0.653105378275600712,
+   "relativeFundingRate": 0.000008963395833333
+  },
+  {
+   "timestamp": "2026-11-12T13:00:00Z",
+   "fundingRate": 1.060708002158649273,
+   "relativeFundingRate": 0.000014566129166667
+  },
+  {
+   "timestamp": "2026-11-12T14:00:00Z",
+   "fundingRate": -0.230730536689440808,
+   "relativeFundingRate": -0.000003185841666667
+  },
+  {
+   "timestamp": "2026-11-12T15:00:00Z",
+   "fundingRate": 0.632443511930690521,
+   "relativeFundingRate": 0.000008837591666667
+  }
+ ]
+}

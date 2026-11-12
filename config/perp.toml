@@ -1,0 +1,40 @@
+# Perpetual futures league (paper): market data collection, step 1.
+# See docs/ETUDE-AGENTS-TRADERS.md and docs/DECISION-OWNER-agents-traders.md. English keys, integers only.
+# Public Kraken Futures API only: no account, no key, no order.
+venue_mode = "paper"
+data_source = "kraken_futures"
+
+candle_interval_s = 60                  # one-minute candles (stops and margin close-out are checked per minute)
+candle_kinds = ["mark", "trade", "spot"]
+open_interest_interval_s = 3600
+book_depth = 10                         # levels per side kept at each run
+backfill_s = 604800                     # automatic catch-up after an outage: up to 7 days back
+run_deadline_s = 600                    # a run stops starting new instruments after 10 min (systemd allows 15)
+max_backfill_s = 7776000                # 90 days: upper bound for --backfill-days
+funding_retry_s = 900                   # at most one funding-history call per 15 min while the next hour is due
+fx_pair = "EURUSD"                      # Kraken spot pair, USD per EUR
+
+[[instruments]]
+symbol = "BTC-PERP"
+kraken_symbol = "PF_XBTUSD"
+spot_symbol = "BTC/EUR"
+[[instruments]]
+symbol = "ETH-PERP"
+kraken_symbol = "PF_ETHUSD"
+spot_symbol = "ETH/EUR"
+[[instruments]]
+symbol = "SOL-PERP"
+kraken_symbol = "PF_SOLUSD"
+spot_symbol = "SOL/EUR"
+[[instruments]]
+symbol = "XRP-PERP"
+kraken_symbol = "PF_XRPUSD"
+spot_symbol = "XRP/EUR"
+[[instruments]]
+symbol = "LINK-PERP"
+kraken_symbol = "PF_LINKUSD"
+spot_symbol = "LINK/EUR"
+[[instruments]]
+symbol = "LTC-PERP"
+kraken_symbol = "PF_LTCUSD"
+spot_symbol = "LTC/EUR"

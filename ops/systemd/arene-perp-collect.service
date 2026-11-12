@@ -1,0 +1,16 @@
+[Unit]
+Description=Arena perp league: collect public Kraken Futures market data (paper, no key, no order)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/dev/arene-trading
+ExecStart=%h/dev/arene-trading/.venv/bin/python -m arene.perp.collect run
+# Exit 3 = the run finished but some data is missing (details in var-perp/runs/): not a unit failure,
+# the next run retries in 5 min. Exit 1 (crash) and 2 (configuration) DO fail the unit:
+# `systemctl --user --failed` shows them.
+SuccessExitStatus=3
+# A normal run takes about 30 s; a catch-up after an outage can take minutes (run_deadline_s = 600).
+TimeoutStartSec=900
+Nice=10
