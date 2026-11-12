@@ -11,7 +11,7 @@ Tout se lance depuis `~/dev/arene-trading` avec `uv run arene <commande>`. État
 ## Tout arrêter
 1. `arene kill` : plus aucun achat ; au prochain cycle les portefeuilles LLM et aléatoire sont mis à plat.
 2. `arene kill --now` : pareil, avec mise à plat immédiate (moins d'une minute). Le fichier `~/.config/arene/KILL` a le même effet que `var/KILL`.
-3. Arrêt total : `systemctl --user disable --now arene-cycle.timer`. Pour repartir : `arene unkill` puis `systemctl --user enable --now arene-cycle.timer`.
+3. Arrêt total : `systemctl --user disable --now arene-cycle.timer arene-veille.timer`. Pour repartir : `arene unkill` puis `systemctl --user enable --now arene-cycle.timer arene-veille.timer`. (Arrêter seulement la veille : voir « Veille et réveils ».)
 
 ## Tout mettre à plat
 `arene kill --now`, puis `arene status` (positions = 0 pour les LLM et l'aléatoire). Les témoins de référence (panier, 6040, E0065) restent investis : ce sont des références, pas des décideurs.
@@ -40,6 +40,61 @@ Tout se lance depuis `~/dev/arene-trading` avec `uv run arene <commande>`. État
 | `site_build` | action | Le dashboard n'a pas pu être reconstruit ; `arene build-site` pour voir l'erreur. Sans effet sur le journal. |
 | `heartbeat_absent` | info | Pas de `healthcheck_url` : aucun heartbeat externe. À installer. |
 | aucun ping reçu en 4 h 30 (Healthchecks) | — | the host ou le timer est tombé : `systemctl --user status arene-cycle.timer`, `loginctl show-user $USER -p Linger`. |
+
+## Veille et réveils
+Spécification : `docs/VEILLE.md`. Le rendez-vous de 4 h ne change pas ; `arene-veille.timer` ajoute un tick toutes les 5 min (HH:MM:30 UTC), sans LLM sauf réveil.
+
+**Ce que fait un tick** (`arene veille`) : prend le verrou du cycle sans attendre (cycle ou réveil en cours : il sort sans rien écrire, code 0), lit les quotes Kraken (qui ne servent qu'à valoriser l'equity et à exécuter les ordres du réveil) et écarte ceux qui sont douteux, lit les bougies Kraken 1 min (les transactions), vend toute position dont au moins 2 bougies 1 min closes ont un plus bas sous le stop (prix : dernière clôture 1 min moins le glissement, jamais au-dessus du stop, frais taker), écrit un événement `veille` (quotes, `quotes_bruts`, `rejets`, `variations_bp`, `clotures_1m`, equity, stops du tick, réveil, `refus`), puis lance un réveil si un mouvement d'au moins 3 % sur 1 h, mesuré sur les transactions et confirmé aux deux derniers ticks, passe tous les garde-fous. Un réveil est une ronde de décision pour tous les LLM et `temoin:aleatoire` ; il écrit `reveil_started` (avant l'événement `veille`), les événements de décision (champ `cycle` = l'identifiant du réveil, un multiple de 300 s qui n'est pas un rendez-vous), des `quote_reveil`, puis `reveil_completed`, et jamais d'`equity`. Après un réveil terminé, `arene veille` demande à systemd de reconstruire le site (`arene-site-build.service`) ; `--no-site` l'évite.
+
+**Lire**
+- `journalctl --user -u arene-veille.service -n 40` : une ligne par tick (`veille <heure> : done  événements=1 ...`, avec `stops=`, `quotes écartés=`, `declencheur=` et `reveil=` quand ils existent). `systemctl --user list-timers arene-veille.timer`. Le site : `journalctl --user -u arene-site-build.service -n 20`.
+- Dans le journal : `grep -E '"type":"(reveil_started|reveil_completed|reveil_abandonne)"' var/journal/events.jsonl | tail`. Un `reveil_started` sans `reveil_completed` est un réveil en cours ou interrompu : le tick suivant le reprend (30 min, si aucun cycle n'a été terminé depuis), sinon il est réparé puis abandonné.
+- `rejets` d'un événement `veille` contient `"ohlc"` pour un symbole dont la lecture des bougies 1 min a échoué : ni stop ni déclencheur sur lui à ce tick (le filet des barres de 4 h du cycle reste actif).
+- Un déclencheur refusé laisse sa trace dans le champ `refus` de l'événement `veille` (`delai`, `plafond`, `avant_cycle`, `cycle_incomplet`, `cycle`) et dans la sortie du tick : `declencheur=mouvement (refusé : delai)`.
+- `arene status` ne montre pas la veille ; `arene verify` la vérifie comme le reste (environ 290 événements `veille` par jour).
+- Fichiers d'état hors journal : `var/asset_pairs.json` (cache AssetPairs de 24 h, supprimable), `var/veille_ohlc_pause` (instant jusqu'auquel les appels OHLC sont suspendus), `var/veille_echecs` (nombre de ticks consécutifs sans aucun quote valide ; supprimé au premier tick réussi ; ne pas l'éditer, on peut le supprimer) et `var/veille_journal_casse` (heure de la dernière alerte `journal_casse` de la veille, pour n'en envoyer qu'une par heure).
+
+**Arrêter**
+- Plus de réveils, stops en direct conservés : mettre `max_reveils_jour = 0` dans `[veille]` de `config/arene.toml` (effet au tick suivant ; `config_loaded` est journalisé).
+- Plus de veille du tout : `systemctl --user disable --now arene-veille.timer`. Le filet des stops sur barres de 4 h au cycle reste actif, comme avant. Le cycle enverra l'alerte `veille_absente` une fois, puisque la veille a déjà tourné.
+- `arene kill` / `arene kill --now` agissent sur les réveils comme sur les cycles : un réveil sous coupe-circuit met à plat les LLM et l'aléatoire et refuse toute entrée ; un KILL armé pendant un appel LLM bloque l'achat qui suit. La veille elle-même ne met jamais à plat.
+- Réglages (`[veille]`) : `seuil_mouvement_bp` (300 = 3 %), `fenetre_mouvement_s` (3600), `cooldown_s` (3600), `max_reveils_jour` (6), `garde_avant_cycle_s` (1800), `tick_s` (300, doit diviser `interval_s`). Toute modification change le hash de la config.
+
+**Nouvelles alertes**
+| code | niveau | action |
+|---|---|---|
+| `veille_data` | action puis info | Action : aucun symbole n'a de quote exploitable (tous invalides ou illisibles) depuis 3 ticks consécutifs (une seule alerte au début de la panne ; les ticks en échec n'écrivent rien, code de sortie 1). Les stops en direct ne tournent pas : le filet des barres de 4 h reste actif. Info « rétabli » au premier tick réussi. |
+| `veille_ohlc` | action puis info | Au moins 3 symboles sans bougies 1 min lisibles (`rejets "ohlc"`) pendant 3 ticks consécutifs : ni stop ni mouvement sur eux (le filet des barres de 4 h du cycle reste actif). Sur une limite de débit (429, `Retry-After (plafonné à 600 s)`) les appels OHLC sont suspendus (`var/veille_ohlc_pause`, 300 s par défaut). Info au rétablissement. |
+| `saison_modifiee` | panique | La table `[saison]` a été modifiée (hors `nom`) pendant la saison ouverte : sans effet, à remettre telle quelle. |
+| `saison_numero` | action | Le `numero` de `[saison]` n'est pas le dernier + 1 : la saison n'est pas démarrée. |
+| `claude_cli_version` | info | La version de `claude --version` a changé (non gelée, journalisée dans `config_loaded`). |
+| `veille_symbole_ecarte` | action puis info | Les quotes d'un symbole sont rejetés (`spread` ou `saut`, voir `rejets` des événements `veille`) depuis 3 ticks consécutifs sans qu'une rupture cohérente se confirme : quotes erratiques de Kraken. Pas de stop ni de déclencheur sur lui, equity à son dernier quote accepté. Se lève seul ; info au retour. |
+| `veille_absente` | action | Posée par le cycle : plus aucun événement `veille` depuis plus de 30 min. `systemctl --user status arene-veille.timer`, `journalctl --user -u arene-veille.service`. Une alerte par absence. |
+| `journal_casse` (veille) | panique | La veille refuse de tourner sur un journal cassé (une alerte par heure au plus, ntfy seulement). Voir « Journal cassé ». |
+| `reveil_resumed` | info | Un réveil interrompu a été repris par un tick suivant (sans double décision ni double fill). Rien à faire. |
+| `reveil_abandonne` | action | Un réveil incomplet a été réparé puis abandonné (plus de 30 min, ou un cycle terminé entre-temps). Voir `reveil_exception` ou `data_stale` juste avant ; les décisions déjà reçues restent journalisées. Il compte dans le plafond du jour et dans le délai. |
+| `reveil_exception` | panique | Réveil interrompu par une exception : `journalctl --user -u arene-veille.service`, puis `arene verify`. Les ticks suivants le reprennent (jusqu'à 30 min). Une seule alerte par réveil et par code. |
+| `data_stale`, `data_error`, `llm_api_error`, `llm_budget`, `model_mismatch`, `kill_switch`, `dormance_*` | — | Mêmes codes et mêmes actions qu'au cycle ; ils peuvent aussi venir d'un réveil (message préfixé `[réveil N]`, une seule alerte par réveil et par code). Le budget quotidien (`daily_budget_usd`) est partagé entre cycles et réveils. |
+
+Un cycle attend le verrou jusqu'à 600 s (`LOCK_WAIT_S`) : si un réveil le tient, le cycle de HH:05 démarre quand le réveil se termine (`arene-cycle.service` : `TimeoutStartSec=1500`).
+
+## Saison 1
+Décision du propriétaire : une saison de 8 semaines (56 jours) gelée, sans changement de cadence, de modèles, de consigne ni de politique de risque. Le rodage d'avant est exclu des classements. Table `[saison]` de `config/arene.toml` (facultative : sans elle, rien ne change) : `numero`, `nom`, `debut_ts` (13/11/2026 à 00:05 UTC, l'exécution du cycle de 00:00), `duree_jours`.
+
+**Événements** (tous dans le journal) :
+- `saison_debut` : écrit au premier cycle dont l'instant de décision `t` est >= `debut_ts - cycle_delay_s`, avant ses décisions. Il fige `config_sha256`, `policy_sha256`, `prompt_sha256`, `code_sha256`, `git_head`, la liste des portefeuilles, `debut_ts`, `duree_jours` et `claude_cli_version` (sortie de `claude --version`, ou `null`), et fixe `fin_prevue_cycle = t + 56 jours`. Refusé tant qu'une saison est ouverte (un `saison_debut` sans `saison_fin`) ; son `numero` doit valoir le dernier + 1 (sinon alerte `action/saison_numero`, sans effet).
+- `saison_reference` : écrit AVANT les décisions du cycle de début, juste après `saison_debut` : `{numero, cycle, equity: {portefeuille: µEUR}}`, l'equity de chaque portefeuille au bid avec les quotes de ce cycle. C'est la base des classements ; rien n'est remis à zéro.
+- `saison_fin` : au premier cycle avec `t >= fin_prevue_cycle`, après ses `equity`. Le gel est levé ensuite.
+- `saison_derogation` : voir plus bas.
+
+**Ce qui est gelé** (de `saison_debut` à `fin_prevue_cycle`) : quatre hashes. Si l'un diffère de celui du `saison_debut`, le cycle ET les réveils refusent de tourner, et la veille n'écrit plus aucun fill (`panique/saison_gelee`, le message nomme le hash : config, politique de risque, consigne système ou code). Une `[saison]` modifiée pendant la saison ouverte (hors `nom`) déclenche `panique/saison_modifiee` et n'a aucun effet. `git_head` et `claude_cli_version` ne sont pas gelés (un changement de version de la CLI est journalisé dans `config_loaded` et alerté en `info`).
+- `config_sha256` est le sha256 de la config **sans la clé `saison`**, calculé sur le TOML parsé (`tomllib`) puis sérialisé en JSON canonique (clés triées, sans espaces) : commentaires, espaces et ordre des clés n'ont aucun effet, toute valeur qui change modifie le hash (calcul : `arene.config.sha256_hors_saison`). `config_loaded` garde le hash complet du fichier.
+- `policy_sha256` : `config/policy.toml` ; `prompt_sha256` : `arene/deciders/prompt/v1.md`.
+- `code_sha256` : les octets, lus sur le disque (sans git) dans l'ordre trié des chemins, d'une liste blanche : `arene/__init__.py`, `config.py`, `cycle.py`, `veille.py`, `journal.py`, `ledger.py`, `types.py`, `paths.py`, `saison.py`, `ops/dormance.py`, `ops/killswitch.py`, les dossiers `arene/data/`, `deciders/`, `risk/`, `sim/`, `temoins/` (fichiers .py, .md, .toml, .json, .txt, hors `__pycache__`), et `config/policy.toml` (calcul : `arene.saison.code_sha256`). Hors gel : `arene/site/`, `arene/cli.py`, `arene/perp/` (ligue dérivés), `arene/stats.py`, `uv.lock`. Tout correctif du code gelé pendant la saison, y compris un module neuf dans un dossier gelé, exige une dérogation écrite et journalisée. Limite : une mise à jour de dépendance (`uv.lock`) ou de la CLI `claude` n'est pas gelée ; la version de la CLI est journalisée et alertée.
+
+**Déroger.** Écrire une raison dans `var/SAISON_DEROGATION` (`echo "raison" > var/SAISON_DEROGATION`) : le cycle journalise alors `saison_derogation {numero, raison, hashes_avant, hashes_apres}` (une fois par changement de hash, `hashes_avant` = l'état gelé précédent) puis tourne ; un réveil tourne aussi. Fichier vide ou absent : le gel s'applique. Supprimer le fichier une fois la dérogation terminée ; toute dérogation est visible dans `arene status` et sur le site.
+
+**Lire les classements.** `arene status` affiche la saison (en attente, en cours : jour N sur 56, ou terminée), le nombre de dérogations et la performance de chaque portefeuille depuis `saison_reference` (equity au bid, courante ou de `saison_fin`). Les classements se font depuis `saison_reference`, jamais depuis le capital initial ; le rodage (avant `saison_debut`) est présenté à part.
 
 ## Journal cassé (`arene verify` échoue)
 1. **Ne rien supprimer, ne rien éditer.** Copier le fichier : `cp var/journal/events.jsonl /chemin/sauvegarde/`.

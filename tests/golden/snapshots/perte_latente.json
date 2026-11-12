@@ -1,8 +1,12 @@
 {
  "name": "perte_latente",
- "sha256": "d055834d7e149aafe6a283155ad0b6ba59a89161ca494bd08a3973ae2e7cf1cc",
+ "sha256": "b04217bd9732002274e1755181c06d16eff927eca3e38df07a274f6632efaf21",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -220,6 +224,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

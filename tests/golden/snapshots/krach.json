@@ -1,8 +1,12 @@
 {
  "name": "krach",
- "sha256": "14546ef30a718916b6ad4333ba9da4088ecfe6352a34a4152fe293262160750e",
+ "sha256": "31c2ae9eafc74552da120a6c272f46d84b2839ba900e64f156e2afadf1081f2e",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -256,6 +260,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

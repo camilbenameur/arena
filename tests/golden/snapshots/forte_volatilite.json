@@ -1,8 +1,12 @@
 {
  "name": "forte_volatilite",
- "sha256": "b11435a21be9461d1e2aff5d14c6b7e819c3e34c7ba08634957e07f6a04858ec",
+ "sha256": "3c8dc3164d8fdbb5f616d874a0534e53acd3c81827ccad4cf13d9b722375fe58",
  "snapshot": {
   "bar_interval_s": 14400,
+  "contexte": {
+   "prochain_rendez_vous_ts": 1700020800,
+   "type": "rendez_vous"
+  },
   "cycle_ts": 1700006400,
   "market": {
    "BTC/EUR": {
@@ -207,6 +211,6 @@
    }
   ],
   "rules": "ordre <= 20 % ; position <= 40 % ; 2 ordres par jour ; stop 1-25 % ; coût <= 33 % du mouvement.",
-  "schema_version": "1"
+  "schema_version": "2"
  }
 }

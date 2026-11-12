@@ -9,5 +9,5 @@ WorkingDirectory=%h/dev/arene-trading
 # Le venv est créé par `uv sync` dans le dépôt ; aucune clé n'est passée ici : le code lit
 # $CREDENTIALS_DIRECTORY ou ~/.config/arene/secrets à l'exécution (pas de clé -> no_key, le reste tourne).
 ExecStart=%h/dev/arene-trading/.venv/bin/arene cycle
-TimeoutStartSec=900
+TimeoutStartSec=1500
 Nice=5

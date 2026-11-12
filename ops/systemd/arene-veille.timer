@@ -1,0 +1,12 @@
+[Unit]
+Description=Arène de trading : déclenche un tick de veille toutes les 5 min (à HH:MM:30 UTC)
+
+[Timer]
+# Décalage de 30 s : ne pas tomber sur HH:05:00 pile, l'instant du cycle de 4 h.
+OnCalendar=*-*-* *:00/5:30 UTC
+Persistent=false
+AccuracySec=1s
+Unit=arene-veille.service
+
+[Install]
+WantedBy=timers.target

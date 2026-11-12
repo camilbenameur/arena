@@ -33,6 +33,14 @@ class TransientDataError(DataError):
     """Erreur qui justifie une nouvelle tentative (5xx, 429, réseau, erreur Kraken passagère)."""
 
 
+class RateLimitedError(TransientDataError):
+    """HTTP 429 : `retry_after` = secondes demandées par l'en-tête Retry-After (None s'il est absent ou illisible)."""
+
+    def __init__(self, message: str, retry_after: int | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 def to_scaled(text: str | int, scale: int) -> int:
     """Convertit un décimal texte en entier `valeur * scale` sans float (ROUND_HALF_EVEN, données de marché)."""
     try:
@@ -108,7 +116,10 @@ class RateLimitedHttp:
             self._throttle(host)
             try:
                 resp = self._client.get(url, params=params, timeout=TIMEOUT_S)
-                if resp.status_code >= 500 or resp.status_code == 429:
+                if resp.status_code == 429:
+                    ra = resp.headers.get("Retry-After", "")
+                    raise RateLimitedError(f"HTTP 429 sur {host}", int(ra) if ra.strip().isdigit() else None)
+                if resp.status_code >= 500:
                     raise TransientDataError(f"HTTP {resp.status_code} sur {host}")
                 if resp.status_code >= 400:
                     raise DataError(f"HTTP {resp.status_code} sur {host}")

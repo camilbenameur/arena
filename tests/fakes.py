@@ -86,7 +86,16 @@ class FakeKraken:
     def asset_pairs(self, pairs: list[str]) -> dict[str, PairInfo]:
         return {p: PAIR_INFO[p] for p in pairs}
 
+    def minute_bar(self, sym: str, ts: int) -> Bar:
+        """Bougie d'une minute : plate au dernier cours de clôture 4 h (même niveau que le ticker). Surchargeable."""
+        c = self.bar(sym, ts // H4 * H4 - H4).close
+        return Bar(sym, 60, ts, c, c, c, c, 1_000_000)
+
     def ohlc(self, symbol: str, pair: str, interval_s: int = H4, since: int | None = None) -> list[Bar]:
+        if interval_s == 60:  # bougies 1 min closes, ts > since (comme Kraken)
+            last = self.clock.now // 60 * 60 - 60
+            lo = last - 60 * 60 * 12 if since is None else since // 60 * 60 + 60
+            return [self.minute_bar(symbol, ts) for ts in range(max(lo, T0 - 20 * DAY), last + 1, 60)]
         last = (self.clock.now - self.lag_s) // H4 * H4 - H4  # dernière barre close
         first = T0 - 20 * DAY
         lo = first if since is None else max(first, since // H4 * H4 + H4)

@@ -9,6 +9,23 @@ fill_model_version = "pessimiste-v1"
 taker_fee_bp = 50           # 0,40 % Kraken Pro de base, majoré de 25 %
 slippage_bp = 5
 
+# Veille continue et réveils sur événement (docs/VEILLE.md) : un tick sans LLM toutes les 5 min.
+[veille]
+tick_s = 300
+seuil_mouvement_bp = 300      # 3 %
+fenetre_mouvement_s = 3600    # sur 1 h
+cooldown_s = 3600             # délai minimal depuis la dernière ronde LLM (cycle ou réveil)
+max_reveils_jour = 6          # par jour UTC
+garde_avant_cycle_s = 1800    # aucun réveil à moins de 30 min du prochain rendez-vous
+
+[saison]
+# Saison 1 (décision du propriétaire) : 8 semaines gelées (config hors cette table, politique de risque, consigne),
+# classées depuis le cycle de début ; le rodage d'avant est exclu. Cette table et ses commentaires sont hors du hash gelé.
+numero = 1
+nom = "Saison 1"
+debut_ts = 1794528300       # 13/11/2026 à 00:05 UTC : exécution du cycle de 00:00
+duree_jours = 56
+
 [[instruments]]
 symbol = "BTC/EUR"
 kraken_pair = "XBTEUR"

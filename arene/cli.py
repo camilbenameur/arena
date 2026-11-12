@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 
 from arene import cycle as cyc
+from arene import veille as vei
 from arene.config import ConfigError, load_config
 from arene.journal import Journal, JournalError, verify
 from arene.ledger import rebuild_sqlite, replay
@@ -61,6 +63,37 @@ def cmd_cycle(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: in
         print(f"erreur : {rep.error}", file=sys.stderr)
     if rep.status == "completed" and not a.no_site:
         _build_site(paths, clients, now, quiet_missing=True)
+    return 0 if rep.ok else 1
+
+
+SITE_BUILD_UNIT = "arene-site-build.service"
+
+
+def _start_site_build() -> None:
+    """Demande à systemd de reconstruire le site (hors de ce processus, sans attendre). Un échec est ignoré."""
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "start", "--no-block", SITE_BUILD_UNIT],
+            check=True, capture_output=True, timeout=15,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.getLogger("arene.cli").warning("reconstruction du site non lancée : %s: %s", type(exc).__name__, exc)
+
+
+def cmd_veille(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
+    rep = vei.run_veille(paths, clients, now)
+    extra = f"  stops={len(rep.stops)}" if rep.stops else ""
+    if rep.rejets:
+        extra += f"  quotes écartés={','.join(f'{s}:{m}' for s, m in sorted(rep.rejets.items()))}"
+    if rep.declencheur:
+        extra += f"  declencheur={rep.declencheur['type']}" + (f" (refusé : {rep.refus})" if rep.refus else "")
+    if rep.reveil:
+        extra += f"  reveil={rep.reveil}"
+    print(f"veille {_iso(rep.tick)} : {rep.status}  événements={rep.n_events}{extra}")
+    if rep.error:
+        print(f"erreur : {rep.error}", file=sys.stderr)
+    if rep.reveil in ("completed", "resumed") and not a.no_site:
+        _start_site_build()
     return 0 if rep.ok else 1
 
 
@@ -126,6 +159,43 @@ def cmd_resume(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
     return 0
 
 
+def _status_saison(paths: Paths, ev: list[dict], now: int) -> None:
+    """Saison : en attente, en cours (jour N sur D) ou terminée, et la performance depuis `saison_reference`."""
+    try:
+        cfg = load_config(paths.config)
+    except ConfigError:
+        cfg = None
+    debuts = [e["payload"] for e in ev if e["type"] == "saison_debut"]
+    if not debuts:
+        if cfg is not None and cfg.saison is not None:
+            s = cfg.saison
+            print(f"saison : {s.nom} en attente (début au cycle du {_iso(s.debut_ts)}, {s.duree_jours} jours)")
+        return
+    d = debuts[-1]
+    fins = [e["payload"] for e in ev if e["type"] == "saison_fin" and e["payload"]["numero"] == d["numero"]]
+    refs = [e["payload"] for e in ev if e["type"] == "saison_reference" and e["payload"]["numero"] == d["numero"]]
+    duree = (d["fin_prevue_cycle"] - d["cycle"]) // 86_400
+    derog = sum(1 for e in ev if e["type"] == "saison_derogation" and e["payload"]["numero"] == d["numero"])
+    if fins:
+        etat = f"terminée (cycle {_iso(fins[0]['cycle'])})"
+    else:
+        etat = f"en cours (jour {min(duree, max(0, now - d['cycle']) // 86_400 + 1)} sur {duree})"
+    print(f"saison : {d['nom']} {etat}, début {_iso(d['cycle'])}, dérogations : {derog}")
+    if not refs:
+        print("  (pas encore de saison_reference)")
+        return
+    base = refs[0]["equity"]
+    last = fins[0]["equity"] if fins else {}
+    if not fins:
+        for e in ev:
+            if e["type"] == "equity":
+                last[e["payload"]["portfolio"]] = e["payload"]["equity_ueur"]
+    print("  performance depuis la référence (equity au bid) :")
+    for p, b in sorted(base.items()):
+        cur = last.get(p, b)
+        print(f"  {p:28s} {_eur(cur):>16s} {(cur - b) * 100 / b if b else 0:+7.2f} %")
+
+
 def cmd_status(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
     rep = verify(paths.journal)
     print(f"journal : {'OK' if rep.ok else 'CASSÉ'}  {rep.n_records} événements  tête {rep.head_hash[:12]}")
@@ -150,6 +220,7 @@ def cmd_status(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
         flag = " ARRÊTÉ" if st.halted else " GELÉ" if st.frozen_until_ts > now else ""
         pct = (cur - capital[p]) * 100 / capital[p] if capital.get(p) else 0
         print(f"  {p:28s} {_eur(cur):>16s} {pct:+6.2f} %  positions={len(st.positions)}{flag}")
+    _status_saison(paths, ev, now)
     srcs = killswitch.active_sources(paths)
     print(f"coupe-circuit : {'ARMÉ (' + ', '.join(srcs) + ')' if srcs else 'inactif'}")
     first = ev[0]["ts"]
@@ -221,6 +292,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="command", required=True)
     c = sub.add_parser("cycle", help="exécute (ou reprend) le cycle courant")
     c.add_argument("--no-site", action="store_true", help="ne reconstruit pas le site après le cycle")
+    w = sub.add_parser("veille", help="un tick de veille (stops en direct, réveil éventuel), sans LLM sauf réveil")
+    w.add_argument("--no-site", action="store_true", help="ne demande pas la reconstruction du site après un réveil")
     k = sub.add_parser("kill", help="arme le coupe-circuit")
     k.add_argument("--now", action="store_true", help="met à plat tout de suite (LLM et aléatoire)")
     sub.add_parser("unkill", help="lève le coupe-circuit")
@@ -238,6 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS: dict[str, Callable[..., int]] = {
     "cycle": cmd_cycle,
+    "veille": cmd_veille,
     "kill": cmd_kill,
     "unkill": cmd_unkill,
     "ack": cmd_ack,
