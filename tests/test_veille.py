@@ -1839,7 +1839,8 @@ def test_limite_de_debit_suspend_les_appels_ohlc_jusqu_a_retry_after(tmp_path: P
     n0 = env.kraken.ohlc_calls
     rep = tick(env, T0 + 600)
     assert rep.rejets == dict.fromkeys(SYMBOLS, "ohlc") and env.kraken.ohlc_calls == n0 + 1  # le premier appel suffit
-    assert (env.paths.var / "veille_ohlc_pause").read_text() == str(T0 + 630 + 900)
+    # Retry-After de 900 s plafonné à PAUSE_OHLC_MAX_S = 600 s : jamais des heures sans stops ni déclencheur.
+    assert (env.paths.var / "veille_ohlc_pause").read_text() == str(T0 + 630 + 600)
     env.kraken.ohlc_error = None
     n1 = env.kraken.ohlc_calls
     assert tick(env, T0 + 900).rejets == dict.fromkeys(SYMBOLS, "ohlc") and env.kraken.ohlc_calls == n1  # en pause : aucun appel

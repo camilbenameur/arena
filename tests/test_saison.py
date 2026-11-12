@@ -317,25 +317,27 @@ def test_un_second_saison_debut_est_refuse_tant_qu_une_saison_est_ouverte_numero
     assert [p["numero"] for p in pl(env, "saison_debut")] == [1, 2]
 
 
-def git_repo(root: Path) -> Path:
-    import subprocess
-
+def code_repo(root: Path) -> Path:
+    """Arborescence factice (sans git : le gel ne dépend pas de git)."""
     root.mkdir(parents=True, exist_ok=True)
     for f, txt in {
-        "arene/a.py": "a = 1\n", "arene/site/x.py": "x = 1\n", "arene/cli.py": "c = 1\n", "arene/ops/o.py": "o = 1\n",
-        "arene/sub/b.py": "b = 1\n", "config/policy.toml": "p = 1\n", "uv.lock": "lock = 1\n", "autre/z.py": "z = 1\n",
+        "arene/cycle.py": "a = 1\n", "arene/deciders/prompt/v1.md": "p\n", "arene/risk/riskd.py": "r = 1\n",
+        "arene/ops/killswitch.py": "k = 1\n", "config/policy.toml": "p = 1\n",
+        "arene/site/x.py": "x = 1\n", "arene/cli.py": "c = 1\n", "arene/ops/autre.py": "o = 1\n",
+        "arene/perp/ligue.py": "l = 1\n", "arene/stats.py": "s = 1\n", "uv.lock": "lock = 1\n", "autre/z.py": "z = 1\n",
     }.items():  # fmt: skip
         (root / f).parent.mkdir(parents=True, exist_ok=True)
         (root / f).write_text(txt)
-    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
-    subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
     return root
 
 
-def test_code_sha256_perimetre_ordre_et_octets_du_disque(tmp_path: Path):
-    repo = git_repo(tmp_path / "repo")
+def test_code_sha256_liste_blanche_sur_le_disque_sans_git(tmp_path: Path):
+    repo = code_repo(tmp_path / "repo")
     base = saison.code_sha256(repo)
-    assert saison._fichiers_code(repo) == ["arene/a.py", "arene/sub/b.py", "config/policy.toml", "uv.lock"]
+    assert saison._fichiers_code(repo) == [
+        "arene/cycle.py", "arene/deciders/prompt/v1.md", "arene/ops/killswitch.py", "arene/risk/riskd.py",
+        "config/policy.toml",
+    ]  # fmt: skip
 
     def changed(path: str, txt: str = "changé\n") -> bool:
         before = (repo / path).read_text()
@@ -345,20 +347,25 @@ def test_code_sha256_perimetre_ordre_et_octets_du_disque(tmp_path: Path):
         finally:
             (repo / path).write_text(before)
 
-    assert changed("arene/a.py") and changed("arene/sub/b.py") and changed("config/policy.toml") and changed("uv.lock")
-    assert not changed("arene/site/x.py") and not changed("arene/cli.py") and not changed("arene/ops/o.py")
-    assert not changed("autre/z.py")
-    (repo / "arene/nouveau.py").write_text("n = 1\n")  # non suivi par git : hors périmètre
+    for gele in ("arene/cycle.py", "arene/deciders/prompt/v1.md", "arene/risk/riskd.py", "arene/ops/killswitch.py",
+                 "config/policy.toml"):
+        assert changed(gele), gele
+    for libre in ("arene/site/x.py", "arene/cli.py", "arene/ops/autre.py", "arene/perp/ligue.py", "arene/stats.py",
+                  "uv.lock", "autre/z.py"):
+        assert not changed(libre), libre
+    # Un module neuf dans un dossier gelé change le hash ; un fichier d'éditeur ou un cache, non.
+    (repo / "arene/risk/riskd.py.swp").write_bytes(b"x")
+    (repo / "arene/risk/__pycache__").mkdir()
+    (repo / "arene/risk/__pycache__/riskd.cpython-312.pyc").write_bytes(b"x")
     assert saison.code_sha256(repo) == base
-    # Octets du disque : modifié sans `git add`, le hash change.
-    (repo / "arene/a.py").write_text("a = 2\n")
+    (repo / "arene/risk/neuf.py").write_text("n = 1\n")
     assert saison.code_sha256(repo) != base
-    (repo / "arene/a.py").write_text("a = 1\n")
+    (repo / "arene/risk/neuf.py").unlink()
     assert saison.code_sha256(repo) == base == saison.code_sha256(repo)
 
 
 def test_code_gele_pendant_la_saison_derogation_exigee(tmp_path: Path):
-    repo = git_repo(tmp_path / "repo")
+    repo = code_repo(tmp_path / "repo")
     env = saison_env(tmp_path, jours=56)
     env.paths = replace(env.paths, repo=repo)
     assert cycle(env, 0).status == "completed"
@@ -366,10 +373,13 @@ def test_code_gele_pendant_la_saison_derogation_exigee(tmp_path: Path):
     (repo / "arene/cli.py").write_text("c = 2\n")  # hors périmètre : permis
     (repo / "arene/site/x.py").write_text("x = 2\n")
     assert cycle(env, 1).status == "completed"
-    (repo / "arene/a.py").write_text("a = 2  # correctif\n")  # dans le périmètre : gelé
+    avant = saison.code_sha256(repo)
+    (repo / "arene/perp/ligue.py").write_text("l = 2\n")  # ligue dérivés : hors gel
+    assert saison.code_sha256(repo) == avant
+    (repo / "arene/cycle.py").write_text("a = 2  # correctif\n")  # dans le périmètre : gelé
     rep = cycle(env, 2)
     assert rep.status == "failed" and "code_sha256" in rep.error and ("panique", "saison_gelee") in rep.alerts
-    derogation(env, "correctif a.py")
+    derogation(env, "correctif cycle.py")
     assert cycle(env, 2).status == "completed"
     [d] = pl(env, "saison_derogation")
     assert d["hashes_avant"]["code_sha256"] != d["hashes_apres"]["code_sha256"] == saison.code_sha256(repo)

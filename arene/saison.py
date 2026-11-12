@@ -25,26 +25,30 @@ NOMS = {
     "prompt_sha256": "consigne système",
     "code_sha256": "code",
 }
-CODE_EXCLUS = ("arene/site/", "arene/ops/")
-CODE_EXCLUS_FICHIERS = ("arene/cli.py",)
-CODE_AJOUTS = ("config/policy.toml", "uv.lock")
+#: Code gelé : liste blanche des modules qui font tourner le cycle, la veille et les réveils (lus SUR LE DISQUE,
+#: sans dépendre de git). Hors gel : `arene/site/` (dashboard), `arene/cli.py`, `arene/perp/` (ligue dérivés,
+#: développée pendant la saison), `arene/stats.py`, et `uv.lock` (réécrit par `uv run` en développement).
+CODE_GELE_FICHIERS = (
+    "arene/__init__.py", "arene/config.py", "arene/cycle.py", "arene/veille.py", "arene/journal.py",
+    "arene/ledger.py", "arene/types.py", "arene/paths.py", "arene/saison.py",
+    "arene/ops/dormance.py", "arene/ops/killswitch.py", "config/policy.toml",
+)
+CODE_GELE_DOSSIERS = ("arene/data", "arene/deciders", "arene/risk", "arene/sim", "arene/temoins")
+CODE_SUFFIXES = (".py", ".md", ".toml", ".json", ".txt")
 
 
 def _fichiers_code(repo: Path) -> list[str]:
-    """Chemins gelés : fichiers suivis par git sous `arene/` (hors `arene/site/`, `arene/cli.py`, `arene/ops/`), plus
-    `config/policy.toml` et `uv.lock`. Sans git, repli sur les fichiers présents sous `arene/` (hors caches)."""
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(repo), "ls-files", "arene", *CODE_AJOUTS],
-            capture_output=True, text=True, timeout=15, check=True,
-        ).stdout  # fmt: skip
-        files = [f for f in out.splitlines() if f]
-    except (OSError, subprocess.SubprocessError):
-        files = [str(f.relative_to(repo)) for f in (repo / "arene").rglob("*") if f.is_file() and "__pycache__" not in f.parts]
-        files += [f for f in CODE_AJOUTS if (repo / f).is_file()]
-    return sorted(
-        f for f in set(files) if f in CODE_AJOUTS or (f.startswith("arene/") and not f.startswith(CODE_EXCLUS) and f not in CODE_EXCLUS_FICHIERS)
-    )
+    """Chemins gelés (voir CODE_GELE_*), lus sur le disque : les fichiers des dossiers gelés dont le suffixe est dans
+    CODE_SUFFIXES, hors `__pycache__`. Aucun appel à git : le hash ne bascule pas selon que git répond ou non."""
+    files = [f for f in CODE_GELE_FICHIERS if (repo / f).is_file()]
+    for d in CODE_GELE_DOSSIERS:
+        base = repo / d
+        if base.is_dir():
+            files += [
+                str(f.relative_to(repo)) for f in base.rglob("*")
+                if f.is_file() and "__pycache__" not in f.parts and f.suffix in CODE_SUFFIXES
+            ]  # fmt: skip
+    return sorted(set(files))
 
 
 def code_sha256(repo: Path) -> str:

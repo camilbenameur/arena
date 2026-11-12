@@ -66,6 +66,9 @@ OHLC_DEPUIS_S = 81 * 60  # bougies 1 min lues par tick : 1 h + 15 min de toléra
 REF_TOLERANCE_S = 900  # bougie de référence du mouvement : la dernière bougie tradée à tick - fenêtre ou avant, à 15 min près
 OHLC_ECHECS_MIN = 3  # symboles en échec OHLC, sur 3 ticks consécutifs : alerte veille_ohlc
 PAUSE_OHLC_DEFAUT_S = 300
+#: Plafond de la pause des appels OHLC : un Retry-After plus long (au-delà de 10 min) est ramené à ce plafond et
+#: alerté ; la veille ne doit jamais rester des heures sans stops ni déclencheur sur la foi d'un seul en-tête.
+PAUSE_OHLC_MAX_S = 600
 BOUGIE_PERIMEE_S = 900  # dernière bougie close plus vieille que 15 min : pas de mesure
 CONFIRMATION_S = 600  # le tick précédent (stops, mouvement) doit dater de 10 min au plus
 REFERENCE_TOLERANCE_S = 900  # référence du mouvement : quote valide à tick - fenêtre ou avant, de 15 min au plus
@@ -241,7 +244,7 @@ def pause_ohlc(exc: BaseException) -> int | None:
     """Secondes de pause des appels OHLC si `exc` est une limite de débit (HTTP 429 avec Retry-After, ou
     EAPI:Rate limit), sinon None. Défaut : 300 s."""
     if isinstance(exc, RateLimitedError):
-        return exc.retry_after or PAUSE_OHLC_DEFAUT_S
+        return min(exc.retry_after or PAUSE_OHLC_DEFAUT_S, PAUSE_OHLC_MAX_S)
     if isinstance(exc, KrakenError) and any("Rate limit" in e for e in exc.errors):
         return PAUSE_OHLC_DEFAUT_S
     return None
