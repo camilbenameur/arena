@@ -193,7 +193,8 @@ def collect_once(
     oiv = cfg.open_interest_interval_s
     try:
         for n, inst in enumerate(cfg.instruments):
-            if clock() - t0 > cfg.run_deadline_s:
+            # The deadline protects the 5-minute timer; an explicit backfill (run by hand) may take longer.
+            if not explicit and clock() - t0 > cfg.run_deadline_s:
                 skipped = [i.kraken_symbol for i in cfg.instruments[n:]]
                 report.errors.append(f"run deadline of {cfg.run_deadline_s} s reached, skipped {skipped}")
                 break

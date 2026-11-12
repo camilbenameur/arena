@@ -550,6 +550,26 @@ def test_explicit_backfill_also_fetches_backwards(tmp_path):
     assert st.candles("mark", "PF_XBTUSD", 60).first_ts() == NOW + 60 - 7200
 
 
+def test_run_deadline_applies_to_timer_runs_only(tmp_path):
+    cfg = load_perp_config(CONFIG)
+    ticks = iter(range(0, 10**9, 400))  # every clock() call advances 400 s
+    r = collect_once(
+        cfg, FakeClient(NOW), PerpDataStore(data_root(tmp_path)), tmp_path, NOW, clock=lambda: next(ticks)
+    )
+    assert any("run deadline" in e for e in r.errors)
+    ticks2 = iter(range(0, 10**9, 400))
+    r2 = collect_once(
+        cfg,
+        FakeClient(NOW),
+        PerpDataStore(data_root(tmp_path / "b")),
+        tmp_path / "b",
+        NOW,
+        backfill_s=3600,
+        clock=lambda: next(ticks2),
+    )
+    assert not any("run deadline" in e for e in r2.errors) and r2.counts["books"] == 6
+
+
 def test_collect_rejects_backfill_out_of_bounds(tmp_path):
     cfg = load_perp_config(CONFIG)
     with pytest.raises(ValueError):
