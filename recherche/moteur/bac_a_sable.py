@@ -12,6 +12,8 @@ Le parent ne désérialise jamais (pickle) ce que le worker écrit.
 from __future__ import annotations
 
 import ast
+import builtins
+import dataclasses
 import json
 import os
 import pickle
@@ -47,7 +49,19 @@ ATTRS_INTERDITS = frozenset({
     "genfromtxt", "fromfile", "tofile", "fromregex", "memmap", "DataSource", "ctypeslib", "f2py", "testing",
     "system", "popen", "random", "os", "sys", "subprocess", "socket", "time", "datetime", "pathlib",
     "importlib", "ctypes", "builtins", "lib", "core", "_core", "fromstring"})
+#: Préfixes d'attributs interdits : internes de générateurs/coroutines/cadres/traces/code (gi_frame, cr_frame,
+#: ag_frame, f_back, f_locals, f_globals, tb_frame, co_code...) qui permettent de sortir des builtins restreints.
+PREFIXES_ATTRS_INTERDITS = ("read_", "__", "gi_", "cr_", "ag_", "f_", "tb_", "co_")
+#: Noms explicitement interdits en attribut (couverts aussi par le préfixe `__`, listés pour mémoire).
+DUNDERS_INTERDITS = frozenset({"__traceback__", "__code__", "__globals__", "__closure__", "__subclasses__",
+                               "__mro__", "__bases__", "__class__", "__dict__", "__getattribute__"})
+#: Anti-mémoire : pas de grande table de constantes dans une stratégie (elle embarquerait une mémoire du futur).
+MAX_LITTERAUX_NUMERIQUES = 32
+MAX_ELEMENTS_LITTERAL = 16
+MAX_LONGUEUR_CHAINE = 64
 LIMITE_MEMOIRE = 6 * 2**30
+EXCEPTIONS_STANDARD = frozenset(
+    k for k, v in vars(builtins).items() if isinstance(v, type) and issubclass(v, BaseException))
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -65,6 +79,13 @@ def verifier_source(texte: str, nom: str = "strategie.py") -> None:
     def refus(n, raison):
         raise SourceRefusee(f"{nom} ligne {getattr(n, 'lineno', '?')} : {raison}")
 
+    docstrings = set()
+    for n in ast.walk(arbre):
+        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and n.body \
+                and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant) \
+                and isinstance(n.body[0].value.value, str):
+            docstrings.add(id(n.body[0].value))
+    n_numeriques = 0
     classes = {n.name for n in arbre.body if isinstance(n, ast.ClassDef)}
     if "Strategie" not in classes:
         raise SourceRefusee(f"{nom} : classe `Strategie` absente")
@@ -89,7 +110,8 @@ def verifier_source(texte: str, nom: str = "strategie.py") -> None:
                 refus(n, f"nom {n.id!r} interdit")
         elif isinstance(n, ast.Attribute):
             a = n.attr
-            if a in ATTRS_INTERDITS or a in NOMS_INTERDITS or a.startswith(("read_", "__")):
+            if a in ATTRS_INTERDITS or a in NOMS_INTERDITS or a in DUNDERS_INTERDITS \
+                    or a.startswith(PREFIXES_ATTRS_INTERDITS):
                 refus(n, f"attribut .{a} interdit")
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             if n.name in NOMS_INTERDITS or (n.name.startswith("__") and n.name.endswith("__")
@@ -101,9 +123,21 @@ def verifier_source(texte: str, nom: str = "strategie.py") -> None:
                 refus(n, f"argument {n.arg!r} interdit")
         elif isinstance(n, (ast.Global, ast.Nonlocal)):
             continue
-        elif isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith("__") \
-                and n.value.endswith("__"):
-            refus(n, "chaîne de type dunder interdite")
+        elif isinstance(n, ast.Constant):
+            v = n.value
+            if isinstance(v, str) and v.startswith("__") and v.endswith("__"):
+                refus(n, "chaîne de type dunder interdite")
+            if isinstance(v, (int, float, complex)) and not isinstance(v, bool):
+                n_numeriques += 1
+            elif isinstance(v, (str, bytes)) and len(v) > MAX_LONGUEUR_CHAINE and id(n) not in docstrings:
+                refus(n, f"chaîne littérale de plus de {MAX_LONGUEUR_CHAINE} caractères (table de constantes)")
+        elif isinstance(n, (ast.List, ast.Tuple, ast.Set)) and len(n.elts) > MAX_ELEMENTS_LITTERAL:
+            refus(n, f"littéral de plus de {MAX_ELEMENTS_LITTERAL} éléments (table de constantes)")
+        elif isinstance(n, ast.Dict) and len(n.keys) > MAX_ELEMENTS_LITTERAL:
+            refus(n, f"dict littéral de plus de {MAX_ELEMENTS_LITTERAL} éléments (table de constantes)")
+    if n_numeriques > MAX_LITTERAUX_NUMERIQUES:
+        raise SourceRefusee(f"{nom} : {n_numeriques} littéraux numériques (> {MAX_LITTERAUX_NUMERIQUES}) : "
+                            "table de constantes interdite")
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -173,14 +207,12 @@ class Worker:
         self.proc: subprocess.Popen | None = None
         self.delai = False
         self._timer: threading.Timer | None = None
-        self.detail = ""
 
     def __enter__(self) -> Self:
         self.job = _preparer_job(self.source, "_worker.py")
-        self._err = tempfile.TemporaryFile()
         self.proc = subprocess.Popen(
             _commande(self.job, "_worker.py", ["/job", "/venv", "/job", str(LIMITE_MEMOIRE)]),
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._err, start_new_session=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True,
             bufsize=0)
         self._timer = threading.Timer(self.timeout_s, self._tuer)
         self._timer.daemon = True
@@ -212,7 +244,6 @@ class Worker:
                         f.close()
                     except OSError:
                         pass
-                self._err.close()
         if self.job:
             for p in Path(self.job).iterdir():
                 p.chmod(0o644)
@@ -228,13 +259,6 @@ class Worker:
             self.proc.kill()
         except ProcessLookupError:
             pass
-
-    def _stderr(self) -> str:
-        try:
-            self._err.seek(0)
-            return self._err.read()[-800:].decode("utf-8", "replace")
-        except (OSError, ValueError):
-            return ""
 
     def _envoyer(self, obj) -> None:
         octets = pickle.dumps(obj, protocol=5)
@@ -256,7 +280,7 @@ class Worker:
         if self.delai:
             raise DelaiDepasse(f"délai de {self.timeout_s:.0f} s dépassé")
         code = self.proc.poll()
-        raise ErreurEssai(f"worker mort (code {code}) : {self._stderr()}")
+        raise ErreurEssai(f"worker mort (code {code})")
 
     def _recevoir(self) -> tuple[int, bytes]:
         (taille,) = struct.unpack("<I", self._lire(4))
@@ -266,10 +290,14 @@ class Worker:
         return corps[0], corps[1:]
 
     def _echec(self, statut: int, charge: bytes):
-        texte = charge.decode("utf-8", "replace")
+        """Aucun texte venant de la stratégie ne passe : seulement le type d'exception, et seulement s'il
+        s'agit d'une exception standard (un nom de classe choisi par la stratégie serait un canal)."""
+        nom = charge.decode("utf-8", "replace")
+        if nom not in EXCEPTIONS_STANDARD:
+            nom = "exception_non_standard"
         if statut == 3:
-            raise FormePoids(f"sortie mal formée : {texte}")
-        raise ErreurEssai(f"erreur de la stratégie : {texte}")
+            raise FormePoids(f"sortie mal formée ({nom})")
+        raise ErreurEssai(f"erreur de la stratégie ({nom})")
 
     def pas(self, jour) -> tuple[np.ndarray, np.ndarray]:
         self._envoyer(("jour", jour.i, jour.spot_1d, jour.spot_1h, jour.perp_1h, jour.funding,
@@ -283,29 +311,46 @@ class Worker:
         return v[: self.n].copy(), v[self.n:].copy()
 
 
+DECALAGE_MIN = 10_000
+
+
+def tirer_decalage() -> int:
+    """Décalage entier aléatoire (os.urandom) ajouté à `Jour.i` : >= 10 000, tiré par essai."""
+    return DECALAGE_MIN + int.from_bytes(os.urandom(4), "big") % (1 << 24)
+
+
 def executer_flux(source: bytes, params: dict, panneau, validateur, timeout_s: float,
-                  verifier_ast: bool = True, jusqu_a_erreur: int | None = None
-                  ) -> tuple[np.ndarray, np.ndarray, int]:
+                  verifier_ast: bool = True, jusqu_a_erreur: int | None = None,
+                  decalage: int | None = None) -> tuple[np.ndarray, np.ndarray, int]:
     """Envoie les jours du panneau (dans l'ordre) à la stratégie ; `validateur(i, ws, wp)` est appelé pour
     chaque jour et lève `FormePoids` si la forme est violée. Renvoie (poids_spot, poids_perp, n_jours_ok)
     avec des tableaux (T, N). Si `jusqu_a_erreur` est donné, une erreur (hors délai) n'est tolérée qu'à
     partir de ce jour (les jours suivants restent à 0 et `n_jours_ok` dit où elle s'est produite) ; sinon
-    toute erreur est levée."""
+    toute erreur est levée.
+
+    Ce que voit la stratégie : le panneau REBASÉ (`Panneau.rebaser` : prix ÷ premier close de la paire,
+    volumes ÷ volume moyen des 30 premiers jours cotés, causal) et un index de jour `Jour.i = décalage + k`
+    où `décalage` (>= 10 000) est tiré par appel : elle peut compter les jours, pas en déduire la date.
+    Le moteur calcule les rendements sur les prix réels (`portefeuille.simuler`), jamais sur ce panneau.
+    Le détail des erreurs ne contient aucun texte de la stratégie : le type d'exception standard et le jour."""
     if verifier_ast:
         verifier_source(source.decode("utf-8", "replace"))
     T, N = panneau.n_jours, panneau.n_paires
+    if decalage is None:
+        decalage = tirer_decalage()
+    vue = panneau.rebaser()
     ws = np.zeros((T, N))
     wp = np.zeros((T, N))
     n_ok = 0
     with Worker(source, N, params, timeout_s) as w:
         for i in range(T):
             try:
-                a, b = w.pas(panneau.jour(i))
+                a, b = w.pas(dataclasses.replace(vue.jour(i), i=decalage + i))
                 validateur(i, a, b)
-            except DelaiDepasse:
-                raise
-            except ErreurEssai:
-                if jusqu_a_erreur is None or i < jusqu_a_erreur:
+            except ErreurEssai as e:
+                if "jour" not in e.detail:
+                    e.detail = f"{e.detail} (jour {i})"
+                if isinstance(e, DelaiDepasse) or jusqu_a_erreur is None or i < jusqu_a_erreur:
                     raise
                 break
             ws[i], wp[i] = a, b

@@ -8,5 +8,5 @@ class Strategie:
 
     def pas(self, jour):
         w = np.zeros(self.n)
-        w[0] = 0.5 if jour.eligibles[0] else 0.0
+        w[0] = 0.5 if jour.eligibles[0] and jour.spot_1d[0, 3] > 1.0 else 0.0
         return w, np.zeros(self.n)

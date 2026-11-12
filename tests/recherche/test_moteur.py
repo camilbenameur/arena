@@ -157,7 +157,7 @@ def test_ast_accepte_strategies_du_depot():
                                  "dunder_import"])
 def test_essai_hostile_jamais_un_resultat(tmp_path, journal, crit, nom):
     p = ecrire(tmp_path, GABARIT.format(corps=HOSTILES[nom]))
-    r = executer_essai(FICHE, p, {}, synthetique(40, 3, 0), journal, crit, causalite=False)
+    r = executer_essai(FICHE, p, {}, synthetique(40, 3, 0), journal, crit, causalite=False, test=True)
     assert r.code == "SOURCE_REFUSEE" and r.serie is None and r.metriques == {}
     assert r.pour_agent() == "SOURCE_REFUSEE"
 
@@ -217,7 +217,7 @@ def test_canari_verifie_les_temoins(monkeypatch):
 def test_timeout_boucle_infinie(tmp_path, journal, crit):
     p = ecrire(tmp_path, GABARIT.format(corps="        while True:\n            pass"))
     t0 = time.time()
-    r = executer_essai(FICHE, p, {}, synthetique(20, 3, 0), journal, crit, causalite=False, timeout_s=2)
+    r = executer_essai(FICHE, p, {}, synthetique(20, 3, 0), journal, crit, causalite=False, timeout_s=2, test=True)
     assert r.code == "TIMEOUT" and time.time() - t0 < 15
     with pytest.raises(DelaiDepasse):
         executer_flux(p.read_bytes(), {}, synthetique(5, 3, 0), lambda *a: None, 1)
@@ -225,12 +225,14 @@ def test_timeout_boucle_infinie(tmp_path, journal, crit):
 
 def test_pas_d_erreur_ni_de_trace_pour_l_agent(tmp_path, journal, crit):
     p = ecrire(tmp_path, GABARIT.format(corps="        raise ValueError('secret 12345')"))
-    r = executer_essai(FICHE, p, {}, synthetique(20, 3, 0), journal, crit, causalite=False)
+    r = executer_essai(FICHE, p, {}, synthetique(20, 3, 0), journal, crit, causalite=False, test=True)
     assert r.pour_agent() == "ERREUR" and r.code in contrat.CODES
-    assert "secret 12345" in r.detail  # réservé à l'orchestrateur
+    # le détail (orchestrateur) ne contient que le type d'exception standard et le jour, jamais le message
+    assert "secret" not in r.detail and "12345" not in r.detail and "ValueError" in r.detail
+    assert "jour 0" in r.detail
     texte = journal.path.read_text()
     assert "secret" not in texte and "Traceback" not in texte
-    assert "secret 12345" in journal.path_technique.read_text()
+    assert "secret" not in journal.path_technique.read_text()
 
 
 # --------------------------------------------------------------------------------------------------
@@ -243,7 +245,7 @@ def _essai_poids(tmp_path, journal, crit, corps, classe="directionnel", avec_per
         "return np.zeros(self.n), np.zeros(self.n)", ""))
     pan = synthetique(30, 4, 0, avec_perp=avec_perp, cotations_tardives=False)
     fiche = FicheEssai("X", classe, "b" * 64)
-    return executer_essai(fiche, p, params or {}, pan, journal, crit, causalite=False)
+    return executer_essai(fiche, p, params or {}, pan, journal, crit, causalite=False, test=True)
 
 
 @pytest.mark.parametrize("retour,classe,code", [
@@ -257,7 +259,7 @@ def _essai_poids(tmp_path, journal, crit, corps, classe="directionnel", avec_per
     ("np.full(self.n, 0.5), np.full(self.n, 0.5)", "couvert", "FORME_POIDS"),            # capital 0,5*4 + 0,25*4 > 1
     ("np.full(self.n, 0.2), np.full(self.n, 0.2)", "couvert", "OK"),                     # 0,8 + 0,4 = 1,2 ? -> voir ci-dessous
     ("np.full(self.n, 0.25), np.zeros(self.n)", "directionnel", "OK"),
-    ("np.full(self.n, 0.25), np.zeros(self.n)", "couvert", "OK"),
+    ("np.full(self.n, 0.25), np.zeros(self.n)", "couvert", "FORME_POIDS"),            # long spot nu : pas une couverture
 ])
 def test_forme_poids(tmp_path, journal, crit, retour, classe, code):
     if classe == "couvert" and code == "OK" and "0.2), np.full(self.n, 0.2)" in retour:
@@ -280,7 +282,7 @@ def test_poids_sur_paire_non_cotee_refuse(tmp_path, journal, crit):
         "\n        return np.zeros(self.n), np.zeros(self.n)\n", "\n"))
     pan = synthetique(60, 6, 3, cotations_tardives=True)
     assert not pan.eligibles.all()
-    r = executer_essai(FICHE, p, {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, p, {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "FORME_POIDS"
 
 
@@ -372,7 +374,7 @@ def test_masque_evaluation(crit):
 def test_acceptation_panier_un_quinzieme(tmp_path, journal, crit):
     N = 15
     pan = synthetique(650, N, 11, avec_1h=False, cotations_tardives=False, debut_jour=DEBUT_2019_09)
-    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "OK", r.detail
     # recalcul indépendant : holdings en unités, valeur, dérive, rotation
     p = pan.spot_1d[:, :, 3]
@@ -403,7 +405,7 @@ def test_acceptation_panier_un_quinzieme(tmp_path, journal, crit):
 
 def test_resultat_journalise_en_chaines(tmp_path, journal, crit):
     pan = synthetique(650, 6, 12, avec_1h=False, cotations_tardives=False, debut_jour=DEBUT_2019_09)
-    r = executer_essai(FICHE, STRAT / "constante.py", {"part": 1.0}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "constante.py", {"part": 1.0}, pan, journal, crit, causalite=False, test=True)
     e = journal.essais()[r.id]
     assert e["fin"]["statut"] == "OK" and e["fin"]["sharpe_net"] == decimal12(r.metriques["sharpe_net"])
     assert len(e["fin"]["sharpe_net"].replace(".", "").replace("-", "").replace("e", "")) <= 16
@@ -452,7 +454,7 @@ def test_acceptation_f1_flux_contre_reference_vectorisee(tmp_path, journal, crit
     pan = synthetique(700, 15, 21, avec_1h=False, cotations_tardives=True, debut_jour=DEBUT_2019_09)
     ref_net, ref_rot = f1_reference(pan, L, k, H)
     r = executer_essai(FICHE, STRAT / "f1_labo.py", {"L": L, "k": k, "H": H}, pan, journal, crit,
-                       convention_rotation="cible", cout_spot_bp=15, causalite=False)
+                       convention_rotation="cible", cout_spot_bp=15, causalite=False, test=True)
     assert r.code == "OK", r.detail
     s = r.serie
     assert np.allclose(s.rendements_nets, ref_net, atol=1e-12, rtol=0)
@@ -468,7 +470,7 @@ def test_f1_invariant_a_la_permutation_des_colonnes(tmp_path, journal, crit):
     series = []
     for _ in range(3):
         r = executer_essai(FICHE, STRAT / "f1_labo.py", {}, pan, journal, crit, causalite=False,
-                           permutation=rng.permutation(15))
+                           permutation=rng.permutation(15), test=True)
         assert r.code == "OK"
         series.append(r.serie.rendements_nets)
     assert np.allclose(series[0], series[1], atol=1e-12) and np.allclose(series[0], series[2], atol=1e-12)
@@ -490,15 +492,16 @@ def test_causalite_stateful_passe(crit):
     assert verifier_causalite((STRAT / "memoire_sens.py").read_bytes(), {}, crit)["ok"]
 
 
-def test_causalite_detecte_echelle_et_colonne(crit):
+def test_causalite_detecte_colonne_et_le_rebasage_neutralise_l_echelle(crit):
+    # le niveau absolu des prix n'est plus transmis (rebasage) : fuite_echelle ne peut plus lire le niveau
     a = verifier_causalite((STRAT / "fuite_echelle.py").read_bytes(), {}, crit)
-    assert not a["ok"] and a["ecart_echelle"] > 1e-9
+    assert a["ecart_echelle"] <= 1e-9
     b = verifier_causalite((STRAT / "fuite_colonne.py").read_bytes(), {}, crit)
     assert not b["ok"] and b["ecart_permutation"] > 1e-9
 
 
 def test_essai_code_causalite(tmp_path, journal, crit):
-    r = executer_essai(FICHE, STRAT / "fuite_echelle.py", {}, synthetique(80, 5, 4), journal, crit)
+    r = executer_essai(FICHE, STRAT / "fuite_colonne.py", {}, synthetique(80, 5, 4), journal, crit, test=True)
     assert r.code == "CAUSALITE" and r.serie is None
     assert journal.essais()[r.id]["fin"]["statut"] == "CAUSALITE"
 
@@ -573,7 +576,7 @@ def test_essai_couvert(tmp_path, journal, crit):
     pan = synthetique(650, 6, 33, avec_1h=False, avec_perp=True, cotations_tardives=False, debut_jour=DEBUT_2019_09)
     fiche = FicheEssai("carry", "couvert", "c" * 64)
     r = executer_essai(fiche, STRAT / "couvert_simple.py", {"taille": 0.25, "k": 2}, pan, journal, crit,
-                       causalite=False)
+                       causalite=False, test=True)
     assert r.code == "OK", r.detail
     s = r.serie
     ws, wp = s.poids_spot, s.poids_perp
@@ -591,7 +594,7 @@ def test_essai_couvert(tmp_path, journal, crit):
 def test_perp_non_fourni_en_directionnel(tmp_path, journal, crit):
     """Une fiche directionnel ne reçoit ni barres perp ni funding : une stratégie qui les exige échoue."""
     pan = synthetique(40, 4, 1, avec_perp=True, cotations_tardives=False)
-    r = executer_essai(FICHE, STRAT / "couvert_simple.py", {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "couvert_simple.py", {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "ERREUR"
 
 
@@ -619,7 +622,7 @@ def test_debut_avant_fin_et_ordre(tmp_path, journal, crit, monkeypatch):
 
     monkeypatch.setattr(bac_a_sable, "executer_flux", espion)
     pan = synthetique(30, 4, 1, avec_1h=False)
-    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False, test=True)
     assert vu["types"] == ["genese_labo", "debut"]  # `debut` est déjà écrit avant le calcul
     assert [e["type"] for e in journal.evenements()] == ["genese_labo", "debut", "fin"]
     assert journal.n_ids() == 1 and r.id == "R0001"
@@ -628,14 +631,14 @@ def test_debut_avant_fin_et_ordre(tmp_path, journal, crit, monkeypatch):
 
 def test_essai_echoue_compte_et_ferme(tmp_path, journal, crit):
     p = ecrire(tmp_path, "import numpy as np\nclass Strategie:\n    def __init__(self, n):\n        pass\n    def pas(self, jour):\n        return 1 / 0\n")
-    executer_essai(FICHE, p, {}, synthetique(20, 3, 0), journal, crit, causalite=False)
+    executer_essai(FICHE, p, {}, synthetique(20, 3, 0), journal, crit, causalite=False, test=True)
     ev = journal.essais()
     assert list(ev) == ["R0001"] and ev["R0001"]["fin"]["statut"] == "ERREUR"
 
 
 def test_pas_de_float_dans_le_journal(tmp_path, journal, crit):
     pan = synthetique(650, 6, 12, avec_1h=False, cotations_tardives=False, debut_jour=DEBUT_2019_09)
-    executer_essai(FICHE, STRAT / "constante.py", {"part": 0.5}, pan, journal, crit, causalite=False)
+    executer_essai(FICHE, STRAT / "constante.py", {"part": 0.5}, pan, journal, crit, causalite=False, test=True)
     assert Journal(journal.path).verify().ok  # verify signale tout float
     assert "float_present" not in Journal(journal.path).verify().codes()
 
@@ -644,9 +647,9 @@ def test_plafond_total(tmp_path, journal, crit):
     petit = dataclasses.replace(crit, plafond_total=2)
     pan = synthetique(30, 4, 1, avec_1h=False)
     for _ in range(2):
-        executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, petit, causalite=False)
+        executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, petit, causalite=False, test=True)
     with pytest.raises(PlafondError):
-        executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, petit, causalite=False)
+        executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, petit, causalite=False, test=True)
     assert journal.n_ids() == 2
 
 
@@ -656,8 +659,9 @@ def test_ancrage_et_verification(tmp_path, journal, crit):
     for _ in range(2):
         executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False, journal_arene=arene)
     ev = [e for e in Journal(arene).iter_events()]
-    assert [e["type"] for e in ev] == ["research_anchor"] * 2
-    assert ev[-1]["payload"] == {"tete": journal.tete(), "n_lignes": journal.n_lignes(), "journal": "essais.jsonl"}
+    assert [e["type"] for e in ev] == ["research_anchor"] * 4  # après chaque debut ET chaque fin
+    assert ev[-1]["payload"] == {"tete": journal.tete(), "n_lignes": journal.n_lignes(), "journal": "essais.jsonl",
+                                 "genese": journal.hash_genese()}
     journal.verifier_ancrage(arene)
     # journal tronqué (réécriture de l'historique) -> refus
     sauve = journal.path.read_bytes()
@@ -665,15 +669,23 @@ def test_ancrage_et_verification(tmp_path, journal, crit):
     journal.path.write_bytes(b"\n".join(lignes[:-3]) + b"\n")
     with pytest.raises(AncrageError, match="dernier ancrage"):
         journal.verifier_ancrage(arene)
-    # même longueur, historique réécrit (une ligne remplacée et la chaîne recalculée) -> tête absente
+    # même longueur, même genèse, historique réécrit (une ligne remplacée, chaîne recalculée) -> tête absente
     journal.path.write_bytes(sauve)
-    alt = JournalRecherche(tmp_path / "alt.jsonl", depot_labo=journal.depot_labo, horloge=lambda: 5)
-    alt.journal.append("genese_labo", {"tag": "x", "n_lignes": 1, "tete": "0" * 64}, 5)
+    alt = JournalRecherche(tmp_path / "alt.jsonl", depot_labo=journal.depot_labo, horloge=lambda: 1_700_000_000)
+    alt.demarrer()
+    assert alt.hash_genese() == journal.hash_genese()
     for k in range(journal.n_lignes() - 1):
         alt.journal.append("debut", {"id": f"R{k:04d}"}, 5)
-    renomme = tmp_path / "essais.jsonl"
-    renomme.write_bytes(alt.path.read_bytes())
+    journal.path.write_bytes(alt.path.read_bytes())
     with pytest.raises(AncrageError, match="tête ancrée"):
+        journal.verifier_ancrage(arene)
+    # journal recréé avec une autre genèse -> refus
+    alt2 = JournalRecherche(tmp_path / "alt2.jsonl", depot_labo=journal.depot_labo, horloge=lambda: 5)
+    alt2.journal.append("genese_labo", {"tag": "x", "n_lignes": 1, "tete": "0" * 64}, 5)
+    for k in range(journal.n_lignes() - 1):
+        alt2.journal.append("debut", {"id": f"R{k:04d}"}, 5)
+    journal.path.write_bytes(alt2.path.read_bytes())
+    with pytest.raises(AncrageError, match="genèse"):
         journal.verifier_ancrage(arene)
     # un essai refuse de démarrer si l'ancrage n'est pas respecté
     with pytest.raises(AncrageError):
@@ -713,7 +725,7 @@ def test_performance_taille_reelle(tmp_path, journal, crit):
     """~3 830 jours (échauffement compris) x 15 paires avec les barres 1 h : bien sous 60 s."""
     pan = synthetique(3830, 15, 77, avec_1h=True, debut_jour=DEBUT_2018)
     t0 = time.time()
-    r = executer_essai(FICHE, STRAT / "f1_labo.py", {"L": 20, "k": 3, "H": 10}, pan, journal, crit)
+    r = executer_essai(FICHE, STRAT / "f1_labo.py", {"L": 20, "k": 3, "H": 10}, pan, journal, crit, test=True)
     dt = time.time() - t0
     assert r.code == "OK", r.detail
     assert r.metriques["T"] == 2373 - 0 or r.metriques["T"] > 2000
@@ -750,7 +762,8 @@ def _donnees_depuis_panneau(pan, controle=None):
         funding[s] = pd.DataFrame({"taux": tx, "connue_a": np.array(ts) + 1},
                                   index=pd.to_datetime(ts, unit="s").as_unit("ns"))
     return Donnees(racine=Path("."), manifeste_sha256="0" * 64, univers=pan.symboles, controle=(),
-                   spot_1d=spot_1d, spot_1h=spot_1h, perp_1h=perp_1h, funding=funding, controle_1d=controle or {})
+                   spot_1d=spot_1d, spot_1h=spot_1h, perp_1h=perp_1h, funding=funding, controle_1d=controle or {},
+                   controle_1h={}, controle_perp_1h={}, controle_funding={})
 
 
 def test_panneau_depuis_donnees_aller_retour():
@@ -778,9 +791,9 @@ def test_essai_univers_arene_et_controle(tmp_path, journal, crit):
     pan = synthetique(650, 15, 4, avec_1h=False, cotations_tardives=False, debut_jour=DEBUT_2019_09)
     arene = tuple(crit.univers_arene)
     pan = dataclasses.replace(pan, symboles=tuple(crit.univers))
-    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, univers="arene", causalite=False)
+    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, univers="arene", causalite=False, test=True)
     assert r.code == "OK" and r.serie.symboles == arene
     r2 = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, univers="controle:BTCUSDT",
-                        causalite=False)
+                        causalite=False, test=True)
     assert r2.code == "OK" and r2.serie.symboles == ("BTCUSDT",) and r2.serie.poids_spot.shape[1] == 1
     assert [e["univers"] for e in (v["debut"] for v in journal.essais().values())] == ["arene", "controle:BTCUSDT"]

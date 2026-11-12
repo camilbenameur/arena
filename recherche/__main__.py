@@ -1,9 +1,15 @@
 """CLI de la recherche : `uv run python -m recherche <commande>`.
 
 Commandes : donnees-construire, canari, vague <n> [--geler], statuts, verifier.
-Valeurs par défaut : données `var/recherche/donnees`, fiches `recherche/fiches/vague-<n>`, stratégies
-`recherche/strategies`, journal `recherche/essais.jsonl`, rapports `recherche/rapports`. Le journal de l'arène
-(ancrage `research_anchor`) est `var/journal/events.jsonl`, sauf `--sans-ancrage` ou `--journal-arene`.
+Valeurs par défaut : données `var/recherche/donnees`, fiches `recherche/vagues/<n>/fiches`, stratégies
+`recherche/vagues/<n>/strategies`, décision du propriétaire `recherche/vagues/<n>/DECISION-OWNER.md`, journal
+`recherche/essais.jsonl`, rapports `recherche/rapports`. Le journal de l'arène (ancrage `research_anchor`) est
+`var/journal/events.jsonl`, sauf `--sans-ancrage` ou `--journal-arene`.
+
+Le gel est toujours vérifié contre le tag git `recherche-vague-<n>-fiches` ; il n'existe aucune option pour
+s'en passer. `criteres.yaml` est comparé à son sha256 figé (tag `recherche-protocole-v1`) avant tout essai.
+La sortie de `vague` et de `statuts` (lue par des agents) ne contient que les statuts binaires ; les chiffres
+sont dans `vague-<n>.md`, pour l'orchestrateur et the owner.
 """
 
 from __future__ import annotations
@@ -13,13 +19,12 @@ import json
 import sys
 from pathlib import Path
 
-from recherche.config import REPO, charger_criteres
+from recherche.config import REPO, CriteresError, charger_criteres, verifier_criteres
 
 DONNEES = REPO / "var" / "recherche" / "donnees"
 JOURNAL = REPO / "recherche" / "essais.jsonl"
 RAPPORTS = REPO / "recherche" / "rapports"
-FICHES = REPO / "recherche" / "fiches"
-STRATEGIES = REPO / "recherche" / "strategies"
+VAGUES = REPO / "recherche" / "vagues"
 JOURNAL_ARENE = REPO / "var" / "journal" / "events.jsonl"
 
 
@@ -40,27 +45,42 @@ def _construire(a) -> int:
 
 
 def _vague(a) -> int:
-    from recherche.donnees import charger
-    from recherche.moteur.journal import JournalRecherche
     from recherche.vague import VagueError, executer_vague, geler_fiches
 
-    fiches = Path(a.fiches) / f"vague-{a.numero}"
+    base = Path(a.vagues) / str(a.numero)
+    fiches, strategies = base / "fiches", base / "strategies"
     if a.geler:
         man = geler_fiches(fiches)
-        print(f"{len(man)} fiches gelées dans {fiches / 'MANIFESTE.json'} : à commiter avant de lancer la vague")
+        print(f"{len(man)} fiches gelées dans {fiches / 'MANIFESTE.json'} : à commiter avec les stratégies, "
+              f"puis étiqueter recherche-vague-{a.numero}-fiches, avant de lancer la vague")
         return 0
-    crit = charger_criteres()
-    donnees = charger(a.donnees, crit)
-    journal = JournalRecherche(a.journal)
-    ancre = None if a.sans_ancrage else Path(a.journal_arene)
+    from recherche.donnees import charger
+    from recherche.moteur.journal import JournalRecherche
+
+    if a.sans_ancrage:
+        print("vague refusée : l'ancrage externe est obligatoire pour une vague (--sans-ancrage refusé)",
+              file=sys.stderr)
+        return 2
     try:
-        rap = executer_vague(a.numero, fiches, a.strategies, donnees, journal, crit, rapports_dir=a.rapports,
-                             journal_arene=ancre, verifier_git=not a.sans_git, decision_ecrite=a.decision_ecrite)
-    except VagueError as e:
+        crit = charger_criteres()
+        verifier_criteres(crit)
+        donnees = charger(a.donnees, crit)
+        journal = JournalRecherche(a.journal)
+        ancre = Path(a.journal_arene)
+        rap = executer_vague(a.numero, fiches, strategies, donnees, journal, crit, rapports_dir=a.rapports,
+                             journal_arene=ancre, decision_path=base / "DECISION-OWNER.md")
+    except (VagueError, CriteresError) as e:
         print(f"vague refusée : {e}", file=sys.stderr)
         return 2
-    print(f"vague {a.numero} : {rap.n_essais_vague} essais, candidats {rap.candidats or 'aucun'}, "
-          f"arrêt {'oui' if rap.arret else 'non'} ; rapport {rap.chemin_rapport}")
+    # Sortie destinée aux agents : statuts binaires uniquement (aucun chiffre, aucun identifiant d'essai).
+    print(f"vague {a.numero} terminée{' (INCOMPLÈTE : plafond atteint)' if rap.plafond_atteint else ''}.")
+    return _afficher_statuts(rap.chemin_statuts)
+
+
+def _afficher_statuts(f: Path) -> int:
+    print(f"# {f.name}")
+    for s in json.loads(f.read_text()):
+        print(f"- {s['nom']} : {s['verdict']} ({s['mecanisme']})")
     return 0
 
 
@@ -70,9 +90,7 @@ def _statuts(a) -> int:
         print("aucun statut")
         return 0
     for f in fichiers:
-        print(f"# {f.name}")
-        for s in json.loads(f.read_text()):
-            print(f"- {s['nom']} : {s['verdict']} ({s['mecanisme']})")
+        _afficher_statuts(f)
     return 0
 
 
@@ -88,7 +106,11 @@ def _verifier(a) -> int:
         ok &= bon
         print(f"{'OK    ' if bon else 'ECHEC '} {nom}{' : ' + detail if detail else ''}")
 
-    rapport("criteres.yaml", True, crit.sha256[:16])
+    try:
+        verifier_criteres(crit)
+        rapport("criteres.yaml", True, crit.sha256[:16])
+    except CriteresError as e:
+        rapport("criteres.yaml", False, str(e)[:200])
     try:
         verifier_manifeste(a.donnees)
         rapport("manifeste des données", True)
@@ -119,10 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     v = sp.add_parser("vague")
     v.add_argument("numero", type=int)
     v.add_argument("--geler", action="store_true", help="écrit MANIFESTE.json des fiches (avant le commit)")
-    v.add_argument("--fiches", default=str(FICHES))
-    v.add_argument("--strategies", default=str(STRATEGIES))
-    v.add_argument("--sans-git", action="store_true")
-    v.add_argument("--decision-ecrite", default=None)
+    v.add_argument("--vagues", default=str(VAGUES), help="dossier des vagues (<n>/fiches, <n>/strategies)")
     v.set_defaults(f=_vague)
     sp.add_parser("statuts").set_defaults(f=_statuts)
     sp.add_parser("verifier").set_defaults(f=_verifier)

@@ -7,7 +7,8 @@ héritée). Dialogue par stdin/stdout, trames `uint32 longueur + charge utile`.
                        funding, eligibles, eligibles_perp) | ("fin",)
     worker -> parent : 1 octet de statut puis, selon le statut :
                        0 = poids : 2 x n_paires float64 (spot puis perp), 2 = prêt (vide),
-                       1 = erreur de la stratégie (texte), 3 = sortie mal formée (texte)
+                       1 = erreur de la stratégie, 3 = sortie mal formée : la charge est le NOM du type
+                       d'exception seulement (jamais de message ni de trace : canal de sortie)
 
 Le parent ne désérialise JAMAIS (pickle) ce que le worker écrit : seuls des octets bruts et du texte.
 Ce fichier n'importe ni le dépôt ni `arene`. Il est copié tel quel dans le bac à sable.
@@ -19,7 +20,6 @@ import pickle
 import resource
 import struct
 import sys
-import traceback
 
 IMPORTS_PERMIS = frozenset({"math", "statistics", "numpy", "collections", "itertools", "functools", "heapq",
                             "bisect"})
@@ -89,8 +89,8 @@ def main():
     try:
         code = builtins.compile(source, "strategie.py", "exec")
         builtins.exec(code, ns)  # noqa: S102
-    except BaseException:  # noqa: BLE001
-        sortie.trame(ST_ERREUR, traceback.format_exc()[-1500:].encode("utf-8", "replace"))
+    except BaseException as e:  # noqa: BLE001
+        sortie.trame(ST_ERREUR, type(e).__name__[:64].encode("utf-8", "replace"))
         return 0
     while True:
         try:
@@ -110,8 +110,8 @@ def main():
             _, i, s1d, s1h, p1h, funding, elig, elp = msg
             res = strategie.pas(Jour(i=i, spot_1d=s1d, spot_1h=s1h, perp_1h=p1h, funding=funding,
                                      eligibles=elig, eligibles_perp=elp))
-        except BaseException:  # noqa: BLE001
-            sortie.trame(ST_ERREUR, traceback.format_exc()[-1500:].encode("utf-8", "replace"))
+        except BaseException as e:  # noqa: BLE001
+            sortie.trame(ST_ERREUR, type(e).__name__[:64].encode("utf-8", "replace"))
             return 0
         try:
             if isinstance(res, tuple) and len(res) == 2:
@@ -121,7 +121,7 @@ def main():
             if ws.shape != (n,) or wp.shape != (n,):
                 raise ValueError(f"formes {ws.shape} {wp.shape}, ({n},) attendu")
         except BaseException as e:  # noqa: BLE001
-            sortie.trame(ST_FORME, f"{type(e).__name__}: {e}"[:500].encode("utf-8", "replace"))
+            sortie.trame(ST_FORME, type(e).__name__[:64].encode("utf-8", "replace"))
             return 0
         sortie.trame(ST_POIDS, ws.tobytes() + wp.tobytes())
 

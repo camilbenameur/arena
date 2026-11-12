@@ -2,7 +2,8 @@
 
 r = taker_buy_base / volume (barre 1 j), moyenne simple sur L jours ; la paire n'est classable que si les L
 derniers jours sont tous valides (cotée, volume > 0). Tous les H jours (numéro d'ordre du flux, sans date),
-les k paires de r lissé le plus haut reçoivent 1/k ; poids conservés entre deux reconstitutions. Égalités :
+les k paires de r lissé le plus haut reçoivent 1/k ; poids conservés entre deux reconstitutions.
+Le rang du jour est compté par la stratégie (`Jour.i` est décalé d'un entier aléatoire par le moteur). Égalités :
 ordre d'index (le labo : ordre alphabétique ; indiscernable hors égalité exacte, que les colonnes anonymes
 ne permettent pas de définir autrement).
 """
@@ -17,6 +18,7 @@ class Strategie:
         self.H = H
         self.hist = np.full((L, n_paires), np.nan)
         self.poids = np.zeros(n_paires)
+        self.rang = -1
 
     def pas(self, jour):
         v = jour.spot_1d[:, 4]
@@ -24,7 +26,8 @@ class Strategie:
         valide = jour.eligibles & (v > 0)
         r = np.where(valide, tb / np.where(v > 0, v, 1.0), np.nan)
         self.hist = np.vstack([self.hist[1:], r[None, :]])
-        if jour.i % self.H == 0:
+        self.rang += 1
+        if self.rang % self.H == 0:
             rbar = self.hist.mean(axis=0)  # NaN si un des L jours est invalide
             ok = np.isfinite(rbar)
             ordre = np.lexsort((np.arange(self.n), -np.where(ok, rbar, 0.0)))

@@ -155,17 +155,35 @@ def retirer_meilleurs_jours(r, part: float):
     return np.sort(v)[:-k], k
 
 
-def sharpe_par_annee(r: pd.Series, annees: Sequence[int]) -> dict[int, float]:
-    """Sharpe annualisé par année civile ; NaN si l'année est absente."""
+def _plat(x) -> bool:
+    """Au moins 2 points, tous exactement nuls (stratégie à plat : écart-type nul, Sharpe NaN)."""
+    v = _arr(x)
+    return len(v) >= 2 and bool(np.all(v == 0.0))
+
+
+def sharpe_par_annee(r: pd.Series, annees: Sequence[int], *, plat_vaut_zero: bool = False) -> dict[int, float]:
+    """Sharpe annualisé par année civile ; NaN si l'année est absente.
+
+    Une année à rendement exactement nul (stratégie à plat toute l'année) a un écart-type nul, donc un
+    Sharpe NaN. Avec `plat_vaut_zero`, elle vaut 0,0 : « non positive et non sous −1 » pour C5.
+    """
     out = {}
     for a in annees:
         sel = r[r.index.year == a]
-        out[int(a)] = sharpe(sel) if len(sel) >= 2 else float("nan")
+        if plat_vaut_zero and _plat(sel):
+            out[int(a)] = 0.0
+        else:
+            out[int(a)] = sharpe(sel) if len(sel) >= 2 else float("nan")
     return out
 
 
 def sharpe_moities(r) -> tuple[float, float]:
-    """Sharpe de chaque moitié de la fenêtre (première moitié = n // 2 premiers jours)."""
+    """Sharpe de chaque moitié de la fenêtre (première moitié = n // 2 premiers jours).
+
+    Une moitié entièrement à plat (rendements tous nuls) a un Sharpe de 0,0 (et non NaN) : C13 exige
+    > 0 dans chaque moitié, donc une moitié à plat fait échouer C13.
+    """
     x = _arr(r)
     h = len(x) // 2
-    return sharpe(x[:h]), sharpe(x[h:])
+    moities = (x[:h], x[h:])
+    return tuple(0.0 if _plat(m) else sharpe(m) for m in moities)  # type: ignore[return-value]

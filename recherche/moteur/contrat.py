@@ -12,6 +12,7 @@ Un fichier `strategie.py` définit :
 termine ce jour (barre journalière complète, ses 24 barres de 1 h, les échéances de funding du jour).
 La stratégie ne reçoit ni date ni nom de paire : l'ordre des colonnes est permuté à chaque essai.
 `poids_perp[j]` est un notionnel court en fraction du capital (>= 0).
+Prix et volumes reçus sont rebasés et `Jour.i` est décalé d'un entier aléatoire : voir `Jour`.
 """
 
 from __future__ import annotations
@@ -66,7 +67,9 @@ class Causalite(ErreurEssai):
 
 @dataclass(frozen=True, slots=True)
 class Jour:
-    """Message du jour `i` (0 = premier jour de la fenêtre complète, échauffement compris)."""
+    """Message du jour. `i` = décalage entier aléatoire (>= 10 000, tiré par essai) + rang du jour dans le flux :
+    la stratégie peut compter les jours, pas en déduire la date. Prix et volumes sont REBASÉS par paire
+    (`Panneau.rebaser`) : prix ÷ premier close de la paire, volumes ÷ volume moyen des 30 premiers jours cotés."""
 
     i: int
     spot_1d: np.ndarray  # (n_paires, 6) o,h,l,c,v,taker_buy_base ; zéros tant que la paire n'est pas cotée

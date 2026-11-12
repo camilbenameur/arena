@@ -31,7 +31,23 @@ class CoupureError(Exception):
 
 
 class CriteresError(Exception):
-    """`criteres.yaml` est invalide ou incohérent."""
+    """`criteres.yaml` est invalide, incohérent ou différent de la version figée."""
+
+
+#: sha256 de `recherche/criteres.yaml` au tag git `recherche-protocole-v1`
+#: (`git show recherche-protocole-v1:recherche/criteres.yaml | sha256sum`). Un test relit le tag et compare.
+SHA256_CRITERES_V1 = "c41ee23abc54c013a5bd576afdb7d51108e88d6d514751c7c6d469497653ab45"
+TAG_PROTOCOLE = "recherche-protocole-v1"
+
+
+def verifier_criteres(criteres: Criteres, attendu: str = SHA256_CRITERES_V1) -> None:
+    """Lève `CriteresError` si le sha256 de `criteres` n'est pas celui du fichier figé au tag
+    `recherche-protocole-v1`. À appeler avant tout essai : `executer_vague` (avant chaque essai), la
+    commande `verifier` de la CLI, et `executer_essai` du moteur."""
+    if criteres.sha256 != attendu:
+        raise CriteresError(
+            f"criteres.yaml modifié : sha256 {criteres.sha256[:16]}... au lieu de {attendu[:16]}... "
+            f"(version figée au tag {TAG_PROTOCOLE}) ; aucun essai n'est lancé")
 
 
 class Section(Mapping):

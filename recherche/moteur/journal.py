@@ -2,7 +2,15 @@
 
 Types d'événements : `genese_labo` (première ligne), `debut` (avant le calcul), `fin` (après). Aucun float :
 les métriques sont des chaînes décimales à 12 chiffres significatifs (`decimal12`). Le détail technique d'un
-échec (traces) ne va jamais dans ce journal mais dans `<journal>.technique.jsonl`, lu par l'orchestrateur.
+échec ne va jamais dans ce journal mais dans `<journal>.technique.jsonl`, lu par l'orchestrateur ; il ne
+contient aucun texte venant d'une stratégie (code fermé, type d'exception standard, numéro de jour).
+
+Canal temporel : tous les horodatages écrits (journal, journal technique, ancres) sont arrondis à la minute.
+
+Ancrage : chaque événement `research_anchor` du journal de l'arène porte la tête, le nombre de lignes, le nom
+du journal ET le hash de la ligne `genese_labo` (première ligne). `verifier_ancrage` compare la dernière ancre
+(quel que soit le nom sous lequel elle a été écrite) au journal : nom, genèse, longueur, tête. Un journal
+renommé, recréé ou réécrit est refusé.
 """
 
 from __future__ import annotations
@@ -62,12 +70,18 @@ class JournalRecherche:
         self.journal = Journal(self.path)
         self.depot_labo = Path(depot_labo)
         self.tag_labo = tag_labo
-        self._horloge = horloge or (lambda: int(time.time()))
+        self._horloge = horloge or (lambda: int(time.time()))  # arrondi à la minute par `_ts`
         self.path_technique = self.path.with_name(self.path.name + ".technique.jsonl")
 
     # --- écriture --------------------------------------------------------------------------------
+    def _ts(self) -> int:
+        """Horodatage arrondi à la minute (le canal temporel d'une stratégie qui ralentit ou accélère est
+        ainsi ramené à un pas de 60 s)."""
+        h = int(self._horloge())
+        return h - h % 60
+
     def _ajouter(self, type_: str, payload: dict) -> dict:
-        return self.journal.append(type_, _sans_float(payload), self._horloge())
+        return self.journal.append(type_, _sans_float(payload), self._ts())
 
     def genese_labo(self) -> dict:
         """Première ligne : tête (sha256 de la dernière ligne) et nombre de lignes du journal du labo au tag
@@ -101,7 +115,7 @@ class JournalRecherche:
 
     def technique(self, essai_id: str, detail: str) -> None:
         """Détail d'un échec, pour l'orchestrateur seulement (fichier non chaîné)."""
-        ligne = json.dumps({"ts": self._horloge(), "id": essai_id, "detail": detail[-4000:]},
+        ligne = json.dumps({"ts": self._ts(), "id": essai_id, "detail": detail[-4000:]},
                            ensure_ascii=False)
         with open(self.path_technique, "a", encoding="utf-8") as f:
             f.write(ligne + "\n")
@@ -141,25 +155,34 @@ class JournalRecherche:
             raise JournalError(f"journal de recherche corrompu : {rapport.codes()}")
 
     # --- ancrage ---------------------------------------------------------------------------------
+    def hash_genese(self) -> str | None:
+        """Hash de la première ligne (`genese_labo`) ; None si le journal est vide."""
+        premiere = next(iter(self.journal.iter_events()), None)
+        return None if premiere is None else premiere["hash"]
+
     def ancrer(self, journal_arene_path: str | Path | None) -> dict | None:
-        """Écrit `research_anchor {tete, n_lignes}` dans le journal de l'arène, seulement si un chemin est
-        fourni. Renvoie l'enregistrement écrit (ou None)."""
+        """Écrit `research_anchor {tete, n_lignes, journal, genese}` dans le journal de l'arène, seulement si
+        un chemin est fourni. Renvoie l'enregistrement écrit (ou None)."""
         if journal_arene_path is None:
             return None
         return Journal(journal_arene_path).append(
-            TYPE_ANCRE, {"tete": self.tete(), "n_lignes": self.n_lignes(), "journal": self.path.name},
-            self._horloge())
+            TYPE_ANCRE, {"tete": self.tete(), "n_lignes": self.n_lignes(), "journal": self.path.name,
+                         "genese": self.hash_genese()}, self._ts())
 
     def verifier_ancrage(self, journal_arene_path: str | Path | None) -> None:
-        """Refuse si le journal est plus court que le dernier ancrage ou si la tête ancrée n'y figure pas."""
+        """Refuse un journal dont le nom ou la genèse ne correspondent pas à la dernière ancre, plus court que
+        elle, ou dont la tête ancrée est absente. Sans ancre dans le journal de l'arène : rien à vérifier."""
         self.verifier()
         if journal_arene_path is None:
             return
-        ancres = [e for e in Journal(journal_arene_path).iter_events() if e["type"] == TYPE_ANCRE
-                  and e["payload"].get("journal") == self.path.name]
+        ancres = [e for e in Journal(journal_arene_path).iter_events() if e["type"] == TYPE_ANCRE]
         if not ancres:
             return
         derniere = ancres[-1]["payload"]
+        if derniere.get("journal") != self.path.name:
+            raise AncrageError("journal renommé ou autre journal : le nom ne correspond pas à la dernière ancre")
+        if derniere.get("genese") != self.hash_genese():
+            raise AncrageError("la genèse du journal ne correspond pas à la dernière ancre (journal recréé)")
         n = derniere["n_lignes"]
         if self.n_lignes() < n:
             raise AncrageError(f"journal de {self.n_lignes()} lignes, dernier ancrage à {n}")

@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from recherche.portes import dsr as dsr_mod
@@ -102,8 +103,16 @@ def _ok_le(valeur, seuil) -> bool:
 
 
 # ----------------------------------------------------------------------------- C1
-def variance_de_classe(classe: str, tous: Sequence[Any], T: int) -> float:
-    """V de la classe : essais de recherche (univers principal) de la classe, variance par famille."""
+def variance_de_classe(classe: str, tous: Sequence[Any], T: int,
+                       sr_jours_recherche: Mapping[str, Mapping[str, Sequence[float]]] | None = None) -> float:
+    """V de la classe (PROTOCOLE §5 durci) : max(1/(T-1), variance intra-famille moyenne pondérée, variance
+    de l'ensemble des sr_jour de la classe).
+
+    `sr_jours_recherche` : classe -> famille -> sr_jour de TOUS les essais de recherche (univers principal)
+    du journal, toutes vagues et reprises comprises (`vague.sr_jours_du_journal`). Sans lui (tests, usage
+    isolé), on prend les essais de `tous` de la classe, univers principal."""
+    if sr_jours_recherche is not None:
+        return dsr_mod.variance_classe(dict(sr_jours_recherche.get(classe, {})), T)
     par_famille: dict[str, list[float]] = {}
     for r in tous:
         if r.classe != classe or getattr(r, "univers", "principal") != "principal":
@@ -128,8 +137,13 @@ def porte_c1(net, N: int, V: float, seuil: float) -> tuple[Porte, dict]:
 
 # ----------------------------------------------------------------------------- C5
 def porte_c5(net: pd.Series, cfg) -> Porte:
+    """Années civiles : aucune sous `sharpe_min_par_annee`, au moins `annees_positives_min` positives.
+
+    Une année à rendement exactement nul (stratégie à plat toute l'année : écart-type nul, Sharpe NaN) est
+    traitée comme « non positive et non sous −1 » (Sharpe 0,0) : elle ne fait pas échouer C5 à elle seule mais
+    ne compte pas parmi les années positives. Une année absente (moins de 2 jours) reste un échec."""
     annees = list(cfg["annees"])
-    sh = stats.sharpe_par_annee(net, annees)
+    sh = stats.sharpe_par_annee(net, annees, plat_vaut_zero=True)
     vals = [sh[a] for a in annees]
     if not all(_finite(v) for v in vals):
         return (False, sh, dict(cfg))
@@ -170,6 +184,29 @@ def _meme_point(p: Mapping[str, float], q: Mapping[str, float]) -> bool:
     return set(p) == set(q) and all(math.isclose(float(p[k]), float(q[k]), rel_tol=1e-9, abs_tol=1e-12) for k in p)
 
 
+#: Un voisin dont la série nette est corrélée à plus de CORR_VOISIN_IDENTIQUE avec celle du candidat ET dont
+#: la rotation est identique à TOL_ROTATION_IDENTIQUE près est le même comportement (paramètre ignoré).
+CORR_VOISIN_IDENTIQUE = 0.999
+TOL_ROTATION_IDENTIQUE = 1e-9
+#: C7 exige au moins ce nombre de voisins distincts.
+VOISINS_DISTINCTS_MIN = 2
+
+
+def _voisin_identique(candidat: Any, voisin: Any) -> bool:
+    """Vrai si `voisin` ne se distingue pas de `candidat` : corrélation des rendements nets > 0,999 et
+    rotation égale à 1e-9 près (alignement par date). Série constante : identique si les valeurs sont égales."""
+    a, b = candidat.net.align(voisin.net, join="inner")
+    ra, rb = candidat.rotation.align(voisin.rotation, join="inner")
+    if len(a) < 2 or len(ra) < 1:
+        return False
+    if float(np.abs(ra.to_numpy(dtype=float) - rb.to_numpy(dtype=float)).max()) > TOL_ROTATION_IDENTIQUE:
+        return False
+    va, vb = a.to_numpy(dtype=float), b.to_numpy(dtype=float)
+    if va.std() == 0.0 or vb.std() == 0.0:
+        return bool(np.allclose(va, vb, rtol=0.0, atol=1e-15))
+    return float(np.corrcoef(va, vb)[0, 1]) > CORR_VOISIN_IDENTIQUE
+
+
 def porte_c7(
     candidat: Any,
     tous: Sequence[Any],
@@ -198,7 +235,7 @@ def porte_c7(
         pos[p] = idx[0]
     s_cand = stats.sharpe(candidat.net)
     seuil_voisin = max(cfg["ratio_sharpe_voisin_min"] * s_cand, cfg["sharpe_voisin_min"])
-    voisins, bons = [], 0
+    voisins, bons, identiques = [], 0, []
     pool = [r for r in tous if r.famille == candidat.famille and getattr(r, "univers", "principal") == "principal"]
     for p, vals in axes.items():
         for d in (-1, 1):
@@ -210,11 +247,18 @@ def porte_c7(
             s = stats.sharpe(trouve.net)
             if not _finite(s):
                 return (False, None, seuil), {"raison": f"voisin non évaluable : {q}"}
+            if _voisin_identique(candidat, trouve):
+                identiques.append(q)  # paramètre sans effet : ce n'est pas un voisin distinct
+                continue
             voisins.append((q, s))
             bons += s >= seuil_voisin
+    det = {"voisins": voisins, "voisins_identiques": identiques, "seuil_sharpe_voisin": seuil_voisin}
+    if len(voisins) < VOISINS_DISTINCTS_MIN:
+        det["raison"] = f"{len(voisins)} voisin(s) distinct(s) < {VOISINS_DISTINCTS_MIN} (paramètres sans effet ?)"
+        return (False, None, seuil), det
     part = bons / len(voisins)
     ok = _finite(s_cand) and part >= cfg["part_voisins_min"]
-    return (ok, part, seuil), {"voisins": voisins, "seuil_sharpe_voisin": seuil_voisin}
+    return (ok, part, seuil), det
 
 
 # ----------------------------------------------------------------------------- C8
@@ -315,22 +359,40 @@ def porte_c15(res_arene: Any | None, classe: str, cfg, cfg_c6) -> Porte:
 
 
 # ----------------------------------------------------------------------------- C16
-def porte_c16(res_controle: Mapping[str, Any] | None, cfg) -> Porte:
-    """`res_controle` : symbole -> résultat, ou None si la stratégie n'y est pas applicable."""
+#: Marque, dans `res_controle`, un symbole dont la donnée requise par la fiche manque (couvert : perp ;
+#: signaux_perp : funding). Il ne compte ni au numérateur ni dans le minimum d'évaluables, mais le dénominateur
+#: de C16 reste la taille de l'univers de contrôle.
+NON_EVALUABLE = "non_evaluable"
+EVALUABLES_MIN_C16 = 10
+
+
+def porte_c16(res_controle: Mapping[str, Any] | None, cfg, taille_univers: int = 20) -> Porte:
+    """C16 : part des symboles de contrôle au Sharpe net > 0 >= `part_symboles_sharpe_positif_min`.
+
+    - Dénominateur FIXE = `taille_univers` (20, `criteres.donnees.univers_controle.taille`), jamais le
+      nombre de symboles qui ont tourné.
+    - Un symbole absent de `res_controle`, `None` (essai non OK : ERREUR, TIMEOUT, ...) ou de Sharpe NaN
+      est un échec (il reste au dénominateur).
+    - `NON_EVALUABLE` : donnée requise absente ; ne compte ni au numérateur ni dans le minimum de
+      `EVALUABLES_MIN_C16` symboles évaluables (sinon C16 échoue) ; le rapport l'indique.
+    Valeur rendue : (part, positifs, evaluables, non_evaluables, taille_univers)."""
     seuil = cfg["part_symboles_sharpe_positif_min"]
     if not res_controle:
         return (False, None, seuil)
-    sharpes = []
+    positifs = non_eval = 0
     for res in res_controle.values():
+        if isinstance(res, str) and res == NON_EVALUABLE:
+            non_eval += 1
+            continue
         if res is None:
             continue
         s, _ = _sharpe_dd(res)
-        if _finite(s):
-            sharpes.append(s)
-    if not sharpes:
-        return (False, (0.0, 0, len(res_controle)), seuil)
-    part = sum(1 for s in sharpes if s > 0) / len(sharpes)
-    return (part >= seuil, (part, len(sharpes), len(res_controle)), seuil)
+        if _finite(s) and s > 0:
+            positifs += 1
+    evaluables = taille_univers - non_eval
+    part = positifs / taille_univers
+    valeur = (part, positifs, evaluables, non_eval, taille_univers)
+    return (evaluables >= EVALUABLES_MIN_C16 and part >= seuil, valeur, seuil)
 
 
 # ----------------------------------------------------------------------------- orchestration
@@ -343,12 +405,15 @@ def evaluer_candidat(
     resultats_arene: Any | None,
     resultats_controle: Mapping[str, Any] | None,
     causalite: RapportCausalite | None = None,
+    sr_jours_recherche: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
 ) -> Verdict:
     """Applique C1-C16 (+ cohérence C2, C3, C4, C10) à `resultat`.
 
     tous_les_resultats : tous les essais de recherche (V par classe ; voisins C7), `resultat` compris.
     panier : rendements quotidiens du panier équipondéré de l'univers du candidat (fourni par le moteur).
     causalite : sinon `resultat.causalite` ; absent = C9 échoue.
+    sr_jours_recherche : sr_jour de tous les essais de recherche du journal (V par classe) ; voir
+    `variance_de_classe`. resultats_controle : voir `porte_c16` (dénominateur = taille de l'univers de contrôle).
     """
     c_portes, c_coh = section(criteres, "portes"), section(criteres, "coherence")
     c_essais, c_classes = section(criteres, "essais"), section(criteres, "classes")
@@ -359,12 +424,12 @@ def evaluer_candidat(
     T = len(net)
 
     N = int(c_essais["N_dsr"])
-    V = variance_de_classe(classe, tous_les_resultats, T)
+    V = variance_de_classe(classe, tous_les_resultats, T, sr_jours_recherche)
     p1, d1 = porte_c1(net, N, V, c_portes["C1_dsr_min"])
     try:
         d1["dsr_V_commun"] = dsr_mod.dsr_proba(
             d1["sr_jour"], T, d1["skew"], d1["kurt"], N,
-            _v_commun(tous_les_resultats, T),
+            _v_commun(tous_les_resultats, T, sr_jours_recherche),
         )
     except ValueError:
         d1["dsr_V_commun"] = float("nan")
@@ -390,7 +455,8 @@ def evaluer_candidat(
         "C13": porte_c13(net, c_portes["C13_moities"]),
         "C14": porte_c14(net, c_portes["C14_materialite"]),
         "C15": porte_c15(resultats_arene, classe, c_portes["C15_arene"], c_portes["C6_drawdown_max"]),
-        "C16": porte_c16(resultats_controle, c_portes["C16_hors_univers"]),
+        "C16": porte_c16(resultats_controle, c_portes["C16_hors_univers"],
+                         int(section(criteres, "donnees")["univers_controle"]["taille"])),
     }
 
     s_net = stats.sharpe(net)
@@ -409,9 +475,15 @@ def evaluer_candidat(
     return Verdict(portes=portes, coherence=coherence, passe=passe, details=details)
 
 
-def _v_commun(tous: Sequence[Any], T: int) -> float:
+def _v_commun(tous: Sequence[Any], T: int,
+              sr_jours_recherche: Mapping[str, Mapping[str, Sequence[float]]] | None = None) -> float:
     """V toutes classes confondues (information seulement, PROTOCOLE §5)."""
     par_famille: dict[str, list[float]] = {}
+    if sr_jours_recherche is not None:
+        for fams in sr_jours_recherche.values():
+            for fam, srs in fams.items():
+                par_famille.setdefault(fam, []).extend(srs)
+        return dsr_mod.variance_classe(par_famille, T)
     for r in tous:
         if getattr(r, "univers", "principal") != "principal":
             continue

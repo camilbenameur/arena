@@ -139,6 +139,44 @@ class Panneau:
         return self._remplacer(spot_1d=s1d, spot_1h=s1h, perp_1h=p1h, eligibles=elig,
                                eligibles_perp=elp, funding_taux=ft)
 
+    def rebaser(self, jours_volume: int = 30) -> Panneau:
+        """Panneau tel que la STRATÉGIE le voit (le moteur, lui, calcule les rendements sur les prix réels).
+
+        - prix (o,h,l,c, spot et perp) divisés, par paire, par le premier close spot valide de la paire :
+          le niveau absolu n'identifie plus ni la paire ni la date ;
+        - volumes (et achats taker) divisés, par paire, par le volume moyen courant des `jours_volume`
+          premiers jours cotés : à partir du jour `jours_volume` le diviseur est fixe, avant il vaut la
+          moyenne des volumes des jours cotés connus jusqu'au jour courant inclus (clôture). Causal : le
+          diviseur du jour t ne dépend que de données de jours <= t.
+        Les zéros (paire non cotée) restent des zéros. Le premier close valide est celui du jour de cotation,
+        donc connu dès que la paire existe."""
+        T, N = self.n_jours, self.n_paires
+        close = self.spot_1d[:, :, 3]
+        valide = self.eligibles & (close > 0)
+        niveau = np.ones(N)
+        vscale = np.ones((T, N))
+        for k in range(N):
+            idx = np.flatnonzero(valide[:, k])
+            if len(idx) == 0:
+                continue
+            niveau[k] = close[idx[0], k]
+            moy = np.cumsum(self.spot_1d[idx, k, 4]) / np.arange(1, len(idx) + 1)
+            if len(moy) >= jours_volume:
+                moy[jours_volume - 1:] = moy[jours_volume - 1]
+            moy = np.where(np.isfinite(moy) & (moy > 0), moy, 1.0)
+            vscale[idx, k] = moy
+
+        def reb(a):
+            if a is None:
+                return None
+            b = a.copy()
+            extra = (1,) * (a.ndim - 3)
+            b[..., 0:4] = a[..., 0:4] / niveau.reshape((1, N) + extra)[..., None]
+            b[..., 4:6] = a[..., 4:6] / vscale.reshape((T, N) + extra)[..., None]
+            return b
+
+        return self._remplacer(spot_1d=reb(self.spot_1d), spot_1h=reb(self.spot_1h), perp_1h=reb(self.perp_1h))
+
     def jour(self, i: int):
         """Message `Jour` du jour i."""
         from recherche.moteur.contrat import Jour
@@ -275,14 +313,26 @@ def panneau_depuis_donnees(donnees, univers: str = "principal", *, avec_1h: bool
 def synthetique(
     n_jours: int = 400, n_paires: int = 15, graine: int = 0, *, avec_1h: bool = True, avec_perp: bool = False,
     debut_jour: int = 1_514_764_800, cotations_tardives: bool = True, sigma_h: float = 0.004,
+    regimes: bool = False,
 ) -> Panneau:
-    """Panneau synthétique cohérent (barre 1 j = agrégat de ses 24 barres 1 h). Aucune donnée réelle."""
+    """Panneau synthétique cohérent (barre 1 j = agrégat de ses 24 barres 1 h). Aucune donnée réelle.
+    `regimes=True` : régimes de marché variés (tendances, krachs, funding élevé positif soutenu ou négatif,
+    base négative) ; voir `synthetique_varie`."""
     rng = np.random.default_rng(graine)
     T, N, H = n_jours, n_paires, HEURES
     debut_jour -= debut_jour % JOUR_S
     jours = debut_jour + JOUR_S * np.arange(T, dtype=np.int64)
     commun = rng.normal(0.0, sigma_h * 0.6, (T * H, 1))
-    ret = rng.normal(0.0002, sigma_h, (T * H, N)) + commun
+    if regimes:
+        etat = _etats_marche(rng, T)
+        mu_j = np.array([0.0002, 0.0012, -0.0010, -0.02])[etat]
+        vol_j = np.array([1.0, 1.2, 1.6, 3.0])[etat]
+        beta = rng.uniform(0.6, 1.4, N)
+        mu_h = np.repeat(mu_j / H, H)[:, None] * beta[None, :]
+        vol_h = np.repeat(vol_j, H)[:, None]
+        ret = mu_h + (rng.normal(0.0, sigma_h, (T * H, N)) + commun) * vol_h
+    else:
+        ret = rng.normal(0.0002, sigma_h, (T * H, N)) + commun
     niveau0 = np.exp(rng.uniform(-1.0, 9.0, N))
     close = niveau0 * np.exp(np.cumsum(ret, axis=0))
     open_ = np.vstack([niveau0[None, :], close[:-1]])
@@ -312,7 +362,10 @@ def synthetique(
     p1h = elp = None
     fi, ft, fs = [], [], []
     if avec_perp:
-        base = rng.normal(0.0, 0.0005, (T * H, N))
+        if regimes:
+            ann, base = _funding_et_base(rng, T, N, H, etat)
+        else:
+            base = rng.normal(0.0, 0.0005, (T * H, N))
         pm = np.stack([x * (1.0 + base) for x in (open_, high, low, close)], axis=-1)
         pv = np.stack([vol * 3.0, taker * 3.0], axis=-1)
         pb = np.concatenate([pm, pv], axis=-1).reshape(T, H, N, 6).transpose(0, 2, 1, 3)
@@ -320,7 +373,10 @@ def synthetique(
         elp = elig.copy()
         elp[: max(1, T // 10)] = False
         p1h[~elp] = 0.0
-        taux = rng.normal(0.00005, 0.00015, (T, 3, N))
+        if regimes:
+            taux = ann[:, None, :] / 1095.0 + rng.normal(0.0, 0.00003, (T, 3, N))
+        else:
+            taux = rng.normal(0.00005, 0.00015, (T, 3, N))
         for i in range(T):
             ok = np.flatnonzero(elp[i])
             idx = np.tile(ok, 3).astype(np.int64)
@@ -338,3 +394,52 @@ def synthetique(
         symboles=tuple(f"S{k:02d}" for k in range(N)), jours=jours, spot_1d=s1d, spot_1h=s1h, perp_1h=p1h,
         eligibles=elig, eligibles_perp=elp, funding_idx=tuple(fi), funding_taux=tuple(ft),
         funding_ts=tuple(fs))
+
+
+def _etats_marche(rng: np.random.Generator, T: int) -> np.ndarray:
+    """(T,) états de marché par blocs : 0 calme, 1 tendance haussière, 2 baissière, 3 krach (2 à 8 jours)."""
+    etat = np.zeros(T, dtype=np.int64)
+    t = 0
+    while t < T:
+        e = int(rng.choice(4, p=[0.35, 0.30, 0.25, 0.10]))
+        duree = int(rng.integers(2, 9)) if e == 3 else int(rng.integers(20, 121))
+        etat[t:t + duree] = e
+        t += duree
+    return etat
+
+
+def _funding_et_base(rng: np.random.Generator, T: int, N: int, H: int, etat: np.ndarray):
+    """(funding annualisé (T, N), base perp/spot par heure (T*H, N)) : niveaux de funding par blocs de 40 à 250
+    jours (négatifs, nuls, modérés, élevés, extrêmes), en partie communs au marché ; base mean-revertante liée
+    au funding, négative en krach et en marché baissier."""
+    niveaux = np.array([-0.15, -0.05, 0.0, 0.12, 0.25, 0.5, 1.0, 1.4])
+    ann = np.empty((T, N))
+    for k in range(N):
+        t = 0
+        while t < T:
+            duree = int(rng.integers(40, 251))
+            ann[t:t + duree, k] = rng.choice(niveaux)
+            t += duree
+    marche = np.array([0.0, 0.3, -0.12, -0.25])[etat]
+    ann = 0.6 * ann + 0.4 * rng.choice(niveaux[3:], size=1) * (etat[:, None] == 1) + marche[:, None]
+    cible = 0.006 * ann - np.where(etat == 3, 0.02, 0.0)[:, None] - np.where(etat == 2, 0.004, 0.0)[:, None]
+    b = np.zeros((T, N))
+    cur = cible[0].copy()
+    bruit = rng.normal(0.0, 0.0015, (T, N))
+    for i in range(T):
+        cur = 0.9 * cur + 0.1 * cible[i] + bruit[i]
+        b[i] = cur
+    base_h = np.repeat(b, H, axis=0) + rng.normal(0.0, 0.0003, (T * H, N))
+    return ann, base_h
+
+
+def synthetique_varie(n_jours: int = 1300, n_paires: int = 15, graine: int | None = None, **kw) -> Panneau:
+    """Panneau synthétique à régimes variés pour le contrôle de causalité C9 (>= 1 300 jours : les
+    stratégies à historique long, p. ex. 365 jours de funding, produisent des poids non triviaux).
+    `graine=None` : graine tirée de `os.urandom` à chaque appel."""
+    import os
+
+    if graine is None:
+        graine = int.from_bytes(os.urandom(8), "big")
+    kw.setdefault("avec_perp", True)
+    return synthetique(n_jours, n_paires, graine, regimes=True, **kw)

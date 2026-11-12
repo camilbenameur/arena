@@ -109,7 +109,7 @@ def test_metriques_moteur_egales_aux_portes_sur_serie_aleatoire(crit):
 
 def test_metriques_moteur_egales_aux_portes_apres_adaptation(tmp_path, journal, crit):
     pan = synthetique(700, 15, 21, avec_1h=False, debut_jour=DEBUT_2019_09)
-    r = executer_essai(FICHE, STRAT / "f1_labo.py", {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "f1_labo.py", {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "OK", r.detail
     e = vers_essai(r, famille="F1", classe="directionnel", params={})
     assert len(e.net) == r.metriques["T"]
@@ -122,7 +122,7 @@ def test_metriques_moteur_egales_aux_portes_apres_adaptation(tmp_path, journal, 
 
 def test_adaptateur_causalite_donne_un_rapport_c9_valide(tmp_path, journal, crit):
     pan = synthetique(420, 15, 4, avec_1h=True, debut_jour=DEBUT_2019_09)
-    r = executer_essai(FICHE, STRAT / "f1_labo.py", {}, pan, journal, crit)
+    r = executer_essai(FICHE, STRAT / "f1_labo.py", {}, pan, journal, crit, test=True)
     assert r.code == "OK", r.detail
     rapport = vers_rapport_causalite(r.causalite, crit)
     assert isinstance(rapport, evaluer.RapportCausalite)
@@ -170,7 +170,7 @@ def _verifier_panier(r, pan, crit):
 
 def test_acceptation_panier_un_quinzieme_synthetique(tmp_path, journal, crit):
     pan = synthetique(650, 15, 11, avec_1h=False, cotations_tardives=False, debut_jour=DEBUT_2019_09)
-    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "constante.py", {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "OK", r.detail
     _verifier_panier(r, pan, crit)
 
@@ -202,7 +202,7 @@ def test_acceptation_panier_un_quinzieme_reel(tmp_path, journal, crit, panneau_r
     i0 = int(np.argmax(pan.eligibles.all(axis=1)))  # première date où les 15 paires sont cotées
     assert pan.eligibles[i0:].all(), "trou d'éligibilité après la dernière cotation"
     sous = _depuis(pan, i0)
-    r = executer_essai(FICHE, STRAT / "constante.py", {}, sous, journal, crit, causalite=False)
+    r = executer_essai(FICHE, STRAT / "constante.py", {}, sous, journal, crit, causalite=False, test=True)
     assert r.code == "OK", r.detail
     _verifier_panier(r, sous, crit)
 
@@ -212,7 +212,7 @@ def test_acceptation_panier_un_quinzieme_reel(tmp_path, journal, crit, panneau_r
 def test_acceptation_e0065_reel(tmp_path, journal, crit, panneau_reel):
     """E0065 du labo : F1 L=20 k=3 H=10, 15 paires, rotation sur cibles, 15 pb, fenêtre 2020-01-01 -> 2026-06-30."""
     r = executer_essai(FICHE, STRAT / "f1_labo.py", {"L": 20, "k": 3, "H": 10}, panneau_reel, journal, crit,
-                       convention_rotation="cible", cout_spot_bp=15, causalite=False)
+                       convention_rotation="cible", cout_spot_bp=15, causalite=False, test=True)
     assert r.code == "OK", r.detail
     assert float(r.metriques["sharpe_net"]) == pytest.approx(E0065_SHARPE, abs=1e-6)
     assert journal.essais()[r.id]["fin"]["statut"] == "OK"
@@ -280,8 +280,10 @@ def test_research_anchor_dans_journal_arene_temporaire(tmp_path, journal, crit):
                        journal_arene=arene.path)
     assert r.code == "OK"
     ancres = [e for e in Journal(arene.path).iter_events() if e["type"] == "research_anchor"]
-    assert len(ancres) == 1 and ancres[0]["payload"]["tete"] == j.tete()
-    assert ancres[0]["payload"]["n_lignes"] == j.n_lignes()
+    # le moteur ancre au moins après la `fin` (et, depuis la correction A, aussi après le `debut`) ; le dernier
+    # ancrage est celui de la tête courante
+    assert len(ancres) >= 1 and ancres[-1]["payload"]["tete"] == j.tete()
+    assert ancres[-1]["payload"]["n_lignes"] == j.n_lignes()
     assert Journal(arene.path).verify().ok
 
     etats_apres = replay(Journal(arene.path).iter_events())
@@ -307,20 +309,68 @@ def _fiche(nom, famille, classe, strategie, grille, **autres):
             "strategie": strategie, "grille": grille, "qui_perd": "x", "prediction_falsifiable": "x", **autres}
 
 
-@pytest.fixture
-def dossier_vague(tmp_path):
-    fiches = tmp_path / "fiches" / "vague-1"
-    fiches.mkdir(parents=True)
-    docs = {
-        "f1.yaml": _fiche("Pression taker", "F1", "directionnel", "f1_labo.py",
+ENV_GIT = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+           "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin"}
+
+
+class Depot:
+    """Faux dépôt git (dans tmp) : `vagues/<n>/{fiches,strategies}` commités et étiquetés `recherche-vague-<n>-fiches`."""
+
+    def __init__(self, racine: Path):
+        self.racine = racine
+        racine.mkdir(parents=True, exist_ok=True)
+        self.env = {**ENV_GIT, "HOME": str(racine)}
+        self._git("init", "-q")
+
+    def _git(self, *args):
+        subprocess.run(["git", "-C", str(self.racine), *args], check=True, env=self.env, capture_output=True)
+
+    def fiches(self, n=1) -> Path:
+        return self.racine / "vagues" / str(n) / "fiches"
+
+    def strategies(self, n=1) -> Path:
+        return self.racine / "vagues" / str(n) / "strategies"
+
+    def decision(self, n) -> Path:
+        return self.racine / "vagues" / str(n) / "DECISION-OWNER.md"
+
+    def ajouter_vague(self, n: int, docs: dict, strategies=("f1_labo.py", "couvert_simple.py"), etiqueter=True):
+        self.fiches(n).mkdir(parents=True, exist_ok=True)
+        self.strategies(n).mkdir(parents=True, exist_ok=True)
+        for nom, d in docs.items():
+            (self.fiches(n) / nom).write_text(yaml.safe_dump(d, allow_unicode=True))
+        for st in strategies:
+            (self.strategies(n) / st).write_bytes((STRAT / st).read_bytes())
+        vague.geler_fiches(self.fiches(n))
+        if etiqueter:
+            self.etiqueter(n)
+        return self
+
+    def etiqueter(self, n: int):
+        self._git("add", ".")
+        self._git("commit", "-q", "-m", f"vague {n}", "--allow-empty")
+        self._git("tag", "-f", f"recherche-vague-{n}-fiches")
+
+
+def _docs_vague(prefixe=""):
+    return {
+        "f1.yaml": _fiche("Pression taker", f"{prefixe}F1", "directionnel", "f1_labo.py",
                           {"L": [10, 20, 40], "k": [2, 3, 5]}, params_fixes={"H": 10}),
-        "c1.yaml": _fiche("Couverture simple", "C1", "couvert", "couvert_simple.py",
+        "c1.yaml": _fiche("Couverture simple", f"{prefixe}C1", "couvert", "couvert_simple.py",
                           {"taille": [0.06, 0.09, 0.13], "k": [2, 3, 4]}),
     }
-    for nom, d in docs.items():
-        (fiches / nom).write_text(yaml.safe_dump(d, allow_unicode=True))
-    vague.geler_fiches(fiches)
-    return fiches
+
+
+@pytest.fixture
+def depot(tmp_path):
+    return Depot(tmp_path / "depot").ajouter_vague(1, _docs_vague())
+
+
+def _lancer(depot, n, pan, journal, crit, tmp_path, **kw):
+    return vague.executer_vague(
+        n, depot.fiches(n), depot.strategies(n), pan, journal, crit, rapports_dir=tmp_path / "rapports",
+        depot=depot.racine, causalite=kw.pop("causalite", False),
+        test=kw.pop("test", kw.get("journal_arene") is None), **kw)
 
 
 def _panneau_vague(crit):
@@ -328,11 +378,9 @@ def _panneau_vague(crit):
     return dataclasses.replace(pan, symboles=tuple(crit.univers))
 
 
-def test_vague_de_bout_en_bout(tmp_path, journal, crit, dossier_vague):
+def test_vague_de_bout_en_bout(tmp_path, journal, crit, depot):
     pan = _panneau_vague(crit)
-    rap = vague.executer_vague(
-        1, dossier_vague, STRAT, pan, journal, crit, rapports_dir=tmp_path / "rapports",
-        causalite=False, journal_arene=tmp_path / "arene.jsonl")
+    rap = _lancer(depot, 1, pan, journal, crit, tmp_path, journal_arene=tmp_path / "arene.jsonl")
     assert rap.n_essais_vague == 18 and not rap.refusees and not rap.plafond_atteint
     assert journal.n_ids() == 18 and len(rap.lignes) == 18
     assert all(ln.code == "OK" for ln in rap.lignes), [ln.code for ln in rap.lignes]
@@ -346,53 +394,66 @@ def test_vague_de_bout_en_bout(tmp_path, journal, crit, dossier_vague):
     assert {s["nom"] for s in statuts} == {"Pression taker", "Couverture simple"}
     assert all(set(s) == {"nom", "mecanisme", "verdict"} and s["verdict"] == "ecartee" for s in statuts)
     assert not any(ch.isdigit() for s in statuts for ch in s["verdict"])
-    # chaque essai est chaîné et ancré
+    # aucun fichier JSON modifiable ne porte la règle d'arrêt
+    assert not (tmp_path / "rapports" / "vague-1.json").exists()
+    # chaque essai est chaîné et ancré ; les marqueurs de vague sont dans le journal
     assert journal.verifier_ancrage(tmp_path / "arene.jsonl") is None
-    # la règle d'arrêt (vague-1.json écrit par la vague) bloque la vague 2 sans décision écrite
-    (tmp_path / "rapports" / "vague-1.json").write_text(json.dumps({"arret": True}))
-    with pytest.raises(vague.VagueError, match="arrêt"):
-        vague.executer_vague(2, dossier_vague, STRAT, pan, journal, crit, rapports_dir=tmp_path / "rapports")
-    decision = tmp_path / "decision.txt"
-    decision.write_text("the owner : vague 2 autorisée")
-    rap2 = vague.executer_vague(2, dossier_vague, STRAT, pan, journal, crit, rapports_dir=tmp_path / "rapports",
-                                causalite=False, decision_ecrite=decision)
+    assert [e["payload"]["numero"] for e in journal.evenements("vague_debut")] == [1]
+    assert [e["payload"]["numero"] for e in journal.evenements("vague_fin")] == [1]
+    assert vague.arret_apres(journal, 1, crit) is rap.arret
+    # la vague 2 est une autre vague, d'autres familles : elle exige la décision du propriétaire si l'arrêt s'applique
+    depot.ajouter_vague(2, _docs_vague("B"))
+    if rap.arret:
+        with pytest.raises(vague.VagueError, match="arrêt"):
+            _lancer(depot, 2, pan, journal, crit, tmp_path)
+        depot.decision(2).write_text("   \n")
+        with pytest.raises(vague.VagueError, match="arrêt"):
+            _lancer(depot, 2, pan, journal, crit, tmp_path)
+        depot.decision(2).write_text("the owner : vague 2 autorisée")
+        depot.etiqueter(2)
+    assert journal.n_ids() == 18
+    rap2 = _lancer(depot, 2, pan, journal, crit, tmp_path)
     assert rap2.numero == 2 and journal.n_ids() == 36
+    if rap.arret:
+        dec = journal.evenements("decision_owner")
+        assert len(dec) == 1 and dec[0]["payload"] == {
+            "numero": 2, "fichier": "DECISION-OWNER.md",
+            "sha256": hashlib.sha256(depot.decision(2).read_bytes()).hexdigest()}
 
 
-def test_vague_classe_couvert_c15_c16_non_applicables():
+def test_vague_couvert_c15_non_applicable_c16_reste():
     v = evaluer.Verdict(portes={"C15": (False, None, 1), "C16": (False, None, 1), "C1": (True, 1, 1)},
                         coherence={"C2": (True, 1, 1)}, passe=False)
-    w = vague._sans_c15_c16(v)
-    assert w.passe and w.portes["C15"][1].startswith("non applicable")
-    v2 = dataclasses.replace(v, portes={**v.portes, "C1": (False, 0, 1)})
-    assert not vague._sans_c15_c16(v2).passe
+    w = vague._sans_c15(v)
+    assert w.portes["C15"][1].startswith("non applicable") and w.portes["C15"][0]
+    assert w.portes["C16"] == (False, None, 1) and not w.passe  # C16 s'applique aussi au couvert
+    v2 = dataclasses.replace(v, portes={**v.portes, "C16": (True, 1, 1)})
+    assert vague._sans_c15(v2).passe
+    v3 = dataclasses.replace(v2, portes={**v2.portes, "C1": (False, 0, 1)})
+    assert not vague._sans_c15(v3).passe
 
 
-def test_vague_refuse_fiche_modifiee_ou_non_gelee(tmp_path, journal, crit, dossier_vague):
+def test_vague_refuse_fiche_modifiee_ou_non_gelee(tmp_path, journal, crit, depot):
     pan = _panneau_vague(crit)
-    (dossier_vague / "f1.yaml").write_text((dossier_vague / "f1.yaml").read_text() + "\n# retouche\n")
+    f1 = depot.fiches() / "f1.yaml"
+    f1.write_text(f1.read_text() + "\n# retouche\n")
     with pytest.raises(vague.VagueError, match="modifiée"):
-        vague.executer_vague(1, dossier_vague, STRAT, pan, journal, crit, rapports_dir=tmp_path / "r")
-    (dossier_vague / "MANIFESTE.json").unlink()
+        _lancer(depot, 1, pan, journal, crit, tmp_path)
+    (depot.fiches() / "MANIFESTE.json").unlink()
     with pytest.raises(vague.VagueError, match="non gelées"):
-        vague.executer_vague(1, dossier_vague, STRAT, pan, journal, crit, rapports_dir=tmp_path / "r")
+        _lancer(depot, 1, pan, journal, crit, tmp_path)
     assert journal.n_ids() == 0  # rien n'a été essayé
 
 
 def test_vague_refuse_grille_non_geometrique_et_trop_de_variantes(tmp_path, journal, crit):
-    d = tmp_path / "fiches"
-    d.mkdir()
     docs = {
         "a.yaml": _fiche("Pas géométrique", "A", "directionnel", "f1_labo.py", {"L": [10, 11, 12], "k": [2, 3, 5]}),
         "b.yaml": _fiche("Trop de variantes", "B", "directionnel", "f1_labo.py",
                          {"L": [5, 10, 20, 40], "k": [2, 3, 5, 8, 13, 21]}),
         "c.yaml": _fiche("Un seul paramètre", "C", "directionnel", "f1_labo.py", {"L": [10, 20, 40]}),
     }
-    for n, doc in docs.items():
-        (d / n).write_text(yaml.safe_dump(doc))
-    vague.geler_fiches(d)
-    rap = vague.executer_vague(1, d, STRAT, _panneau_vague(crit), journal, crit, rapports_dir=tmp_path / "r",
-                               causalite=False)
+    depot = Depot(tmp_path / "depot").ajouter_vague(1, docs)
+    rap = _lancer(depot, 1, _panneau_vague(crit), journal, crit, tmp_path)
     assert set(rap.refusees) == {"a.yaml", "b.yaml", "c.yaml"} and rap.n_essais_vague == 0
     assert "non géométrique" in rap.refusees["a.yaml"] and "variantes" in rap.refusees["b.yaml"]
     assert journal.n_ids() == 0
@@ -402,16 +463,14 @@ def test_vague_c15_c16_sur_panneau_nomme(tmp_path, journal, crit):
     """Le chemin C15 (replay riskd/fills sur l'univers arène) et C16 (contrôle) tourne de bout en bout."""
     pan = _panneau_vague(crit)
     f = vague.Fiche("f.yaml", "0" * 64, "F1", "Pression taker", "m", "directionnel", "f1_labo.py", {}, {})
-    rap = vague.RapportVague(1)
+    ctx = vague._Ctx(1, pan, journal, crit, STRAT, tmp_path / "series", vague.RapportVague(1), causalite=False, test=True)
     arene, controle, supp = vague._c15_c16(
-        f, {"L": 20, "k": 3, "H": 10}, pan, journal, crit, STRAT, rap, None, None, None,
-        symboles_controle=["ADAUSDT", "ATOMUSDT", "AVAXUSDT"])
+        f, {"L": 20, "k": 3, "H": 10}, ctx, ["ADAUSDT", "ATOMUSDT", "AVAXUSDT"])
     assert supp == 4 and arene is not None and math.isfinite(arene.sharpe)
     assert arene.policy_sha256 and set(controle) == {"ADAUSDT", "ATOMUSDT", "AVAXUSDT"}
-    # univers de contrôle d'un seul symbole, sans barres 1 h : F1 (1 j seulement) est applicable
     assert all(v is not None for v in controle.values())
-    ok, val, _ = evaluer.porte_c16(controle, crit.portes.C16_hors_univers)
-    assert isinstance(ok, bool) and val[2] == 3
+    ok, val, _ = evaluer.porte_c16(controle, crit.portes.C16_hors_univers, crit.controle_taille)
+    assert not ok and val[4] == 20 and val[2] == 20  # 3 symboles sur 20 : dénominateur fixe
     ok15, val15, _ = evaluer.porte_c15(arene, "directionnel", crit.portes.C15_arene, crit.portes.C6_drawdown_max)
     assert isinstance(ok15, bool) and len(val15) == 2
 
@@ -430,8 +489,8 @@ def test_cli_canari_et_verifier(tmp_path, capsys):
 def test_cli_vague_geler(tmp_path, capsys):
     from recherche.__main__ import main
 
-    d = tmp_path / "fiches" / "vague-1"
+    d = tmp_path / "vagues" / "1" / "fiches"
     d.mkdir(parents=True)
     (d / "x.yaml").write_text(yaml.safe_dump(_fiche("X", "X", "directionnel", "f1_labo.py", {"L": [10, 20, 40]})))
-    assert main(["vague", "1", "--geler", "--fiches", str(tmp_path / "fiches")]) == 0
+    assert main(["vague", "1", "--geler", "--vagues", str(tmp_path / "vagues")]) == 0
     assert (d / "MANIFESTE.json").is_file()

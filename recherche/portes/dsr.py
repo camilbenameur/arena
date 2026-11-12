@@ -6,7 +6,8 @@ de jours, skew, kurt = kurtosis NON excès (3 pour la loi normale).
 
     SR* = sqrt(V) * ((1-g) * Phi^-1(1-1/N) + g * Phi^-1(1-1/(N*e)))      g = 0,5772156649
     DSR = Phi( (SR - SR*) * sqrt(T-1) / sqrt(1 - skew*SR + (kurt-1)/4 * SR^2) )
-    V   = max(variance des sr_jour de la classe, 1/(T-1))                 (PROTOCOLE §5)
+    V   = max(1/(T-1), moyenne pondérée par famille des variances intra-famille,
+              variance de l'ensemble des sr_jour de la classe)             (PROTOCOLE §5, durci)
 
 L'exemple numérique publié (SR annualisé 2,5, T=1250, asymétrie -3, kurtosis 10, N=100, variance annualisée
 des Sharpe 0,5, 250 jours par an) donne DSR = 0,9004 dans l'article ; il est reproduit dans les tests.
@@ -56,25 +57,36 @@ def plancher_variance(T: int) -> float:
 
 
 def variance_classe(sr_par_famille: dict[str, Iterable[float]], T: int) -> float:
-    """V d'une classe : max(moyenne pondérée par famille des variances des sr_jour, 1/(T-1)).
+    """V d'une classe : max(1/(T-1), moyenne pondérée par famille des variances intra-famille, variance de
+    l'ensemble des sr_jour de la classe).
 
-    `sr_par_famille` : famille -> sr_jour des essais de recherche de cette classe (labo exclu). Une famille
-    à moins de 2 essais n'a pas de variance : elle est ignorée. Poids = nombre d'essais de la famille.
+    `sr_par_famille` : famille -> sr_jour de TOUS les essais de recherche de cette classe, toutes vagues,
+    reprises comprises (labo exclu). Poids = nombre d'essais de la famille ; une famille à moins de 2 essais
+    n'a pas de variance intra-famille mais ses sr_jour comptent dans la variance d'ensemble.
+
+    Le troisième terme (ajout de la revue) protège contre la dilution : la moyenne des variances
+    intra-famille baisse si l'on ajoute des familles factices dont les variantes sont presque identiques
+    (paramètres ignorés), alors que la dispersion de l'ensemble ne peut pas être masquée ainsi.
     """
     num = 0.0
     poids = 0
+    tous: list[float] = []
     for srs in sr_par_famille.values():
         v = [float(x) for x in srs if x is not None and math.isfinite(float(x))]
+        tous.extend(v)
         if len(v) < 2:
             continue
         m = sum(v) / len(v)
         var = sum((x - m) ** 2 for x in v) / (len(v) - 1)
         num += len(v) * var
         poids += len(v)
-    plancher = plancher_variance(T)
-    if poids == 0:
-        return plancher
-    return max(num / poids, plancher)
+    termes = [plancher_variance(T)]
+    if poids:
+        termes.append(num / poids)
+    if len(tous) >= 2:
+        m = sum(tous) / len(tous)
+        termes.append(sum((x - m) ** 2 for x in tous) / (len(tous) - 1))
+    return max(termes)
 
 
 def v_depuis_ecart_type_annuel(ecart_type_sharpe_annualise: float) -> float:

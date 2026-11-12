@@ -1,8 +1,9 @@
 """Adaptateur moteur -> portes : `ResultatEssai` (moteur) vers `Essai` et `RapportCausalite` (portes).
 
 Aucun calcul de performance ici : on découpe les séries du moteur sur la fenêtre d'évaluation
-(`masque_eval`) et, pour la classe `couvert` seulement, on les rapporte au capital immobilisé du jour
-(PROTOCOLE §3 : « capital immobilisé = notionnel spot + marge perp »). Pour `directionnel`, les séries sont
+(`masque_eval`) et, pour la classe `couvert` seulement, on les rapporte au capital immobilisé de référence
+(PROTOCOLE §3 : « capital immobilisé = notionnel spot + marge perp ») : max(expo_j, expo_{j-1}), pour que le
+coût d'une sortie complète (exposition 0 le jour du coût) ne disparaisse pas. Pour `directionnel`, les séries sont
 celles du moteur, telles quelles (capital total = 1, le cash rend zéro).
 """
 
@@ -13,14 +14,15 @@ from collections.abc import Mapping
 import numpy as np
 import pandas as pd
 
+from recherche.moteur.portefeuille import rapporter
 from recherche.portes.evaluer import Essai, RapportCausalite
 
 
-def _serie(valeurs: np.ndarray, jours: np.ndarray, masque: np.ndarray, diviseur: np.ndarray | None) -> pd.Series:
-    v = valeurs[masque]
-    if diviseur is not None:
-        v = np.where(diviseur > 1e-12, v / np.where(diviseur > 1e-12, diviseur, 1.0), 0.0)
-    return pd.Series(v.astype(float), index=pd.to_datetime(jours[masque], unit="s"))
+def _serie(valeurs: np.ndarray, jours: np.ndarray, masque: np.ndarray, exposition: np.ndarray | None) -> pd.Series:
+    """Série datée sur la fenêtre d'évaluation ; `exposition` non None : rapportée au capital immobilisé de
+    référence max(expo_j, expo_{j-1}) (le diviseur est calculé sur TOUTE la série avant d'appliquer le masque)."""
+    v = valeurs if exposition is None else rapporter(valeurs, exposition)
+    return pd.Series(v[masque].astype(float), index=pd.to_datetime(jours[masque], unit="s"))
 
 
 def vers_essai(resultat, *, famille: str, classe: str, params: Mapping[str, float]) -> Essai:
@@ -29,7 +31,7 @@ def vers_essai(resultat, *, famille: str, classe: str, params: Mapping[str, floa
     if s is None:
         raise ValueError(f"essai {resultat.id} sans série (code {resultat.code})")
     m = s.masque_eval
-    div = s.exposition[m] if classe == "couvert" else None
+    div = s.exposition if classe == "couvert" else None
 
     def ser(x):
         return _serie(x, s.jours, m, div)
@@ -54,7 +56,11 @@ def vers_rapport_causalite(causalite: dict | None, criteres) -> RapportCausalite
         part_heure_non_pleine=causalite["coupures_heure_non_pleine"] / n if n else 0.0,
         ecart_max=float(ecart),
         invariances_ok=bool(causalite.get("deterministe", False) and causalite["ecart_permutation"] <= tol
-                            and causalite["ecart_echelle"] <= tol))
+                            and causalite["ecart_echelle"] <= tol
+                            # poids constants sur toute la série synthétique : rien ne prouve la causalité
+                            and causalite.get("evaluable", False)
+                            # second contrôle, sur les données réelles de l'essai (permutation + échelles)
+                            and causalite.get("reel_ok", True)))
 
 
 def vers_serie_panier(panier_serie) -> pd.Series:

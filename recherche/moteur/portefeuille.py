@@ -11,7 +11,7 @@ Convention `cible` (reproduction du labo, E0065) : rotation_i = Σ |w_cible_i �
 Classes : `directionnel` (spot seul, w ∈ [0,1], Σw ≤ 1) et `couvert` (short perp ≤ long spot par paire,
 capital immobilisé Σ w_spot + marge · Σ w_perp ≤ 1). Toute violation lève `FormePoids` ; jamais de rognage.
 Les rendements sont des P&L rapportés au capital total (1) ; `rendements_nets_immobilise` les rapporte au
-capital immobilisé du jour (marge perp comprise).
+capital immobilisé du jour (marge perp comprise ; diviseur max(expo_j, expo_{j-1}), voir `diviseur_immobilise`).
 """
 
 from __future__ import annotations
@@ -27,9 +27,21 @@ from recherche.moteur.panneau import Panneau
 CLASSES = ("directionnel", "couvert")
 
 
+#: Part minimale du long spot qui doit être couverte par le short perp, par paire et par jour (classe couvert).
+COUVERTURE_MIN = 0.9
+
+
 def valider_poids(classe: str, i: int, ws: np.ndarray, wp: np.ndarray, deja_cotee: np.ndarray,
                   eligibles_perp: np.ndarray | None, marge: float) -> None:
-    """Validation stricte des bornes pour un jour. `deja_cotee` : paire cotée à ce jour ou avant."""
+    """Validation stricte des bornes pour un jour. `deja_cotee` : paire cotée à ce jour ou avant.
+
+    Classe `couvert` : interprétation STRICTE de la définition du protocole §3 (« long spot et short perp sur
+    la même paire, avec short perp <= long spot ») : sur chaque paire et chaque jour,
+    `COUVERTURE_MIN * poids_spot <= poids_perp <= poids_spot` (couverture d'au moins 90 %). Un long spot nu,
+    ou presque, n'est pas un portage couvert : `FORME_POIDS`, jamais de rognage.
+
+    Les messages d'erreur ne contiennent aucune valeur issue de la stratégie (canal de sortie) : le jour et la
+    règle violée seulement."""
     if classe not in CLASSES:
         raise FormePoids(f"classe inconnue {classe!r}")
     if not (np.isfinite(ws).all() and np.isfinite(wp).all()):
@@ -42,17 +54,33 @@ def valider_poids(classe: str, i: int, ws: np.ndarray, wp: np.ndarray, deja_cote
         if wp.max(initial=0.0) > TOL_POIDS:
             raise FormePoids(f"jour {i} : jambe perp interdite en classe directionnel")
         if ws.sum() > 1.0 + TOL_POIDS:
-            raise FormePoids(f"jour {i} : somme des poids {ws.sum():.12g} > 1")
+            raise FormePoids(f"jour {i} : somme des poids > 1")
         return
     if (wp > ws + TOL_POIDS).any():
         raise FormePoids(f"jour {i} : short perp supérieur au long spot")
+    if (wp < COUVERTURE_MIN * ws - TOL_POIDS).any():
+        raise FormePoids(f"jour {i} : short perp inférieur à {COUVERTURE_MIN:.0%} du long spot (couverture)")
     if eligibles_perp is None:
         if wp.max(initial=0.0) > TOL_POIDS:
             raise FormePoids(f"jour {i} : poids perp sans donnée perp")
     elif (wp[~eligibles_perp] > TOL_POIDS).any():
         raise FormePoids(f"jour {i} : poids perp sur un perpétuel absent")
     if ws.sum() + marge * wp.sum() > 1.0 + TOL_POIDS:
-        raise FormePoids(f"jour {i} : capital immobilisé {ws.sum() + marge * wp.sum():.12g} > 1")
+        raise FormePoids(f"jour {i} : capital immobilisé > 1")
+
+
+def diviseur_immobilise(exposition: np.ndarray) -> np.ndarray:
+    """Capital de référence du jour pour les séries « sur capital immobilisé » : max(expo_j, expo_{j-1}).
+    Les coûts du jour j sont ceux de la rotation décidée en j-1 (de w_{j-2} vers w_{j-1}) ; diviser par la seule
+    exposition du jour effacerait le coût d'une sortie complète (exposition 0 le jour de la sortie)."""
+    prec = np.concatenate([[0.0], exposition[:-1]])
+    return np.maximum(exposition, prec)
+
+
+def rapporter(valeurs: np.ndarray, exposition: np.ndarray) -> np.ndarray:
+    """`valeurs` (P&L rapportés au capital total) rapportés au capital immobilisé de référence ; 0 si nul."""
+    d = diviseur_immobilise(exposition)
+    return np.where(d > 1e-12, valeurs / np.where(d > 1e-12, d, 1.0), 0.0)
 
 
 @dataclass(frozen=True)
@@ -155,7 +183,7 @@ def simuler(
     rot_p = np.concatenate([[0.0], rot_p[:-1]])
     net = brut - couts
     net2 = brut - stress * couts
-    immobilise = np.where(expo > 1e-12, net / np.where(expo > 1e-12, expo, 1.0), 0.0)
+    immobilise = rapporter(net, expo)
 
     elig, masque = masque_evaluation(panneau, classe, criteres)
     return SerieMoteur(

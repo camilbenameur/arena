@@ -15,6 +15,9 @@ import pandas as pd
 
 from recherche.portes.evaluer import section
 
+#: Tolérance numérique de la comparaison rho > correlation_exces_panier_max.
+TOLERANCE_CORRELATION = 1e-12
+
 
 @dataclass(frozen=True)
 class Candidat:
@@ -87,7 +90,11 @@ def selectionner(
     p_non_refute_h0: float = P_NON_REFUTE_H0_DEFAUT,
 ) -> Selection:
     """Classe par DSR décroissant ; garde un candidat si sa corrélation (Pearson, quotidienne) des excès
-    avec chaque candidat déjà retenu est <= correlation_exces_panier_max ; 3 au plus."""
+    avec chaque candidat déjà retenu est <= correlation_exces_panier_max (comparée avec une tolérance de
+    1e-12 : écarté si rho > 0,7 + 1e-12) ; 3 au plus.
+
+    Seules les corrélations FORTEMENT POSITIVES écartent : une corrélation négative (même -0,99) ne
+    déclenche aucun écart, comme le dit le protocole (« corrélés à plus de 0,7 »)."""
     sel = section(criteres, "selection")
     cmax = sel["correlation_exces_panier_max"]
     nmax = int(sel["candidats_max"])
@@ -104,7 +111,7 @@ def selectionner(
             a, b = c.exces.align(r.exces, join="inner")
             rho = float(a.corr(b)) if len(a) > 2 else float("nan")
             corr[(r.id, c.id)] = rho
-            if math.isnan(rho) or rho > cmax:  # NaN : non vérifiable, on écarte
+            if math.isnan(rho) or rho > cmax + TOLERANCE_CORRELATION:  # NaN : non vérifiable, on écarte
                 motif = f"corrélation des excès avec {r.id} : {rho:.3f} > {cmax}"
                 break
         if motif:

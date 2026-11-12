@@ -46,7 +46,7 @@ def _exposition(r):
 def test_sans_declaration_le_funding_est_retire(tmp_path, journal, crit):  # noqa: F811
     pan = synthetique(60, 3, 0, avec_perp=True)
     p = ecrire(tmp_path, VOIT_FUNDING)
-    r = executer_essai(FicheEssai("x", "directionnel", "a" * 64), p, {}, pan, journal, crit, causalite=False)
+    r = executer_essai(FicheEssai("x", "directionnel", "a" * 64), p, {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "OK"
     expo = _exposition(r)
     assert expo is None or float(max(expo)) > 0  # jamais vu de funding : reste investi
@@ -56,7 +56,7 @@ def test_avec_declaration_le_funding_arrive(tmp_path, journal, crit):  # noqa: F
     pan = synthetique(60, 3, 0, avec_perp=True)
     p = ecrire(tmp_path, VOIT_FUNDING)
     fiche = FicheEssai("x", "directionnel", "a" * 64, signaux_perp=True)
-    r = executer_essai(fiche, p, {}, pan, journal, crit, causalite=False)
+    r = executer_essai(fiche, p, {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "OK"
     expo = _exposition(r)
     if expo is not None:
@@ -67,5 +67,5 @@ def test_directionnel_jambe_perp_refusee_meme_avec_signaux(tmp_path, journal, cr
     pan = synthetique(60, 3, 0, avec_perp=True)
     p = ecrire(tmp_path, JAMBE_PERP)
     fiche = FicheEssai("x", "directionnel", "a" * 64, signaux_perp=True)
-    r = executer_essai(fiche, p, {}, pan, journal, crit, causalite=False)
+    r = executer_essai(fiche, p, {}, pan, journal, crit, causalite=False, test=True)
     assert r.code == "FORME_POIDS"

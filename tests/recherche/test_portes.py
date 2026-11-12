@@ -91,8 +91,10 @@ def test_variance_par_classe_ponderee_par_famille_et_plancher():
     # famille A : 3 essais de variance 4e-4 ; famille B : 2 essais de variance 1e-4 ; poids 3 et 2
     a = [0.0, 0.02, -0.02]  # var = 4e-4
     b = [0.0, math.sqrt(2) * 0.01]  # var = 1e-4
-    v = dsr.variance_classe({"A": a, "B": b, "seule": [0.5]}, T=10_000)
+    v = dsr.variance_classe({"A": a, "B": b}, T=10_000)
     assert v == pytest.approx((3 * 4e-4 + 2 * 1e-4) / 5)
+    # une famille à un seul essai n'a pas de variance intra-famille mais compte dans la variance d'ensemble
+    assert dsr.variance_classe({"A": a, "B": b, "seule": [0.5]}, T=10_000) > 3e-2
     # sous le plancher 1/(T-1) : le plancher s'applique ; sans famille exploitable aussi
     assert dsr.variance_classe({"A": [0.0, 1e-6]}, T=100) == pytest.approx(1 / 99)
     assert dsr.variance_classe({}, T=100) == pytest.approx(1 / 99)
@@ -445,19 +447,35 @@ def test_c15_drawdown_juste_sous_et_sur_la_limite(classe, lim):
 
 def test_c16_hors_univers():
     cfg = P["C16_hors_univers"]
+    taille = CRIT["donnees"]["univers_controle"]["taille"]
+    assert taille == 20
 
-    def d(n_pos: int, n_neg: int, n_none: int = 0):
+    def d(n_pos: int, n_neg: int, n_none: int = 0, n_ne: int = 0):
         out = {f"P{i}": SimpleNamespace(net=serie(1.0, graine=i)) for i in range(n_pos)}
         out.update({f"N{i}": SimpleNamespace(net=serie(-1.0, graine=i)) for i in range(n_neg)})
         out.update({f"X{i}": None for i in range(n_none)})
+        out.update({f"E{i}": evaluer.NON_EVALUABLE for i in range(n_ne)})
         return out
 
-    assert evaluer.porte_c16(d(6, 4), cfg)[0]  # 60 % exactement
-    assert not evaluer.porte_c16(d(5, 4), cfg)[0]  # 55,6 %
-    assert evaluer.porte_c16(d(3, 2, n_none=15), cfg)[0]  # non applicable : hors du dénominateur
-    assert not evaluer.porte_c16(d(0, 0, n_none=20), cfg)[0]
-    assert not evaluer.porte_c16({}, cfg)[0] and not evaluer.porte_c16(None, cfg)[0]
-    assert evaluer.porte_c16(d(6, 4), cfg)[1][1:] == (10, 10)
+    # dénominateur fixe 20 : 12 positifs sur 20 = 60 % exactement
+    assert evaluer.porte_c16(d(12, 8), cfg, taille)[0]
+    assert not evaluer.porte_c16(d(11, 9), cfg, taille)[0]
+    # 6 positifs sur 10 symboles seulement n'est plus 60 % : le dénominateur reste 20
+    assert not evaluer.porte_c16(d(6, 4), cfg, taille)[0]
+    # un symbole en échec (None) compte comme échec au dénominateur
+    assert not evaluer.porte_c16(d(11, 0, n_none=9), cfg, taille)[0]
+    assert evaluer.porte_c16(d(12, 0, n_none=8), cfg, taille)[0]
+    # non évaluables : pas au numérateur, pas dans le minimum de 10, dénominateur inchangé
+    assert evaluer.porte_c16(d(12, 0, n_ne=8), cfg, taille)[0]
+    assert not evaluer.porte_c16(d(9, 0, n_ne=11), cfg, taille)[0]  # 9 évaluables < 10
+    assert not evaluer.porte_c16(d(10, 0, n_ne=10), cfg, taille)[0]  # 10 évaluables, 50 % < 60 %
+    val = evaluer.porte_c16(d(12, 0, n_ne=8), cfg, taille)[1]
+    assert val == (0.6, 12, 12, 8, 20)
+    assert not evaluer.porte_c16({}, cfg, taille)[0] and not evaluer.porte_c16(None, cfg, taille)[0]
+    # Sharpe NaN (série à plat) = échec
+    plat = SimpleNamespace(net=pd.Series(0.0, index=pd.date_range("2020-01-01", periods=300)))
+    sans = {**d(12, 0), "Z": plat}
+    assert evaluer.porte_c16(sans, cfg, taille)[1][1] == 12
 
 
 # ----------------------------------------------------------------------------- évaluateur complet
@@ -486,7 +504,7 @@ def _candidat_parfait(classe: str = "directionnel"):
         "grille_fiche": GRILLE,
         "panier": serie(0.0, n=n, graine=200, std=0.02, index=IDX),
         "resultats_arene": SimpleNamespace(rendements=serie(1.0, n=n, graine=201, index=IDX)),
-        "resultats_controle": {f"S{i}": SimpleNamespace(net=serie(0.8, n=n, graine=300 + i, index=IDX)) for i in range(10)},
+        "resultats_controle": {f"S{i}": SimpleNamespace(net=serie(0.8, n=n, graine=300 + i, index=IDX)) for i in range(20)},
         "causalite": RapportCausalite(20, 3, 0.45, 0.0),
     }
     return cand, kw

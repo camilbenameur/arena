@@ -2,10 +2,20 @@
 
 L'agent appelant ne reçoit que le code fermé (`ResultatEssai.pour_agent()`). Les séries et métriques complètes
 restent dans `ResultatEssai.serie` / `.metriques`, pour l'orchestrateur et les portes.
+
+Canaux de sortie (une stratégie est du code hostile qui voit le résultat de ses propres essais) :
+- texte : `detail` et le journal technique ne contiennent AUCUN texte venant de la stratégie (ni message
+  d'exception, ni trace) : le code fermé, le type d'exception standard et le numéro de jour du flux ;
+- temps : les horodatages de `debut`/`fin` sont arrondis à la minute (`JournalRecherche._ts`) ;
+- bit résiduel : le code fermé lui-même (6 valeurs) reste lisible par l'agent, et la stratégie choisit s'il
+  est OK, ERREUR, TIMEOUT ou FORME_POIDS (et, via le numéro de jour de l'erreur, un jour parmi T pour le
+  journal technique, que l'agent ne lit pas). Au plus log2(6) ~ 2,6 bits par essai exposés à l'agent, donc
+  au plus ~1 600 bits sur tout recherche-v1 (N <= 600) : le plafond d'essais borne le canal, il ne le ferme pas.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import math
 import os
@@ -24,9 +34,9 @@ from recherche.moteur.contrat import (
     FormePoids,
     SourceRefusee,
 )
-from recherche.moteur.journal import JournalRecherche, decimal12, params_canoniques
-from recherche.moteur.panneau import JOUR_S, Panneau, panneau_depuis_donnees, synthetique
-from recherche.moteur.portefeuille import CLASSES, SerieMoteur, simuler, valider_poids
+from recherche.moteur.journal import AncrageError, JournalRecherche, decimal12, params_canoniques
+from recherche.moteur.panneau import JOUR_S, Panneau, panneau_depuis_donnees, synthetique_varie
+from recherche.moteur.portefeuille import CLASSES, SerieMoteur, rapporter, simuler, valider_poids
 
 VERSION_MOTEUR = "recherche-moteur-v1"
 
@@ -124,13 +134,32 @@ def calculer_metriques(serie: SerieMoteur) -> dict:
     }
 
 
+def serie_portes(serie: SerieMoteur) -> SerieMoteur:
+    """La série telle que les portes la voient : pour `couvert`, rapportée au capital immobilisé de référence
+    max(expo_j, expo_{j-1}) (même transformation que `portes.adaptateur`) ; `directionnel` : inchangée."""
+    if serie.classe != "couvert":
+        return serie
+    def r(x):
+        return rapporter(x, serie.exposition)
+    return dataclasses.replace(
+        serie, rendements_nets=r(serie.rendements_nets), rendements_nets_stresses=r(serie.rendements_nets_stresses),
+        rendements_bruts=r(serie.rendements_bruts), couts=r(serie.couts))
+
+
+def calculer_metriques_portes(serie: SerieMoteur) -> dict:
+    """Mêmes métriques que `calculer_metriques`, sur la série des portes (capital immobilisé), préfixées
+    `portes_` pour ne pas les confondre avec celles sur le capital total."""
+    return {f"portes_{k}": v for k, v in calculer_metriques(serie_portes(serie)).items() if k != "T"}
+
+
 # ----------------------------------------------------------------------------------------------------
 # Causalité (C9) sur données synthétiques
 # ----------------------------------------------------------------------------------------------------
 
 _CAUSALITE_CACHE: dict = {}
 _TOL_CAUSALITE = 1e-9
-_JOURS_SYNTH = 420
+_JOURS_SYNTH = 1300
+VERSION_CAUSALITE = "c9-v2"  # dans la clé du cache : changer le test invalide les résultats mis en cache
 
 
 def _courir(source: bytes, params: dict, pan: Panneau, classe: str, marge: float, timeout: float,
@@ -147,7 +176,7 @@ def _courir(source: bytes, params: dict, pan: Panneau, classe: str, marge: float
 
 def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "directionnel",
                        n_paires: int = 15, avec_1h: bool = True, avec_perp: bool = False,
-                       graine_donnees: int = 1, rng: np.random.Generator | None = None,
+                       graine_donnees: int | None = None, rng: np.random.Generator | None = None,
                        threads: int = 4) -> dict:
     """C9 sur données synthétiques (jamais réelles). Compare, dans le bac à sable :
     - déterminisme : deux exécutions complètes identiques ;
@@ -156,10 +185,18 @@ def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "
       (au moins `part_heure_non_pleine_min` des coupures tombent à une heure non pleine) ;
     - permutation des colonnes : les poids suivent la permutation ;
     - échelle : prix × facteur dans [0,1 ; 10], volumes ÷ facteur : poids inchangés.
-    Tolérance 1e-9. Renvoie un dict avec `ok` et le détail des contrôles."""
+    Tolérance 1e-9. Renvoie un dict avec `ok` et le détail des contrôles.
+
+    Les données sont `synthetique_varie` : au moins 1 300 jours, régimes variés (tendances, krachs, funding
+    élevé positif soutenu ou négatif, base négative, paires qui entrent en cotation) et une graine tirée de
+    `os.urandom` À CHAQUE APPEL (`graine_donnees` n'est donné que par les tests) : une stratégie ne peut pas
+    reconnaître le jeu de test. Si les poids sont constants sur toute la série, le rapport porte
+    `evaluable: False` (rien ne prouve alors la causalité : `adaptateur.vers_rapport_causalite` fait échouer C9)."""
     cfg = criteres.portes.C9_causalite
     rng = rng or np.random.default_rng(int.from_bytes(os.urandom(16), "big"))
-    pan = synthetique(_JOURS_SYNTH, n_paires, graine_donnees, avec_1h=avec_1h, avec_perp=avec_perp)
+    if graine_donnees is None:
+        graine_donnees = int.from_bytes(os.urandom(8), "big")  # jamais dans une clé de cache
+    pan = synthetique_varie(_JOURS_SYNTH, n_paires, graine_donnees, avec_1h=avec_1h, avec_perp=avec_perp)
     T = pan.n_jours
     marge = criteres.marge_perp_part
     timeout = 180.0
@@ -178,7 +215,7 @@ def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "
         else:
             coupures.append(int(pan.jours[j]) + h * 3600)
     non_pleines = sum(1 for c in coupures if c % 3600 != 0)
-    perm = rng.permutation(n_paires)
+    perm = _permutation_sans_point_fixe(rng, n_paires)
     facteurs = np.exp(rng.uniform(math.log(0.1), math.log(10.0), n_paires))
 
     def base(_):
@@ -219,6 +256,8 @@ def verifier_causalite(source: bytes, params: dict, criteres, *, classe: str = "
         res["code"] = e.code
         return res
     res["deterministe"] = bool(max(np.abs(w1s - w2s).max(), np.abs(w1p - w2p).max()) <= _TOL_CAUSALITE)
+    res["evaluable"] = bool(np.ptp(w1s, axis=0).max() > _TOL_CAUSALITE or np.ptp(w1p, axis=0).max() > _TOL_CAUSALITE)
+    res["n_jours"] = int(T)
     ecart_cut = 0.0
     for c, ws, wp, n_ok in coupes:
         clos = int(np.sum(pan.jours + JOUR_S <= c))  # jours dont la clôture <= coupure
@@ -286,18 +325,54 @@ def _sans_perp(pan: Panneau) -> Panneau:
                    tuple(a[:0] for a in pan.funding_taux), tuple(a[:0] for a in pan.funding_ts))
 
 
+def _permutation_sans_point_fixe(rng: np.random.Generator, n: int) -> np.ndarray:
+    """Permutation qui déplace chaque colonne (sinon le test de permutation pourrait ne rien tester)."""
+    while True:
+        perm = rng.permutation(n)
+        if n < 2 or (perm != np.arange(n)).all():
+            return perm
+
+
+def _controle_reel(source: bytes, params: dict, pan: Panneau, classe: str, marge: float, timeout: float,
+                   ws_o: np.ndarray, wp_o: np.ndarray) -> float:
+    """Second contrôle de causalité/invariance, sur les données RÉELLES de l'essai : rejoue la stratégie avec une
+    autre permutation et d'autres facteurs d'échelle par paire (tirés par appel, `os.urandom`) ; renvoie l'écart
+    maximal des poids, dans le repère des paires réelles, avec ceux de l'exécution principale."""
+    rng = np.random.default_rng(int.from_bytes(os.urandom(16), "big"))
+    n = pan.n_paires
+    perm = _permutation_sans_point_fixe(rng, n)
+    facteurs = np.exp(rng.uniform(math.log(0.1), math.log(10.0), n))
+    p2 = pan.mettre_a_l_echelle(facteurs).permuter(perm)
+    ws, wp, _ = _courir(source, params, p2, classe, marge, timeout, True)
+    o_s, o_p = np.empty_like(ws), np.empty_like(wp)
+    o_s[:, perm], o_p[:, perm] = ws, wp
+    return float(max(np.abs(o_s - ws_o).max(), np.abs(o_p - wp_o).max()))
+
+
 def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal: JournalRecherche, criteres,
                    univers: str = "principal", *, journal_arene: str | Path | None = None,
                    convention_rotation: str = "derive", permutation: np.ndarray | None = None,
                    causalite: bool = True, timeout_s: float | None = None,
-                   cout_spot_bp: int | None = None, cout_perp_bp: int | None = None) -> ResultatEssai:
+                   cout_spot_bp: int | None = None, cout_perp_bp: int | None = None,
+                   test: bool = False) -> ResultatEssai:
     """Un essai complet. `donnees` : `Donnees` du chargeur ou `Panneau`. Lève `PlafondError` (plafond total),
-    `CanariError` (bac à sable défaillant), `AncrageError` (journal incohérent) : ce ne sont pas des essais.
-    Tout autre échec est un essai : `debut` et `fin` sont écrits et le code fermé est rendu.
-    `convention_rotation="cible"` et `cout_spot_bp=15` reproduisent le moteur du labo (acceptation E0065)."""
+    `CanariError` (bac à sable défaillant), `AncrageError` (journal incohérent, ou `journal_arene` absent sans
+    `test=True`) : ce ne sont pas des essais. Tout autre échec est un essai : `debut` et `fin` sont écrits
+    et le code fermé est rendu.
+
+    `journal_arene` est OBLIGATOIRE (ancrage externe, protocole §4) sauf si `test=True` (tests seulement).
+    L'ancre est écrite juste après `debut` ET juste après `fin`. `debut` consigne toutes les surcharges
+    (causalite, cout_spot_bp, cout_perp_bp, convention_rotation, timeout_s, permutation imposée, test).
+    `convention_rotation="cible"` et `cout_spot_bp=15` reproduisent le moteur du labo (acceptation E0065).
+
+    Si `causalite`, deux contrôles : C9 sur synthétique (`verifier_causalite`, graine tirée par appel) puis,
+    sur les données réelles de l'essai, rejeu avec une autre permutation et d'autres facteurs d'échelle par
+    paire (poids identiques à 1e-9 près) ; un écart donne le code CAUSALITE."""
     classe = _champ(fiche, "classe")
     if classe not in CLASSES:
         raise ValueError(f"classe {classe!r} inconnue")
+    if journal_arene is None and not test:
+        raise AncrageError("journal_arene obligatoire (ancrage externe) ; test=True réservé aux tests")
     bac_a_sable.canari()
     journal.demarrer()
     journal.verifier_ancrage(journal_arene)
@@ -309,7 +384,11 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
         "id": eid, "famille": _champ(fiche, "famille"), "classe": classe,
         "fiche_sha256": _champ(fiche, "fiche_sha256"), "code_sha256": hashlib.sha256(source).hexdigest(),
         "params": params_canoniques(params), "univers": univers, "criteres_sha256": criteres.sha256,
-        "moteur": VERSION_MOTEUR})
+        "moteur": VERSION_MOTEUR,
+        "surcharges": {"causalite": bool(causalite), "cout_spot_bp": cout_spot_bp, "cout_perp_bp": cout_perp_bp,
+                       "convention_rotation": convention_rotation, "timeout_s": timeout_s,
+                       "permutation_imposee": permutation is not None, "test": bool(test)}})
+    journal.ancrer(journal_arene)
     res = ResultatEssai(id=eid, code=ERREUR, univers=univers)
     try:
         bac_a_sable.verifier_source(source.decode("utf-8", "replace"), Path(code_path).name)
@@ -318,39 +397,50 @@ def executer_essai(fiche, code_path: str | Path, params: dict, donnees, journal:
         if not signaux and pan.perp_1h is not None:
             pan = _sans_perp(pan)
         if causalite:
-            cle = (hashlib.sha256(source).hexdigest(), params_canoniques(params), pan.n_paires,
-                   pan.spot_1h is not None, pan.perp_1h is not None, classe)
+            cle = (hashlib.sha256(source).hexdigest(), params_canoniques(params), criteres.sha256, pan.n_paires,
+                   pan.spot_1h is not None, pan.perp_1h is not None, classe, _JOURS_SYNTH, VERSION_CAUSALITE)
             if cle not in _CAUSALITE_CACHE:
                 _CAUSALITE_CACHE[cle] = verifier_causalite(
                     source, params, criteres, classe=classe, n_paires=pan.n_paires,
                     avec_1h=pan.spot_1h is not None, avec_perp=pan.perp_1h is not None)
-            res.causalite = _CAUSALITE_CACHE[cle]
+            res.causalite = dict(_CAUSALITE_CACHE[cle])
             if not res.causalite["ok"]:
                 res.code = res.causalite.get("code", contrat.CAUSALITE)
-                res.detail = f"causalité : {res.causalite}"
+                # aucune valeur ni texte issus de la stratégie : les noms des contrôles en échec seulement
+                echecs = [k for k in ("deterministe",) if not res.causalite.get(k, True)]
+                echecs += [k for k in ("ecart_coupures", "ecart_permutation", "ecart_echelle")
+                           if res.causalite.get(k, 0.0) > _TOL_CAUSALITE]
+                res.detail = f"causalité synthétique en échec : {echecs or res.causalite.get('erreur', '?')}"
                 return res
         perm = (np.random.default_rng(int.from_bytes(os.urandom(16), "big")).permutation(pan.n_paires)
                 if permutation is None else np.asarray(permutation))
         ppan = pan.permuter(perm)
-        ws, wp, _ = _courir(source, params, ppan, classe, criteres.marge_perp_part,
-                            timeout_s or float(criteres.timeout_essai_s), True)
+        delai = timeout_s or float(criteres.timeout_essai_s)
+        ws, wp, _ = _courir(source, params, ppan, classe, criteres.marge_perp_part, delai, True)
         ws_o, wp_o = np.empty_like(ws), np.empty_like(wp)
         ws_o[:, perm], wp_o[:, perm] = ws, wp
+        if causalite:
+            ecart = _controle_reel(source, params, pan, classe, criteres.marge_perp_part, delai, ws_o, wp_o)
+            res.causalite["ecart_reel"] = ecart
+            res.causalite["reel_ok"] = bool(ecart <= _TOL_CAUSALITE)
+            if not res.causalite["reel_ok"]:
+                res.code = contrat.CAUSALITE
+                res.detail = "causalité sur données réelles en échec (permutation et échelles différentes)"
+                return res
         res.serie = simuler(pan, ws_o, wp_o, classe, criteres, convention_rotation=convention_rotation,
-                              cout_spot_bp=cout_spot_bp, cout_perp_bp=cout_perp_bp)
-        res.metriques = calculer_metriques(res.serie)
+                            cout_spot_bp=cout_spot_bp, cout_perp_bp=cout_perp_bp)
+        res.metriques = {**calculer_metriques(res.serie), **calculer_metriques_portes(res.serie)}
         res.code = OK
     except ErreurEssai as e:
         res.code, res.detail = e.code, e.detail
     except Exception as e:  # noqa: BLE001
-        res.code, res.detail = ERREUR, f"{type(e).__name__}: {e}"
+        res.code, res.detail = ERREUR, type(e).__name__  # jamais le message (canal de sortie)
     finally:
         fin = {"id": eid, "statut": res.code}
         if res.code == OK:
-            fin.update({k: (decimal12(v) if not isinstance(v, (dict, str)) else v)
-                        for k, v in res.metriques.items() if k != "sharpe_par_annee"})
-            fin["sharpe_par_annee"] = {a: decimal12(v) for a, v in res.metriques["sharpe_par_annee"].items()} \
-                if "sharpe_par_annee" in res.metriques else {}
+            for k, v in res.metriques.items():
+                fin[k] = {a: decimal12(x) for a, x in v.items()} if isinstance(v, dict) else \
+                    (v if isinstance(v, str) else decimal12(v))
         journal.fin(fin)
         if res.detail:
             journal.technique(eid, res.detail)
@@ -365,6 +455,7 @@ __all__ = [
     "ResultatEssai",
     "SourceRefusee",
     "calculer_metriques",
+    "calculer_metriques_portes",
     "executer_essai",
     "verifier_causalite",
 ]
