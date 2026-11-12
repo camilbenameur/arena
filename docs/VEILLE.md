@@ -20,12 +20,15 @@ Décision du propriétaire du 12/11/2026 : « vas-y pour la surveillance continu
    - **Alertes.** `action/veille_symbole_ecarte` après 3 rejets consécutifs d'un même symbole (une fois par épisode), puis `info/veille_symbole_ecarte` quand il est de nouveau accepté.
    - Le nombre de ticks consécutifs en échec est dans `var/veille_echecs` (hors journal). L'alerte `action/veille_data` part une fois, au troisième échec consécutif (début de la panne) ; rien ensuite ; au premier tick réussi, une alerte `info/veille_data` « rétabli » et le fichier disparaît.
 6. **Transactions et stops en direct.** Les stops et le mouvement se jugent sur les **transactions réelles**, jamais sur le ticker : à chaque tick, pour chaque symbole, le client Kraken lit l'OHLC à `interval=1` (bougies d'une minute, `since` = tick - 66 min). Seules les bougies closes au tick comptent (`ts + 60 <= tick`). Si la lecture échoue (ou ne renvoie rien) pour un symbole, ni stop ni déclencheur sur ce symbole à ce tick : le filet de barres du cycle reste en place et le tick l'indique dans `rejets` (`"ohlc"`, en plus de ses éventuels rejets de quote : un symbole dont le ticker est accepté garde son quote).
-   - **Condition.** Une position qui a un stop est vendue si, parmi les bougies 1 min closes depuis `max(tick - 600, ouverture de la position)`, **au moins 2 bougies distinctes** ont un plus bas `<= stop`. Une bougie aberrante isolée ne suffit pas : on attend le tick suivant. Il n'y a plus de confirmation sur deux ticks : les transactions sont la confirmation.
-   - **Prix.** Clôture de la dernière bougie 1 min close x (1 - glissement), arrondie au tick vers le bas, **jamais au-dessus du stop**, avec les frais taker (calculés sur le prix final). Un prix calculé `<= 0` est ignoré.
+   - **Condition.** Une position qui a un stop est vendue si, parmi les bougies 1 min closes **à volume > 0** (une bougie de remplissage répète un cours : elle ne compte pas) depuis `max(tick - 600, heure réelle d'exécution de l'achat)`, **au moins 2 bougies distinctes** ont un plus bas `<= stop`. L'heure réelle d'exécution est le `ts` du dernier événement `quote` ou `quote_reveil` de ce symbole qui précède le fill d'ouverture (le `ts` du fill est l'instant de décision, pas celui de l'exécution). Une bougie aberrante isolée ne suffit pas : on attend le tick suivant. Il n'y a plus de confirmation sur deux ticks : les transactions sont la confirmation.
+   - **Prix.** `min(stop, max(clôture 1 min x (1 - glissement), bid brut du ticker x (1 - glissement)))`, arrondi au tick vers le bas, avec les frais taker (calculés sur le prix final) : un seul flux erroné donne au pire une vente au stop ; sans ticker lisible, la clôture 1 min seule. Un prix calculé `<= 0` est ignoré.
    - `order_id` : `stop:{portefeuille}:{symbole}:veille:{tick}` ; la vente passe par `SimExecutor._forced_sell` (raison `stop`, ts = tick), idempotente par `order_id`. Tout fill (`_forced_sell`) dont le prix ou la quantité est `<= 0` lève avant d'écrire.
    - Le contrôle des stops sur les barres de 4 h, au cycle suivant, reste le filet de sécurité : il part des positions rejouées, une position déjà vendue n'est pas revendue.
    - Un stop de veille ne réveille personne (voir §2).
-   - **Le ticker** ne sert plus qu'à valoriser `veille.equity` (règle d'acceptation du point 5, inchangée) et aux `quote_reveil` d'exécution des intentions.
+   - **Le ticker** ne sert plus qu'à valoriser `veille.equity` (règle d'acceptation du point 5, inchangée), à borner le prix d'un stop (ci-dessus) et aux `quote_reveil` d'exécution des intentions.
+   - **Saison gelée.** Le statut de gel (voir RUNBOOK « Saison 1 ») est calculé au début du tick : si un hash gelé a changé sans dérogation, aucun fill n'est écrit (ni stop ni réveil), l'alerte `panique/saison_gelee` part une fois, et l'événement `veille` porte `"gel": true`.
+   - **Lecture des bougies.** `since` = tick - 81 min (1 h de fenêtre + 15 min de tolérance de la référence + le tick précédent). Limite de débit (HTTP 429, lu avec son `Retry-After`, ou `EAPI:Rate limit`) : les appels OHLC sont suspendus jusqu'à l'expiration (300 s par défaut ; état dans `var/veille_ohlc_pause`), les symboles concernés sont notés `"ohlc"` dans `rejets`. Au moins 3 symboles en `ohlc` pendant 3 ticks consécutifs : `action/veille_ohlc` une fois, puis `info` au rétablissement. Un tick sans aucune bougie lisible est écrit mais compte dans `var/veille_echecs` (alerte `veille_data` au 3e).
+   - **AssetPairs** est mis en cache 24 h dans `var/asset_pairs.json` (un appel par jour au lieu d'un par tick ; repli sur un cache périmé si l'appel échoue). Le cycle, lui, appelle AssetPairs à chaque exécution.
 7. **Événement `veille`**, écrit APRÈS les stops (et après `reveil_started` s'il y a un réveil), horodaté au tick :
 
    ```json
@@ -39,7 +42,8 @@ Décision du propriétaire du 12/11/2026 : « vas-y pour la surveillance continu
     "equity": {"llm:claude-haiku-5-5": equity_ueur_au_bid, "...": 0},
     "stops": ["stop:llm:...:veille:1794500100"],
     "reveil": null,
-    "refus": null}
+    "refus": null,
+    "gel": false}
    ```
 
    - `quotes` : les quotes acceptés. `quotes_bruts` : bid et ask de TOUS les symboles reçus, rejetés compris, hors `invalide`. `rejets` : `{symbole: motif}` des quotes écartés (`{}` sinon). `confirmes` : les symboles acceptés par confirmation de rupture. `variations_bp` : par symbole, la variation du tick courant mesurée sur les bougies 1 min (bp signés), pour les symboles dont la lecture OHLC a réussi. `clotures_1m` : la clôture de la dernière bougie 1 min close, par symbole (base de PRICE_SANITY au réveil). `rejets` peut contenir `"ohlc"` (lecture des bougies en échec).
@@ -55,7 +59,7 @@ Un réveil est une ronde de décision hors rendez-vous pour **tous les portefeui
 
 ### Déclencheur : le mouvement, et lui seul
 
-Mesuré sur les **transactions** (bougies Kraken 1 min closes, le ticker n'intervient plus). Variation d'un instrument à un tick T = clôture de la dernière bougie 1 min close / clôture de la bougie 1 min la plus proche de `T - fenetre_mouvement_s` (à 2 min près, lue dans le même appel OHLC) - 1. Le déclencheur exige `|variation| >= seuil_mouvement_bp` **au tick courant ET au tick précédent (T - tick_s), dans le même sens**. Le tick précédent est rejugé avec ses propres bougies (même appel). Sans bougie de référence, ou sans bougie close de moins de 15 min, il n'y a pas de mesure ni de déclencheur ; un symbole dont la lecture OHLC échoue n'en a pas non plus.
+Mesuré sur les **transactions** (bougies Kraken 1 min closes **à volume > 0**, le ticker n'intervient plus). Variation d'un instrument à un tick T = clôture de la dernière bougie close tradée / clôture de la dernière bougie close tradée à `T - fenetre_mouvement_s` ou avant (à moins de 15 min) - 1. Le déclencheur exige `|variation| >= seuil_mouvement_bp` **au tick courant ET au tick précédent (T - tick_s), dans le même sens**. Le tick précédent est rejugé avec ses propres bougies (même appel). Sans bougie de référence, ou sans bougie tradée de moins de 15 min, il n'y a pas de mesure ni de déclencheur ; un symbole dont la lecture OHLC échoue n'en a pas non plus.
 - Payload : `{"type": "mouvement", "symbole": ..., "variation_bp": ..., "fenetre_s": ...}` (`variation_bp` signé, du tick courant). Si plusieurs instruments dépassent le seuil, le plus grand `|variation|` l'emporte. La variation mesurée de chaque symbole est dans `veille.variations_bp`.
 - Il n'y a **plus de déclencheur « stop »** : il exposait la position d'un rival et laissait un seul modèle consommer le plafond de tous. Un stop touché est exécuté par la veille, point.
 
@@ -92,7 +96,7 @@ garde_avant_cycle_s = 1800
   - Les quotes acceptés du tick sont journalisés en **`quote_reveil`** (même payload que `quote`) avant la décision. Ils ne faussent ni la médiane des spreads du cycle (`_view` ne lit que `quote`) ni le site. Un symbole écarté n'est pas négociable au réveil ; ses positions sont valorisées à leur dernier quote accepté.
   - Les marks sont au milieu de ces quotes.
   - **PRICE_SANITY** : la « dernière clôture » donnée à riskd est la clôture de la dernière bougie 1 min close (`veille.clotures_1m` du tick du réveil), et non la clôture de 4 h (sinon un mouvement de plus de 3 % rendrait tout achat impossible) ni le ticker (un ticker erroné bloque ainsi les entrées). Au cycle, rien ne change.
-- **Avant de décider.** Résolution des ordres UNKNOWN, gel et arrêt (`_freeze_halt`), puis coupe-circuit et dormance.
+- **Avant de décider.** Résolution des ordres UNKNOWN, gel et arrêt (`_freeze_halt`), puis coupe-circuit et dormance. Pour ces contrôles et pour les mises à plat, chaque symbole est valorisé à `max(bid accepté, clôture 1 min de l'événement veille du tick)` : un seul flux erroné (ticker trop bas) ne peut ni geler ni arrêter un portefeuille.
 - **Coupe-circuit relu.** `killswitch.active_sources` est relu juste avant l'exécution de chaque intention, au réveil comme au cycle : un KILL armé pendant l'appel LLM bloque l'achat.
 - **Pas d'equity.** Aucun événement `equity` au réveil : les séries d'equity, Sharpe et statistiques restent aux rendez-vous de 4 h. L'equity vivante est dans `veille`.
 - **Budget.** Le garde-fou de quota quotidien (`daily_budget_usd`) s'applique aux réveils comme aux cycles.

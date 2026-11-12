@@ -35,7 +35,8 @@ from arene.cycle import (
     _Runner,
     cycle_lock,
 )
-from arene.data import DataError
+from arene.data import DataError, RateLimitedError
+from arene.data.kraken import KrakenError
 from arene.data.store import BarStore
 from arene.deciders.llm import prompt_sha256
 from arene.journal import Journal, intent_from_payload, verify
@@ -61,8 +62,10 @@ COHERENCE_PCT = 2  # deux quotes rejetés dont les milieux sont à moins de 2 % 
 REJETS_AVANT_ALERTE = 3
 CHAINE_MAX = 6  # ticks consécutifs acceptés par confirmation de rupture (30 min) ; au-delà, rejet
 MINUTE_S = 60
-OHLC_DEPUIS_S = 66 * 60  # bougies 1 min lues par tick : de tick - 66 min à tick (référence du mouvement comprise)
-REF_TOLERANCE_S = 120  # bougie de référence du mouvement : la plus proche de tick - fenêtre, à 2 min près
+OHLC_DEPUIS_S = 81 * 60  # bougies 1 min lues par tick : 1 h + 15 min de tolérance + le tick précédent (5 min)
+REF_TOLERANCE_S = 900  # bougie de référence du mouvement : la dernière bougie tradée à tick - fenêtre ou avant, à 15 min près
+OHLC_ECHECS_MIN = 3  # symboles en échec OHLC, sur 3 ticks consécutifs : alerte veille_ohlc
+PAUSE_OHLC_DEFAUT_S = 300
 BOUGIE_PERIMEE_S = 900  # dernière bougie close plus vieille que 15 min : pas de mesure
 CONFIRMATION_S = 600  # le tick précédent (stops, mouvement) doit dater de 10 min au plus
 REFERENCE_TOLERANCE_S = 900  # référence du mouvement : quote valide à tick - fenêtre ou avant, de 15 min au plus
@@ -185,17 +188,17 @@ def bougies_closes(bars: list[Bar], tick: int) -> list[Bar]:
 
 
 def variation_bougies(bars: list[Bar], tick: int, fenetre_s: int) -> tuple[int, int] | None:
-    """(clôture de la dernière bougie close, clôture de la bougie la plus proche de tick - fenêtre à 2 min près), ou
-    None. Sans transaction récente (dernière bougie close de plus de 15 min), pas de mesure."""
-    closed = bougies_closes(bars, tick)
+    """(clôture de la dernière bougie close tradée, clôture de la dernière bougie close tradée à tick - fenêtre ou
+    avant, à 15 min près), ou None. Seules les bougies à volume > 0 comptent (une bougie de remplissage répète un
+    cours) ; sans transaction récente (dernière bougie tradée de plus de 15 min), pas de mesure."""
+    closed = [b for b in bougies_closes(bars, tick) if b.volume > 0]
     if not closed or tick - (closed[-1].ts + MINUTE_S) > BOUGIE_PERIMEE_S:
         return None
     target = tick - fenetre_s
-    cands = [b for b in closed if abs(b.ts - target) <= REF_TOLERANCE_S]
-    if not cands:
+    refs = [b for b in closed if b.ts <= target and target - b.ts <= REF_TOLERANCE_S]
+    if not refs:
         return None
-    ref = min(cands, key=lambda b: (abs(b.ts - target), b.ts))
-    return closed[-1].close, ref.close
+    return closed[-1].close, refs[-1].close
 
 
 def mouvement(
@@ -203,7 +206,8 @@ def mouvement(
 ) -> tuple[dict[str, Any] | None, dict[str, int]]:
     """(déclencheur, variations_bp par symbole) mesurés sur les TRANSACTIONS (bougies 1 min), jamais sur le ticker.
 
-    Variation = clôture de la dernière bougie close / clôture de la bougie la plus proche de tick - fenêtre, moins 1.
+    Variation = clôture de la dernière bougie close tradée / clôture de la dernière bougie tradée à tick - fenêtre ou
+    avant (15 min au plus), moins 1.
     Le seuil doit être dépassé au tick courant ET au tick précédent (tick - pas_s, rejugé avec ses propres bougies),
     dans le même sens. Le plus grand |variation| l'emporte."""
     best: tuple[int, int, str, int] | None = None  # (|d|·1e8/ref, d, symbole, ref)
@@ -231,6 +235,16 @@ def mouvement(
     _, d, sym, rref = best
     bp = (abs(d) * BP * 2 + rref) // (2 * rref)
     return {"type": "mouvement", "symbole": sym, "variation_bp": bp if d > 0 else -bp, "fenetre_s": fenetre_s}, variations
+
+
+def pause_ohlc(exc: BaseException) -> int | None:
+    """Secondes de pause des appels OHLC si `exc` est une limite de débit (HTTP 429 avec Retry-After, ou
+    EAPI:Rate limit), sinon None. Défaut : 300 s."""
+    if isinstance(exc, RateLimitedError):
+        return exc.retry_after or PAUSE_OHLC_DEFAUT_S
+    if isinstance(exc, KrakenError) and any("Rate limit" in e for e in exc.errors):
+        return PAUSE_OHLC_DEFAUT_S
+    return None
 
 
 def _alerte_reveil(
@@ -304,6 +318,13 @@ class _ReveilRunner(_Runner):
         if origine is not None:
             last_closes.update({s: c for s, c in origine.get("clotures_1m", {}).items() if s in self.symbols})
         marks, bids = dict(self.marks), dict(self.bids)
+        clot = (origine or {}).get("clotures_1m", {})
+        # Gel, arrêt et mises à plat : chaque symbole vaut max(bid accepté, clôture 1 min) ; un seul flux erroné ne peut
+        # ni geler ni arrêter un portefeuille.
+        for sym, c in clot.items():
+            if sym in bids and c > bids[sym]:
+                bids[sym] = c
+        self._flat_bids = {s: c for s, c in clot.items() if s in self.quotes}
         for sym in self.symbols:
             if sym in self.quotes:
                 continue
@@ -312,6 +333,14 @@ class _ReveilRunner(_Runner):
                 marks[sym], bids[sym] = _mid(q[0], q[1]), q[0]
         self.marks, self.bids = marks, bids
         self.market = replace(self.market, last_closes=last_closes, marks=marks)
+
+    def _flatten_quotes(self) -> dict[str, Quote]:
+        out = dict(self.quotes)
+        for s, c in getattr(self, "_flat_bids", {}).items():
+            q = out[s]
+            if c > q.bid:
+                out[s] = Quote(q.symbol, q.ts, c, max(q.ask, c))
+        return out
 
     def _dernier_quote_valide(self, sym: str) -> tuple[int, int] | None:
         for e in reversed(self._events_of("veille")):
@@ -406,6 +435,21 @@ class _Veille:
             pass
         return n
 
+    def _pause_ohlc(self, ecrire: int | None = None) -> int:
+        """Instant (secondes) jusqu'auquel les appels OHLC sont suspendus (`var/veille_ohlc_pause`)."""
+        p = self.paths.var / "veille_ohlc_pause"
+        try:
+            until = int(p.read_text().strip())
+        except (OSError, ValueError):
+            until = 0
+        if ecrire is not None:
+            try:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(str(ecrire))
+            except OSError:
+                pass
+        return until
+
     # -- tick
     def run(self) -> VeilleReport:
         paths = self.paths
@@ -427,6 +471,14 @@ class _Veille:
             return VeilleReport("already_done", tick)
         hist = construire_hist(list(veilles.values()))
         store = BarStore(paths.data, "kraken")
+        # Saison gelée : calculée au début du tick. Gelé (hashes différents, sans dérogation) : aucun fill ni réveil.
+        gel = saison.verifier_gel(
+            self.log.events,
+            {"config_sha256": cfg.sha256_hors_saison, "policy_sha256": policy.sha256, "prompt_sha256": prompt_sha256(),
+             "code_sha256": saison.code_sha256(paths.repo)},
+            tick, saison.lire_derogation(paths),
+        )  # fmt: skip
+        gele = gel.statut == "gele"
 
         # 1. quotes, contrôlés symbole par symbole
         rejets: dict[str, str] = {}
@@ -434,7 +486,10 @@ class _Veille:
         bruts: dict[str, tuple[int, int]] = {}
         quotes: dict[str, Quote] = {}
         try:
-            instruments = {i.symbol: i for i in load_instruments(cfg, self.clients.kraken)}
+            instruments = {
+                i.symbol: i
+                for i in load_instruments(cfg, self.clients.kraken, cache=paths.var / "asset_pairs.json", now=self.now)
+            }
             for s, inst in instruments.items():
                 h = hist.get(s, [])
                 try:
@@ -464,8 +519,6 @@ class _Veille:
             if n == ECHECS_AVANT_ALERTE:
                 self._alert("action", "veille_data", f"veille : quotes Kraken inutilisables depuis {n} ticks ({msg})")
             return VeilleReport("failed", tick, error=msg, alerts=self.alerts)
-        if self._echecs(0) >= ECHECS_AVANT_ALERTE:
-            self._alert("info", "veille_data", "veille : quotes Kraken rétablis")
         qd = {s: (q.bid, q.ask) for s, q in quotes.items()}
         for s in instruments:  # épisodes de rejets consécutifs d'un même symbole
             n_prev = 0
@@ -480,32 +533,55 @@ class _Veille:
 
         # 2. transactions : bougies Kraken 1 min closes (stops et mouvement ne lisent jamais le ticker)
         minute_bars: dict[str, list[Bar]] = {}
+        jusqua = self._pause_ohlc()
+        limite = self.now < jusqua  # limite de débit en cours : aucun appel OHLC avant l'expiration
         for s, inst in instruments.items():
+            if limite:
+                rejets.setdefault(s, "ohlc")
+                continue
             try:
                 bars = bougies_closes(self.clients.kraken.ohlc(s, inst.kraken_pair, 60, tick - OHLC_DEPUIS_S), tick)
                 if not bars:
                     raise DataError("aucune bougie 1 min")
                 minute_bars[s] = bars
-            except Exception:  # noqa: BLE001 - ni stop ni déclencheur sur ce symbole à ce tick
+            except Exception as exc:  # noqa: BLE001 - ni stop ni déclencheur sur ce symbole à ce tick
                 rejets.setdefault(s, "ohlc")
+                pause = pause_ohlc(exc)
+                if pause is not None:  # HTTP 429 / Rate limit : on suspend les appels OHLC
+                    self._pause_ohlc(self.now + pause)
+                    limite = True
+        # Aucune bougie lisible : le tick compte dans var/veille_echecs ; sinon (quotes et bougies) retour à la normale.
+        if minute_bars:
+            if self._echecs(0) >= ECHECS_AVANT_ALERTE:
+                self._alert("info", "veille_data", "veille : quotes et bougies Kraken rétablis")
+        else:
+            n = self._echecs() + 1
+            self._echecs(n)
+            if n == ECHECS_AVANT_ALERTE:
+                self._alert("action", "veille_data", f"veille : aucune bougie 1 min lisible depuis {n} ticks")
+        ko_now = sum(1 for m in rejets.values() if m == "ohlc") >= OHLC_ECHECS_MIN
+        ko_prev = 0
+        for pl_ in sorted((e["payload"] for e in self._of("veille")), key=lambda x: x["tick"], reverse=True):
+            if sum(1 for m in pl_.get("rejets", {}).values() if m == "ohlc") < OHLC_ECHECS_MIN:
+                break
+            ko_prev += 1
+        if ko_now and ko_prev + 1 == ECHECS_AVANT_ALERTE:
+            self._alert("action", "veille_ohlc", f"veille : lecture des bougies 1 min en échec pour {sum(1 for m in rejets.values() if m == 'ohlc')} symboles depuis {ko_prev + 1} ticks")
+        elif not ko_now and ko_prev >= ECHECS_AVANT_ALERTE:
+            self._alert("info", "veille_ohlc", "veille : lecture des bougies 1 min rétablie")
 
-        # 2 bis. stops en direct sur les transactions
+        # 2 bis. stops en direct sur les transactions (aucun fill si la saison est gelée)
         executor = SimExecutor(
             self.journal, instruments, cfg.taker_fee_bp, cfg.slippage_bp, cfg.venue_mode, self.fault_injector
         )
-        executor.process_live_stops(minute_bars, tick)
+        if not gele:
+            executor.process_live_stops(minute_bars, tick, {s: b for s, (b, _a) in bruts.items()})
         self.log.refresh()
         suffix = f":veille:{tick}"
         stop_ids = [e["payload"]["order_id"] for e in self._of("fill") if e["payload"]["order_id"].endswith(suffix)]
         rep = VeilleReport("done", tick, stops=stop_ids, rejets=rejets, confirmes=confirmes, alerts=self.alerts)
-
-        # 3. saison gelée : aucun réveil (ni reprise) si un hash gelé a changé, sauf dérogation écrite
-        gel = saison.verifier_gel(
-            self.log.events,
-            {"config_sha256": cfg.sha256_hors_saison, "policy_sha256": policy.sha256, "prompt_sha256": prompt_sha256()},
-            tick, saison.lire_derogation(self.paths),
-        )  # fmt: skip
-        gele = gel.statut == "gele"
+        if gele and not any(e["payload"]["code"] == "saison_gelee" and e["payload"]["message"] == gel.message for e in self._of("alert")):
+            self._alert("panique", "saison_gelee", gel.message)
 
         # 3 bis. réveil interrompu : reprise, ou réparation puis abandon
         closed = {e["payload"]["reveil"] for e in self._of("reveil_completed", "reveil_abandonne")}
@@ -534,10 +610,6 @@ class _Veille:
                     # Le réveil est consigné d'abord : avant l'événement `veille` et avant tout appel réseau du réveil.
                     self.log.add("reveil_started", {"reveil": tick, "declencheur": trigger}, self.now)
 
-        deja = any(e["payload"]["code"] == "saison_gelee" and e["payload"]["message"] == gel.message for e in self._of("alert"))
-        if gele and (rep.refus == "saison_gelee" or pending) and not deja:
-            self._alert("panique", "saison_gelee", gel.message)
-
         # 5. événement veille, après les stops
         states = replay(self.log.events)
         marks = {s: _mid(b, a) for s, (b, a) in qd.items()}
@@ -562,6 +634,7 @@ class _Veille:
                 "stops": rep.stops,
                 "reveil": launch,
                 "refus": rep.refus,
+                "gel": gele,
             },
             tick,
         )

@@ -385,11 +385,16 @@ class _Runner:
             "config_sha256": self.cfg.sha256,
             "prompt_sha256": prompt_sha256(),
         }
+        self._claude_version = saison.claude_cli_version()
         last = None
         for e in self._events_of("config_loaded"):
             last = e["payload"]
-        if last is None or any(last.get(k) != v for k, v in cur.items()):
-            self.wn("config_loaded", {**cur, "git_head": self._git_head()})
+        changed = last is None or any(last.get(k) != v for k, v in cur.items())
+        version_change = last is not None and "claude_cli_version" in last and last["claude_cli_version"] != self._claude_version
+        if changed or version_change:
+            self.wn("config_loaded", {**cur, "git_head": self._git_head(), "claude_cli_version": self._claude_version})
+            if version_change:
+                self.alert("info", "claude_cli_version", f"claude --version : {last['claude_cli_version']} -> {self._claude_version}")
         opened = {e["payload"]["portfolio"] for e in self._events_of("portfolio_opened")}
         self.llm_portfolios = tuple(m.portfolio for m in self.cfg.models)
         self.temoin_portfolios = tuple(self.cfg.temoins.portfolios)
@@ -410,10 +415,20 @@ class _Runner:
             "config_sha256": self.cfg.sha256_hors_saison,
             "policy_sha256": self.policy.sha256,
             "prompt_sha256": prompt_sha256(),
+            "code_sha256": saison.code_sha256(self.paths.repo),
         }
 
     def _saison_gel(self) -> None:
         """Refuse de tourner si un hash gelé a changé pendant la saison, sauf dérogation écrite (journalisée)."""
+        ouverte, s = saison.saison_ouverte(self.log.events), self.cfg.saison
+        if ouverte is not None and s is not None:  # [saison] modifiée pendant la saison ouverte (hors `nom`) : sans effet
+            lu = (s.numero, s.debut_ts, s.duree_jours)
+            ref = (ouverte["numero"], ouverte.get("debut_ts"), ouverte.get("duree_jours"))
+            msg = f"[saison] modifiée pendant la saison {ouverte['numero']} : numero/debut_ts/duree_jours = {lu}, attendu {ref} ; sans effet"
+            if lu != ref and ref[1] is not None and not any(
+                e["payload"]["code"] == "saison_modifiee" and e["payload"]["message"] == msg for e in self._events_of("alert")
+            ):
+                self.alert("panique", "saison_modifiee", msg)
         g = saison.verifier_gel(self.log.events, self._saison_hashes(), self.t, saison.lire_derogation(self.paths))
         if g.statut == "gele":
             raise CycleAbort("panique", "saison_gelee", g.message)
@@ -426,32 +441,43 @@ class _Runner:
             self.alert("action", "saison_derogation", f"saison {g.numero} : dérogation journalisée ({', '.join(g.diff)})")
 
     def _saison_debut(self) -> None:
-        """Premier cycle dont t >= debut_ts - cycle_delay_s : `saison_debut`, avant toute décision."""
-        s = self.cfg.saison
-        if s is None or self.t < s.debut_ts - self.cfg.cycle_delay_s:
-            return
-        if any(e["payload"]["numero"] == s.numero for e in self._events_of("saison_debut")):
-            return
-        self.wn(
-            "saison_debut",
-            {"numero": s.numero, "nom": s.nom, "cycle": self.t, "fin_prevue_cycle": self.t + s.duree_jours * DAY_S,
-             **self._saison_hashes(), "git_head": self._git_head(),
-             "portefeuilles": list(self.llm_portfolios + self.temoin_portfolios)},
-        )  # fmt: skip
+        """Premier cycle dont t >= debut_ts - cycle_delay_s : `saison_debut` puis `saison_reference`, avant toute décision.
 
-    def _saison_apres_equity(self) -> None:
-        """Après les `equity` du cycle : `saison_reference` (base des classements), puis `saison_fin` si la saison est finie."""
-        t = self.t
+        Refusé tant qu'une saison est ouverte (`saison_debut` sans `saison_fin`) ; le numéro doit valoir le dernier + 1.
+        `saison_reference` : equity de chaque portefeuille AU BID avec les quotes de ce cycle, juste après `saison_debut`
+        (reprise après un crash entre les deux : écrite avant les décisions du cycle repris)."""
+        s = self.cfg.saison
         debut = saison.saison_ouverte(self.log.events)
         if debut is None:
-            return
-        n = debut["numero"]
-        if not any(e["payload"]["numero"] == n for e in self._events_of("saison_reference")):
+            if s is None or self.t < s.debut_ts - self.cfg.cycle_delay_s:
+                return
+            numeros = [e["payload"]["numero"] for e in self._events_of("saison_debut")]
+            if s.numero in numeros:
+                return  # déjà commencée (et terminée)
+            if s.numero != max(numeros, default=0) + 1:
+                msg = f"saison {s.numero} refusée : le numéro attendu est {max(numeros, default=0) + 1}"
+                if not any(e["payload"]["code"] == "saison_numero" and e["payload"]["message"] == msg for e in self._events_of("alert")):
+                    self.alert("action", "saison_numero", msg)
+                return
+            self.wn(
+                "saison_debut",
+                {"numero": s.numero, "nom": s.nom, "cycle": self.t, "fin_prevue_cycle": self.t + s.duree_jours * DAY_S,
+                 "debut_ts": s.debut_ts, "duree_jours": s.duree_jours,
+                 **self._saison_hashes(), "git_head": self._git_head(), "claude_cli_version": self._claude_version,
+                 "portefeuilles": list(self.llm_portfolios + self.temoin_portfolios)},
+            )  # fmt: skip
+            debut = saison.saison_ouverte(self.log.events)
+        if debut is not None and not any(e["payload"]["numero"] == debut["numero"] for e in self._events_of("saison_reference")):
+            eq = {p: self._equity_bid(st) for p, st in sorted(self.states().items())}
+            self.wn("saison_reference", {"numero": debut["numero"], "cycle": self.t, "equity": eq})
+
+    def _saison_apres_equity(self) -> None:
+        """Après les `equity` du cycle : `saison_fin` si la saison ouverte est finie (t >= fin_prevue_cycle)."""
+        t = self.t
+        debut = saison.saison_ouverte(self.log.events)
+        if debut is not None and t >= debut["fin_prevue_cycle"]:
             eq = {e["payload"]["portfolio"]: e["payload"]["equity_ueur"] for e in self._events_of("equity") if e["payload"]["cycle"] == t}
-            self.wn("saison_reference", {"numero": n, "cycle": t, "equity": dict(sorted(eq.items()))})
-        if t >= debut["fin_prevue_cycle"]:
-            eq = {e["payload"]["portfolio"]: e["payload"]["equity_ueur"] for e in self._events_of("equity") if e["payload"]["cycle"] == t}
-            self.wn("saison_fin", {"numero": n, "cycle": t, "equity": dict(sorted(eq.items()))})
+            self.wn("saison_fin", {"numero": debut["numero"], "cycle": t, "equity": dict(sorted(eq.items()))})
 
     def _veille_absente(self) -> None:
         """Alerte (une fois par absence) si la veille s'est arrêtée : dernier événement `veille` vieux de plus de 30 min,
@@ -622,8 +648,12 @@ class _Runner:
         reason = "kill_switch" if kill else "dormance" if lvl == dormance.FLATTEN else None
         if reason:
             for p in self.llm_portfolios + (ALEATOIRE,):
-                self.executor.flatten(p, self.quotes, self.t, reason)
+                self.executor.flatten(p, self._flatten_quotes(), self.t, reason)
             self.log.refresh()
+
+    def _flatten_quotes(self) -> dict[str, Quote]:
+        """Quotes de valorisation des mises à plat (le réveil les corrige avec les transactions)."""
+        return self.quotes
 
     def _equity_bid(self, st: PortfolioState) -> int:
         return equity_ueur(st, self.marks, self.bids)
@@ -638,7 +668,7 @@ class _Runner:
             if code == HALTED and not st.halted:
                 self.w("portfolio_halted", {"portfolio": p, "reason": "drawdown", "until_ts": 0})
                 self.alert("action", "portfolio_halted", f"{p} arrêté (drawdown) : revue requise, `arene resume {p}`")
-                self.executor.flatten(p, self.quotes, self.t, "halt")
+                self.executor.flatten(p, self._flatten_quotes(), self.t, "halt")
                 self.log.refresh()
             elif code == FROZEN and st.frozen_until_ts <= self.t:
                 self.w("portfolio_frozen", {"portfolio": p, "reason": "daily_loss", "until_ts": until})

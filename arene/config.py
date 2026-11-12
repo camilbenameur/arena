@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tomllib
 from dataclasses import dataclass, fields
 from decimal import Decimal
@@ -122,17 +123,12 @@ def _micro(x: float | str) -> int:
 
 
 def sha256_hors_saison(raw: bytes) -> str:
-    """sha256 du fichier SANS la table [saison] : de la ligne `[saison]` (comprise) jusqu'à la ligne qui précède le
-    prochain en-tête de table (`[...]` ou `[[...]]`) ou la fin du fichier. Modifier la table (ou un commentaire placé
-    dedans) ne change donc pas ce hash, contrairement à tout autre octet du fichier."""
-    out, skipping = [], False
-    for line in raw.decode("utf-8").splitlines(keepends=True):
-        head = line.strip()
-        if head.startswith("["):
-            skipping = head.split("#")[0].strip() == "[saison]"
-        if not skipping:
-            out.append(line)
-    return hashlib.sha256("".join(out).encode("utf-8")).hexdigest()
+    """sha256 de la config SANS la clé `saison` : le TOML est parsé (`tomllib`), la clé `saison` est retirée, puis le
+    reste est sérialisé en JSON canonique (clés triées, sans espaces). Les commentaires, les espaces et l'ordre des
+    clés n'ont donc aucun effet ; toute valeur (y compris un nombre) qui change modifie le hash."""
+    t = tomllib.loads(raw.decode("utf-8"))
+    t.pop("saison", None)
+    return hashlib.sha256(json.dumps(t, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _saison(raw: object) -> SaisonConfig | None:
@@ -228,6 +224,43 @@ def load_config(path: Path | str = DEFAULT_PATH) -> Config:
     return cfg
 
 
-def load_instruments(cfg: Config, client: KrakenClient) -> tuple[Instrument, ...]:
-    """Recharge AssetPairs (à faire au démarrage) et renvoie les instruments enrichis."""
-    return cfg.enrich(client.asset_pairs([r.kraken_pair for r in cfg.instrument_refs]))
+PAIRS_CACHE_S = 86_400
+
+
+def load_instruments(
+    cfg: Config, client: KrakenClient, *, cache: Path | None = None, now: int | None = None
+) -> tuple[Instrument, ...]:
+    """Recharge AssetPairs (à faire au démarrage) et renvoie les instruments enrichis.
+
+    Avec `cache` (fichier JSON dans var/) et `now`, la réponse est réutilisée 24 h tant que la liste des paires est
+    la même ; si l'appel échoue, un cache périmé sert de repli (les paramètres de paire changent très rarement).
+    """
+    from arene.data.kraken import PairInfo  # import tardif : évite un cycle d'import
+
+    pairs_wanted = [r.kraken_pair for r in cfg.instrument_refs]
+    data = None
+    if cache is not None and now is not None:
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            if data.get("paires") != pairs_wanted:
+                data = None
+        except (OSError, ValueError):
+            data = None
+        if data is not None and now - int(data["ts"]) < PAIRS_CACHE_S:
+            return cfg.enrich({k: PairInfo(**v) for k, v in data["infos"].items()})
+    try:
+        infos = client.asset_pairs(pairs_wanted)
+    except Exception:
+        if data is None:
+            raise
+        return cfg.enrich({k: PairInfo(**v) for k, v in data["infos"].items()})  # repli : cache périmé
+    if cache is not None and now is not None:
+        try:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_text(
+                json.dumps({"ts": now, "paires": pairs_wanted, "infos": {k: v.__dict__ for k, v in infos.items()}}),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    return cfg.enrich(infos)

@@ -69,6 +69,10 @@ class LiveKraken(FakeKraken):
         self.trades: dict[str, list[tuple[int, int]]] = {}  # symbole -> [(à partir de ts, cours)]
         self.bar_override: dict[tuple[str, int], tuple[int, int, int, int]] = {}
         self.fail_ohlc: set[str] = set()
+        self.ohlc_error: Exception | None = None  # levée par tout appel OHLC 1 min (limite de débit, ...)
+        self.ohlc_calls = 0
+        self.pairs_calls = 0
+        self.pairs_error: Exception | None = None
 
     def ticker(self, symbol: str, pair: str) -> Quote:
         if symbol in self.override:
@@ -78,8 +82,8 @@ class LiveKraken(FakeKraken):
 
     def minute_bar(self, sym: str, ts: int):
         if (sym, ts) in self.bar_override:
-            o, h, lo, c = self.bar_override[(sym, ts)]
-            return Bar(sym, 60, ts, o, h, lo, c, 1_000_000)
+            o, h, lo, c, *vol = self.bar_override[(sym, ts)]  # volume facultatif (0 : bougie de remplissage)
+            return Bar(sym, 60, ts, o, h, lo, c, vol[0] if vol else 1_000_000)
         price = None
         for frm, p in self.trades.get(sym, []):
             if frm <= ts:
@@ -88,9 +92,19 @@ class LiveKraken(FakeKraken):
             return Bar(sym, 60, ts, price, price, price, price, 1_000_000)
         return super().minute_bar(sym, ts)
 
+    def asset_pairs(self, pairs: list[str]):
+        self.pairs_calls += 1
+        if self.pairs_error is not None:
+            raise self.pairs_error
+        return super().asset_pairs(pairs)
+
     def ohlc(self, symbol: str, pair: str, interval_s: int = H4, since: int | None = None):
-        if interval_s == 60 and symbol in self.fail_ohlc:
-            raise RuntimeError("ohlc en panne (test)")
+        if interval_s == 60:
+            self.ohlc_calls += 1
+            if self.ohlc_error is not None:
+                raise self.ohlc_error
+            if symbol in self.fail_ohlc:
+                raise RuntimeError("ohlc en panne (test)")
         return super().ohlc(symbol, pair, interval_s, since)
 
 
@@ -259,7 +273,7 @@ def test_forme_de_l_evenement_veille_et_equity_au_bid(tmp_path: Path):
     before = env.events()
     tick(env, T0 + 600)
     p = of(env, "veille")[-1]["payload"]
-    assert set(p) == {"tick", "quotes", "quotes_bruts", "rejets", "confirmes", "variations_bp", "clotures_1m", "equity", "stops", "reveil", "refus"}
+    assert set(p) == {"tick", "quotes", "quotes_bruts", "rejets", "confirmes", "variations_bp", "clotures_1m", "equity", "stops", "reveil", "refus", "gel"}
     assert p["quotes_bruts"] == p["quotes"] and p["confirmes"] == []
     # Transactions : bougies 1 min closes ; marché plat, donc variation nulle et clôture = dernier cours.
     last = env.kraken.minute_bar("ETH/EUR", (T0 + 600) // 60 * 60 - 60).close
@@ -270,7 +284,7 @@ def test_forme_de_l_evenement_veille_et_equity_au_bid(tmp_path: Path):
         d = cur - ref
         bp = (abs(d) * 20_000 + ref) // (2 * ref)
         assert p["variations_bp"][sym] == (bp if d > 0 else -bp)
-    assert p["stops"] == [] and p["reveil"] is None and p["refus"] is None and p["rejets"] == {}
+    assert p["stops"] == [] and p["reveil"] is None and p["refus"] is None and p["rejets"] == {} and p["gel"] is False
     assert set(p["quotes"]) == set(SYMBOLS)
     q = env.kraken.ticker("ETH/EUR", "ETHEUR")
     assert p["quotes"]["ETH/EUR"] == [q.bid, q.ask]
@@ -638,11 +652,11 @@ def test_stop_sur_les_transactions_au_dernier_cours_avec_glissement_et_frais(tmp
     oid = f"stop:{HAIKU}:{BTC}:veille:{r}"
     assert oid in rep.stops
     fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
-    px = low * 9995 // 10_000 // 100_000 * 100_000  # clôture de la dernière bougie x (1 - glissement 5 bp), tick vers le bas
+    px = S  # ticker au-dessus du stop : max(clôture 1 min, bid ticker) x (1 - glissement) est plafonné au stop
     assert (fill["side"], fill["qty"], fill["price_ueur"], fill["fee_ueur"], fill["ts"], fill["reason"]) == (
         "sell", qty, px, fee_of(qty, px), r, "stop",
     )  # fmt: skip
-    assert px < env.kraken.ticker(BTC, "XBTEUR").bid  # le ticker (au-dessus du stop) ne fixe pas le prix
+    assert env.kraken.ticker(BTC, "XBTEUR").bid * 9995 // 10_000 > S
     assert BTC not in replay(env.events())[HAIKU].positions and oid in of(env, "veille")[-1]["payload"]["stops"]
     n = len(of(env, "fill"))
     tick(env, r)  # même tick : rien de plus
@@ -784,18 +798,21 @@ def test_precedent_fonction_pure():
     assert precedent([H(100, None, None, False, "invalide")], 200) is None
 
 
-def test_variation_bougies_reference_a_2_minutes_et_seuils_exacts():
-    # Référence : la bougie la plus proche de tick - fenêtre, à 2 min près ; la plus récente close fixe le cours.
+def test_variation_bougies_reference_a_15_minutes_volume_positif():
+    # Référence : la dernière bougie TRADÉE à tick - fenêtre ou avant, à 15 min près ; la dernière tradée fixe le cours.
     tick = 7200
     cur = b1(7140, 1_030_000, 1_030_000, 1_030_000, 1_030_000)
-    assert variation_bougies([b1(3600 + 120, 1, 1, 1, 1_000_000), cur], tick, 3600) == (1_030_000, 1_000_000)
-    assert variation_bougies([b1(3600 + 121, 1, 1, 1, 1_000_000), cur], tick, 3600) is None
-    assert variation_bougies([b1(3600 - 120, 1, 1, 1, 1_000_000), cur], tick, 3600) == (1_030_000, 1_000_000)
-    near = [b1(3600 - 60, 1, 1, 1, 900_000), b1(3600 + 60, 1, 1, 1, 800_000), b1(3600 + 120, 1, 1, 1, 700_000), cur]
-    assert variation_bougies(near, tick, 3600)[1] == 900_000  # à égale distance : la plus ancienne
-    assert variation_bougies([b1(3600, 1, 1, 1, 1_000_000), b1(7141, 1, 1, 1, 5)], tick, 3600) is None  # pas encore close
-    old = b1(7200 - 60 - 901, 1, 1, 1, 7)  # dernière bougie close vieille de plus de 15 min : pas de mesure
-    assert variation_bougies([b1(3600, 1, 1, 1, 1_000_000), old], tick, 3600) is None
+    ok = lambda ts, c=1_000_000, v=1: Bar(BTC, 60, ts, 1, 1, 1, c, v)
+    assert variation_bougies([ok(3600), cur], tick, 3600) == (1_030_000, 1_000_000)
+    assert variation_bougies([ok(2700), cur], tick, 3600) == (1_030_000, 1_000_000)  # 15 min avant la cible : accepté
+    assert variation_bougies([ok(2699), cur], tick, 3600) is None  # 15 min et 1 s : trop vieux
+    assert variation_bougies([ok(3601), cur], tick, 3600) is None  # jamais après la cible
+    assert variation_bougies([ok(3000, 900_000), ok(3500, 800_000), ok(3600, 700_000, 0), cur], tick, 3600)[1] == 800_000
+    assert variation_bougies([ok(3600, 700_000, 0), cur], tick, 3600) is None  # bougie de remplissage : ignorée
+    cur0 = Bar(BTC, 60, 7140, 1, 1, 1, 5, 0)  # la dernière bougie est un remplissage : on prend la dernière tradée
+    assert variation_bougies([ok(3600), ok(7080, 1_020_000), cur0], tick, 3600) == (1_020_000, 1_000_000)
+    assert variation_bougies([ok(3600), b1(7141, 1, 1, 1, 5)], tick, 3600) is None  # encore ouverte : jamais lue
+    assert variation_bougies([ok(3600), ok(7200 - 60 - 901)], tick, 3600) is None  # plus de transaction depuis 15 min
 
 
 def minute_path(changes: dict[int, int], start: int = 3000, end: int = 7200) -> list[Bar]:
@@ -1351,7 +1368,7 @@ def test_reprise_apres_un_crash_pendant_l_ecriture_des_quotes_complete_depuis_le
 
     monkeypatch.setattr(Journal, "append", flaky)
     assert tick(env, X, d).status == "reveil_failed"
-    monkeypatch.undo()
+    monkeypatch.setattr(Journal, "append", real)  # (pas d'undo : il retirerait aussi les garde-fous de conftest)
     first = [e["payload"] for e in of(env, "quote_reveil")]
     assert [q["symbol"] for q in first] == n and len(n) == 2
     origine = veille_p(env)["quotes"]
@@ -1413,7 +1430,7 @@ def test_abandon_repare_la_ronde_interrompue(tmp_path: Path, monkeypatch: pytest
 
     monkeypatch.setattr(Journal, "append", flaky)
     assert tick(env, X, d).status == "reveil_failed"
-    monkeypatch.undo()
+    monkeypatch.setattr(Journal, "append", real)  # (pas d'undo : il retirerait aussi les garde-fous de conftest)
     intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
     oid = intent["intent_id"]
     states = lambda: [s["state"] for s in pl(env, "order_state") if s["order_id"] == oid]
@@ -1658,3 +1675,200 @@ def test_echec_du_lancement_du_site_ignore_et_pas_dans_le_journal(tmp_path: Path
     assert len(codes(env)) == n_alerts  # rien dans le journal
     fake_systemctl(monkeypatch, [], subprocess.CalledProcessError(1, "systemctl"))
     cli._start_site_build()  # ne lève pas
+
+
+# ---------------------------------------------------------------------------------------------- série de corrections : stops
+
+
+def test_les_bougies_de_remplissage_a_volume_nul_ne_comptent_pas(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    base = base_close(env)
+    for ts in (T0 + 840, T0 + 900, T0 + 960):  # trois bougies de remplissage (volume 0) répètent un cours sous le stop
+        env.kraken.bar_override[(BTC, ts)] = (S - 1, S - 1, S - 1, S - 1, 0)
+    assert tick(env, T0 + 1200, d).stops == []
+    env.kraken.bar_override[(BTC, T0 + 1020)] = (base, base, S - 1, base, 5)  # une seule bougie tradée : insuffisant
+    assert tick(env, T0 + 1500, d).stops == []
+    env.kraken.bar_override[(BTC, T0 + 1260)] = (base, base, S - 1, base, 5)  # deux bougies tradées distinctes
+    env.kraken.bar_override[(BTC, T0 + 1320)] = (base, base, S - 1, base, 5)  # dans les 10 dernières minutes
+    r = T0 + 1800
+    assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env, r, d).stops
+
+
+def test_la_fenetre_du_stop_part_de_l_heure_reelle_d_execution_pas_de_opened_ts(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)  # fill daté T0 (opened_ts), exécuté pour de vrai à T0+300 (ts du dernier `quote`)
+    pos = replay(env.events())[HAIKU].positions[BTC]
+    last_quote = max(e["ts"] for e in of(env, "quote") if e["payload"]["symbol"] == BTC)
+    assert pos.opened_ts == T0 and last_quote == T0 + 300
+    S = stop_of(env)
+    base = base_close(env)
+    set_trades(env, BTC, S - 1_000_000, at=T0)  # sous le stop AVANT l'exécution réelle ...
+    set_trades(env, BTC, base, at=T0 + 300)  # ... puis normal
+    assert tick(env, T0 + 600, d).stops == []  # les bougies T0..T0+240 précèdent l'achat : ignorées
+    assert BTC in replay(env.events())[HAIKU].positions
+    env2 = make_env(tmp_path, "e2")
+    cycle(env2, 0, d)
+    set_trades(env2, BTC, S - 1_000_000, at=T0 + 300)  # sous le stop depuis l'exécution réelle
+    r = T0 + 600
+    assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env2, r, d).stops
+
+
+def test_prix_du_stop_deux_sources_max_plafonne_au_stop_sans_ticker_la_cloture_seule(tmp_path: Path):
+    def run(tag: str, ticker: tuple[int, int] | None, close_off: int):
+        env = make_env(tmp_path, tag)
+        d = deciders(buy_btc_at_cycle_0)
+        cycle(env, 0, d)
+        S = stop_of(env)
+        set_trades(env, BTC, S - close_off, at=T0 + 840)
+        if ticker is not None:
+            env.kraken.override[BTC] = (S - ticker[0], S - ticker[0] + 1_000_000)
+        else:
+            env.kraken.override[BTC] = (0, 10)  # ticker illisible (invalide) : la clôture 1 min seule
+        r = T0 + 1200
+        assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env, r, d).stops
+        return S, next(f["price_ueur"] for f in pl(env, "fill") if f["order_id"] == f"stop:{HAIKU}:{BTC}:veille:{r}")
+
+    sell = lambda p: p * 9995 // 10_000 // 100_000 * 100_000
+    S, px = run("close_bas", (1_000_000, 0), 3_000_000)  # clôture S-3M, ticker S-1M : le plus haut des deux
+    assert px == sell(S - 1_000_000)
+    S, px = run("ticker_bas", (3_000_000, 0), 1_000_000)  # clôture S-1M, ticker S-3M
+    assert px == sell(S - 1_000_000)
+    S, px = run("sans_ticker", None, 2_000_000)
+    assert px == sell(S - 2_000_000)
+    S, px = run("ticker_haut", (-600_000_000, 0), 2_000_000)  # ticker erroné très haut (> stop) : au pire, vente au stop
+    assert px == S
+
+
+def test_saison_gelee_aucun_fill_de_stop_gel_dans_l_evenement_veille(tmp_path: Path):
+    from tests.test_saison import derogation, saison_env, set_fee
+
+    env = saison_env(tmp_path, jours=56)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    set_trades(env, BTC, S - 1_000_000, at=T0 + 840)
+    set_fee(env, 51)  # config gelée modifiée, sans dérogation
+    n = len(of(env, "fill"))
+    rep = tick(env, T0 + 1200, d)
+    assert rep.stops == [] and len(of(env, "fill")) == n and BTC in replay(env.events())[HAIKU].positions
+    assert veille_p(env)["gel"] is True and veille_p(env)["stops"] == []
+    assert [c for c in codes(env) if c[1] == "saison_gelee"] == [("panique", "saison_gelee")]
+    tick(env, T0 + 1500, d)
+    assert len([c for c in codes(env) if c[1] == "saison_gelee"]) == 1  # une seule alerte
+    derogation(env, "essai des frais")  # dérogation écrite : les stops repartent
+    r = T0 + 1800
+    assert f"stop:{HAIKU}:{BTC}:veille:{r}" in tick(env, r, d).stops and veille_p(env)["gel"] is False
+
+
+# ---------------------------------------------------------------------------------------------- série de corrections : réveil
+
+
+def test_un_seul_flux_errone_ne_gele_ni_n_arrete_un_portefeuille_au_reveil(tmp_path: Path):
+    env = make_env(tmp_path)
+
+    def plan(i, snap):
+        if i == 0 and snap["contexte"]["type"] == "rendez_vous":
+            return [action(BTC, size=20, stop=25), action("ETH/EUR", size=20, stop=25)]
+        return None
+
+    d = deciders(plan)
+    cycle(env, 0, d)
+    assert {BTC, "ETH/EUR"} <= set(replay(env.events())[HAIKU].positions)
+    sol = env.kraken.minute_bar("SOL/EUR", T0).close
+    set_trades(env, "SOL/EUR", sol * 103 // 100, at=X - 420)  # SOL +3 % sur les transactions : déclencheur
+    for sym in (BTC, "ETH/EUR"):  # le ticker de BTC et d'ETH annonce -14 % (accepté), sans transaction
+        q = env.kraken.ticker(sym, "x")
+        env.kraken.override[sym] = (q.bid * 86 // 100, q.ask * 86 // 100)
+    assert tick(env, X - 300, d).declencheur is None
+    rep = tick(env, X, d)
+    assert rep.reveil == "completed" and rep.rejets == {}
+    assert not pl(env, "portfolio_frozen") and not pl(env, "portfolio_halted")  # sans le plancher des transactions : gel à -5,6 %
+    assert set(replay(env.events())[HAIKU].positions) >= {BTC, "ETH/EUR"}
+    check_journal(env)
+
+
+# ---------------------------------------------------------------------------------------------- série de corrections : exploitation
+
+
+def test_alerte_veille_ohlc_une_fois_puis_retabli(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    base = T0 + 600
+    for k in range(2):  # 3 symboles en échec pendant 2 ticks : pas encore d'alerte
+        env.kraken.fail_ohlc = {BTC, "ETH/EUR", "SOL/EUR"}
+        assert tick(env, base + 300 * k).rejets == dict.fromkeys(env.kraken.fail_ohlc, "ohlc")
+    assert not [c for c in codes(env) if c[1] == "veille_ohlc"]
+    tick(env, base + 600)  # 3e tick consécutif
+    for k in range(3, 6):  # rien de plus tant que ça dure
+        tick(env, base + 300 * k)
+    assert [c for c in codes(env) if c[1] == "veille_ohlc"] == [("action", "veille_ohlc")]
+    env.kraken.fail_ohlc = set()
+    tick(env, base + 1800)
+    assert [c for c in codes(env) if c[1] == "veille_ohlc"] == [("action", "veille_ohlc"), ("info", "veille_ohlc")]
+    env.kraken.fail_ohlc = {BTC, "ETH/EUR"}  # deux symboles seulement : sous le seuil de 3
+    for k in range(7, 11):
+        tick(env, base + 300 * k)
+    assert len([c for c in codes(env) if c[1] == "veille_ohlc"]) == 2
+
+
+def test_un_tick_sans_aucune_bougie_lisible_compte_dans_veille_echecs(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    env.kraken.fail_ohlc = set(SYMBOLS)
+    for k in range(3):
+        assert tick(env, T0 + 600 + 300 * k).status == "done"  # le tick est écrit (quotes, equity) malgré tout
+        assert (env.paths.var / "veille_echecs").read_text() == str(k + 1)
+    assert [c for c in codes(env) if c[1] == "veille_data"] == [("action", "veille_data")]
+    env.kraken.fail_ohlc = set()
+    tick(env, T0 + 1800)
+    assert not (env.paths.var / "veille_echecs").exists()
+    assert [c for c in codes(env) if c[1] == "veille_data"] == [("action", "veille_data"), ("info", "veille_data")]
+
+
+def test_limite_de_debit_suspend_les_appels_ohlc_jusqu_a_retry_after(tmp_path: Path):
+    from arene.data import RateLimitedError
+    from arene.data.kraken import KrakenError
+
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    env.kraken.ohlc_error = RateLimitedError("HTTP 429 sur api.kraken.com", 900)
+    n0 = env.kraken.ohlc_calls
+    rep = tick(env, T0 + 600)
+    assert rep.rejets == dict.fromkeys(SYMBOLS, "ohlc") and env.kraken.ohlc_calls == n0 + 1  # le premier appel suffit
+    assert (env.paths.var / "veille_ohlc_pause").read_text() == str(T0 + 630 + 900)
+    env.kraken.ohlc_error = None
+    n1 = env.kraken.ohlc_calls
+    assert tick(env, T0 + 900).rejets == dict.fromkeys(SYMBOLS, "ohlc") and env.kraken.ohlc_calls == n1  # en pause : aucun appel
+    assert tick(env, T0 + 1500).rejets == {} and env.kraken.ohlc_calls == n1 + 6  # pause expirée (T0+1530 > T0+1500+30)
+    env.kraken.ohlc_error = RateLimitedError("HTTP 429", None)  # sans Retry-After : 300 s
+    tick(env, T0 + 1800)
+    assert (env.paths.var / "veille_ohlc_pause").read_text() == str(T0 + 1830 + 300)
+    env.kraken.ohlc_error = KrakenError(["EAPI:Rate limit exceeded"])
+    tick(env, T0 + 2400)
+    assert (env.paths.var / "veille_ohlc_pause").read_text() == str(T0 + 2430 + 300)
+    env.kraken.ohlc_error = RuntimeError("autre erreur")  # une erreur ordinaire ne suspend rien
+    tick(env, T0 + 3000)
+    assert (env.paths.var / "veille_ohlc_pause").read_text() == str(T0 + 2430 + 300)
+
+
+def test_asset_pairs_en_cache_24_h_repli_sur_le_cache_perime(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    n0 = env.kraken.pairs_calls
+    tick(env, T0 + 600)
+    tick(env, T0 + 900)
+    tick(env, T0 + 1200)
+    assert env.kraken.pairs_calls == n0 + 1  # un seul appel AssetPairs pour trois ticks
+    assert (env.paths.var / "asset_pairs.json").exists()
+    tick(env, T0 + 600 + 86_400 - 60 * 5 - 30 + 30)  # moins de 24 h après le premier appel (T0+630)
+    assert env.kraken.pairs_calls == n0 + 1
+    tick(env, T0 + 600 + 86_400 + 300)
+    assert env.kraken.pairs_calls == n0 + 2  # cache périmé : nouvel appel
+    env.kraken.pairs_error = RuntimeError("AssetPairs en panne")
+    rep = tick(env, T0 + 600 + 2 * 86_400 + 600)  # cache périmé ET appel en échec : repli sur le cache
+    assert rep.status == "done" and env.kraken.pairs_calls == n0 + 3
+    env.kraken.pairs_error = None

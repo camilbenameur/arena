@@ -330,33 +330,59 @@ class SimExecutor:
                 done.add(oid)
         return out
 
-    def process_live_stops(self, minute_bars: Mapping[str, list[Bar]], tick: int) -> list[Fill]:
-        """Stops en direct de la veille, jugés sur les TRANSACTIONS (bougies Kraken 1 min closes), jamais sur le ticker.
+    def process_live_stops(
+        self, minute_bars: Mapping[str, list[Bar]], tick: int, ticker_bids: Mapping[str, int] | None = None
+    ) -> list[Fill]:
+        """Stops en direct de la veille, jugés sur les TRANSACTIONS (bougies Kraken 1 min closes).
 
-        Une position est vendue si, parmi les bougies closes depuis `max(tick - 600, ouverture de la position)`, au
-        moins 2 bougies distinctes ont un plus bas <= stop (une bougie aberrante isolée ne suffit pas : on attend le
-        tick suivant). Prix : clôture de la dernière bougie close x (1 - glissement), arrondie au tick vers le bas,
-        jamais au-dessus du stop, avec les frais taker. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick},
-        idempotent. Un symbole absent de `minute_bars` (lecture en échec) n'a pas de stop ce tick-là. Un prix calculé
-        nul ou négatif est ignoré. Le contrôle sur barres de 4 h du cycle reste le filet de sécurité."""
+        Une position est vendue si, parmi les bougies closes À VOLUME > 0 depuis `max(tick - 600, heure réelle
+        d'exécution de l'achat)`, au moins 2 bougies distinctes ont un plus bas <= stop (une bougie de remplissage ou
+        aberrante isolée ne suffit pas : on attend le tick suivant). L'heure réelle d'exécution est le `ts` du dernier
+        événement `quote` ou `quote_reveil` du symbole qui précède le fill d'ouverture (à défaut, `opened_ts`).
+        Prix : `min(stop, max(clôture 1 min x (1 - glissement), bid brut du ticker x (1 - glissement)))`, arrondi au
+        tick vers le bas, avec les frais taker : un seul flux erroné donne au pire une vente au stop ; sans ticker
+        lisible, la clôture 1 min seule. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick}, idempotent. Un symbole
+        absent de `minute_bars` n'a pas de stop ce tick-là. Un prix calculé nul ou négatif est ignoré."""
         out: list[Fill] = []
-        _, done_fills = self._scan()
+        last_quote: dict[str, int] = {}
+        held: dict[tuple[str, str], int] = {}
+        opened_real: dict[tuple[str, str], int] = {}
+        done_fills: set[str] = set()
+        for ev in self.journal.iter_events():
+            t, p = ev["type"], ev["payload"]
+            if t in ("quote", "quote_reveil"):
+                last_quote[p["symbol"]] = ev["ts"]
+            elif t == "fill":
+                done_fills.add(p["order_id"])
+                key = (p["portfolio"], p["symbol"])
+                if p["side"] == "buy":
+                    if held.get(key, 0) == 0:
+                        opened_real[key] = last_quote.get(p["symbol"], p["ts"])
+                    held[key] = held.get(key, 0) + p["qty"]
+                else:
+                    held[key] = held.get(key, 0) - p["qty"]
         for pname, st in sorted(replay(self.journal.iter_events()).items()):
             for sym, pos in sorted(st.positions.items()):
                 inst, bars = self.instruments.get(sym), minute_bars.get(sym)
                 if inst is None or not bars or pos.stop_ueur is None:
                     continue
                 closed = sorted((b for b in bars if b.ts + MINUTE_S <= tick), key=lambda b: b.ts)
-                since = max(tick - STOP_WINDOW_S, pos.opened_ts)
-                hits = {b.ts for b in closed if b.ts >= since and b.low <= pos.stop_ueur}
+                if not closed:
+                    continue
+                since = max(tick - STOP_WINDOW_S, opened_real.get((pname, sym), pos.opened_ts))
+                hits = {b.ts for b in closed if b.volume > 0 and b.ts >= since and b.low <= pos.stop_ueur}
                 if len(hits) < STOP_MIN_BARS:
                     continue
                 oid = f"stop:{pname}:{sym}:veille:{tick}"
                 if oid in done_fills:
                     continue
-                px, _ = market_fill(Side.SELL, pos.qty, Quote(sym, tick, closed[-1].close, closed[-1].close), inst,
-                                    self.fee_bp, self.slippage_bp)  # fmt: skip
-                px = min(px, pos.stop_ueur)
+                sources = [closed[-1].close]
+                if ticker_bids and ticker_bids.get(sym):
+                    sources.append(ticker_bids[sym])
+                px = min(
+                    pos.stop_ueur,
+                    max(market_fill(Side.SELL, pos.qty, Quote(sym, tick, c, c), inst, self.fee_bp, self.slippage_bp)[0] for c in sources),
+                )
                 if px <= 0:
                     continue
                 fee = ceil_div(notional_ueur(pos.qty, px, round_up=True) * self.fee_bp, BP)
