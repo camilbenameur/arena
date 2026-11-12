@@ -1641,7 +1641,8 @@ def test_commande_arene_veille_codes_de_sortie(tmp_path: Path, monkeypatch: pyte
         assert run(T0 + 930) == 0  # occupé : code 0
     env.kraken.fail_ticker = True
     assert run(T0 + 1230) == 1  # aucun quote valide : code 1
-    assert calls == []  # aucun réveil : pas de reconstruction du site
+    # Reconstruction du site après chaque tick écrit (décision du 12/11) : seulement le premier tick ici.
+    assert calls == [["systemctl", "--user", "start", "--no-block", "arene-site-build.service"]]
 
 
 def test_apres_un_reveil_le_site_est_reconstruit_par_systemd_pas_dans_le_processus(tmp_path: Path, monkeypatch):
@@ -1660,6 +1661,22 @@ def test_apres_un_reveil_le_site_est_reconstruit_par_systemd_pas_dans_le_process
         assert cli.main([*cli_args(env), "veille", *extra], clients=env.clients, now=lambda: X + 30) == 0
         assert pl(env, "reveil_completed") == [{"reveil": X}]
         assert calls == expected
+
+
+def test_le_site_est_reconstruit_apres_chaque_tick_ecrit_pas_sinon(tmp_path: Path, monkeypatch):
+    """Décision du propriétaire (12/11, 18 h 50 UTC) : reconstruction après chaque tick écrit, pas seulement après un réveil."""
+    calls: list = []
+    fake_systemctl(monkeypatch, calls)
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    now = T0 + 630
+    assert cli.main([*cli_args(env), "veille"], clients=env.clients, now=lambda: now) == 0
+    assert calls == [["systemctl", "--user", "start", "--no-block", "arene-site-build.service"]]
+    calls.clear()
+    assert cli.main([*cli_args(env), "veille"], clients=env.clients, now=lambda: now) == 0  # même tick : rien d'écrit
+    assert calls == []
+    assert cli.main([*cli_args(env), "veille", "--no-site"], clients=env.clients, now=lambda: now + 300) == 0
+    assert calls == []
 
 
 def test_echec_du_lancement_du_site_ignore_et_pas_dans_le_journal(tmp_path: Path, monkeypatch, caplog):

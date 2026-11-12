@@ -218,8 +218,8 @@ def _simulate(
                     intent, state, market, policy, _counters(base, orders, last, eq_now), ts,
                     instruments, fee_bp, slippage_bp, False,
                 )  # fmt: skip
-                if not verdict.approved:
-                    continue
+                if not verdict.approved or intent.symbol not in quotes:
+                    continue  # symbole sans quote : non négociable (comme NO_QUOTE dans le moteur), jamais KeyError
                 orders += 1
                 if intent.side == Side.BUY:
                     last_buy_intent[intent.symbol] = ts
