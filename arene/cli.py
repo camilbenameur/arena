@@ -92,7 +92,9 @@ def cmd_veille(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
     print(f"veille {_iso(rep.tick)} : {rep.status}  événements={rep.n_events}{extra}")
     if rep.error:
         print(f"erreur : {rep.error}", file=sys.stderr)
-    if rep.reveil in ("completed", "resumed") and not a.no_site:
+    # Décision du propriétaire (12/11/2026, 18 h 50 UTC) : le site privé est reconstruit après chaque tick écrit (valeur
+    # « en direct » à jour toutes les 5 min), et pas seulement après un réveil. Lancé sans attendre, hors du processus.
+    if rep.status == "done" and rep.n_events > 0 and not a.no_site:
         _start_site_build()
     return 0 if rep.ok else 1
 

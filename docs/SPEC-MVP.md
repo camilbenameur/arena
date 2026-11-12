@@ -191,7 +191,7 @@ tests/              un fichier de test par module, scénarios d'or dans tests/go
 - Généré par `arene build-site` dans `var/site/` : `index.html`, `modele/<id>.html`, `methode.html`, `data/*.json`. HTML/CSS/JS sans chaîne de build ; graphiques uPlot copié dans `site/vendor/` avec son hash.
 - Bandeau permanent **SIMULÉ (paper)**. Champ `venue_mode` obligatoire dans chaque JSON publié, validé par un test.
 - Vue d'ensemble : equity des 7 portefeuilles en base 100, rendement net, drawdown max, frais, nombre de trades, coût d'API par modèle, rang dans la distribution aléatoire, mention « non distinguable du hasard » tant que l'écart n'est pas significatif.
-- Page modèle : courbe, positions, journal des décisions (justification affichée **24 h après** la décision), rejets de `riskd` par code.
+- Page modèle : courbe, positions, journal des décisions (justification publiée dès la décision, décision du propriétaire du 12/11/2026 ; elle était affichée 24 h après dans la première version), rejets de `riskd` par code.
 - Page méthode : règles, frais, politique, hash du journal (tête de chaîne), limites honnêtes.
 
 ## 14. Critères de passage du MVP

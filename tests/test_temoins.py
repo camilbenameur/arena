@@ -435,3 +435,13 @@ def test_trajectoires_performance_1000_x_180_x_6():
     dt = time.perf_counter() - t0
     assert len(out) == 1000
     assert dt < 60, f"{dt:.1f} s"
+
+
+def test_trajectoires_symbole_sans_quote_non_negociable_sans_planter():
+    """Défaut latent signalé par le dashboard : une vente totale approuvée par riskd sur un symbole sans quote levait
+    KeyError dans market_fill. Le symbole sans quote est désormais non négociable, comme NO_QUOTE dans le moteur."""
+    cycles = synth_cycles(40)
+    sans = [CycleData(c.ts, {s: q for s, q in c.quotes.items() if s != "BTC/EUR"} if i >= 20 else c.quotes,
+                      c.marks, c.last_closes, c.bars) for i, c in enumerate(cycles)]  # fmt: skip
+    out = run_traj(sans, 20)  # ne lève pas
+    assert len(out) == 20 and all(isinstance(x, int) and x > 0 for x in out)
