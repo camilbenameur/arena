@@ -73,6 +73,23 @@ Spécification : `docs/VEILLE.md`. Le rendez-vous de 4 h ne change pas ; `arene-
 
 Un cycle attend le verrou jusqu'à 600 s (`LOCK_WAIT_S`) : si un réveil le tient, le cycle de HH:05 démarre quand le réveil se termine (`arene-cycle.service` : `TimeoutStartSec=1500`).
 
+## Saison 1
+Décision du propriétaire : une saison de 8 semaines (56 jours) gelée, sans changement de cadence, de modèles, de consigne ni de politique de risque. Le rodage d'avant est exclu des classements. Table `[saison]` de `config/arene.toml` (facultative : sans elle, rien ne change) : `numero`, `nom`, `debut_ts` (13/11/2026 à 00:05 UTC, l'exécution du cycle de 00:00), `duree_jours`.
+
+**Événements** (tous dans le journal) :
+- `saison_debut` : écrit au premier cycle dont l'instant de décision `t` est >= `debut_ts - cycle_delay_s`, avant ses décisions. Il fige `config_sha256`, `policy_sha256`, `prompt_sha256`, `git_head` et la liste des portefeuilles, et fixe `fin_prevue_cycle = t + 56 jours`.
+- `saison_reference` : après les `equity` de ce cycle, `{numero, cycle, equity: {portefeuille: µEUR}}`. C'est la base des classements ; rien n'est remis à zéro.
+- `saison_fin` : au premier cycle avec `t >= fin_prevue_cycle`, après ses `equity`. Le gel est levé ensuite.
+- `saison_derogation` : voir plus bas.
+
+**Ce qui est gelé** (de `saison_debut` à `fin_prevue_cycle`) : trois hashes. Si l'un diffère de celui du `saison_debut`, le cycle ET les réveils refusent de tourner (`panique/saison_gelee`, le message nomme le hash : config, politique de risque ou consigne système). Les correctifs de code qui ne touchent ni la config, ni la politique, ni la consigne restent permis ; `git_head` n'est pas gelé (il est journalisé dans `config_loaded`).
+- `config_sha256` est le sha256 du fichier `config/arene.toml` **sans la table `[saison]`** : on retire la ligne `[saison]` et tout ce qui suit jusqu'à la ligne qui précède le prochain en-tête de table. Modifier `[saison]` (ou un commentaire placé dedans) n'est donc pas un changement gelé ; tout autre octet du fichier l'est (calcul : `arene.config.sha256_hors_saison`). `config_loaded` garde le hash complet du fichier.
+- `policy_sha256` : `config/policy.toml` ; `prompt_sha256` : `arene/deciders/prompt/v1.md`.
+
+**Déroger.** Écrire une raison dans `var/SAISON_DEROGATION` (`echo "raison" > var/SAISON_DEROGATION`) : le cycle journalise alors `saison_derogation {numero, raison, hashes_avant, hashes_apres}` (une fois par changement de hash, `hashes_avant` = l'état gelé précédent) puis tourne ; un réveil tourne aussi. Fichier vide ou absent : le gel s'applique. Supprimer le fichier une fois la dérogation terminée ; toute dérogation est visible dans `arene status` et sur le site.
+
+**Lire les classements.** `arene status` affiche la saison (en attente, en cours : jour N sur 56, ou terminée), le nombre de dérogations et la performance de chaque portefeuille depuis `saison_reference` (equity au bid, courante ou de `saison_fin`). Les classements se font depuis `saison_reference`, jamais depuis le capital initial ; le rodage (avant `saison_debut`) est présenté à part.
+
 ## Journal cassé (`arene verify` échoue)
 1. **Ne rien supprimer, ne rien éditer.** Copier le fichier : `cp var/journal/events.jsonl /chemin/sauvegarde/`.
 2. `arene verify` indique la ligne et le code. `truncated_tail` = crash pendant une écriture (dernière ligne coupée) ; `hash_mismatch` / `prev_hash_mismatch` = ligne modifiée ou perdue.

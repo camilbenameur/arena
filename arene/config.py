@@ -66,6 +66,16 @@ class VeilleConfig:
 
 
 @dataclass(frozen=True)
+class SaisonConfig:
+    """Table [saison] (facultative) : une saison gelée de `duree_jours` jours, qui débute au cycle de `debut_ts`."""
+
+    numero: int
+    nom: str
+    debut_ts: int  # instant d'exécution du cycle de début (HH:05 UTC) ; le cycle de décision est debut_ts - cycle_delay_s
+    duree_jours: int
+
+
+@dataclass(frozen=True)
 class Config:
     venue_mode: VenueMode
     capital_ueur: int
@@ -80,6 +90,8 @@ class Config:
     sha256: str  # hash du fichier brut (journalisé dans config_loaded)
     decider_backend: str = "api"  # "api" (clé Console) ou "abonnement" (claude -p)
     veille: VeilleConfig = VeilleConfig()
+    saison: SaisonConfig | None = None
+    sha256_hors_saison: str = ""  # hash du fichier sans la table [saison] (base du gel de saison)
 
     def enrich(self, pairs: dict[str, PairInfo]) -> tuple[Instrument, ...]:
         """Instruments complets (tick, ordre min, coût min) à partir de `KrakenClient.asset_pairs`."""
@@ -107,6 +119,39 @@ def _micro(x: float | str) -> int:
     if d != d.to_integral_value():
         raise ConfigError(f"valeur non représentable en micro-unités: {x!r}")
     return int(d)
+
+
+def sha256_hors_saison(raw: bytes) -> str:
+    """sha256 du fichier SANS la table [saison] : de la ligne `[saison]` (comprise) jusqu'à la ligne qui précède le
+    prochain en-tête de table (`[...]` ou `[[...]]`) ou la fin du fichier. Modifier la table (ou un commentaire placé
+    dedans) ne change donc pas ce hash, contrairement à tout autre octet du fichier."""
+    out, skipping = [], False
+    for line in raw.decode("utf-8").splitlines(keepends=True):
+        head = line.strip()
+        if head.startswith("["):
+            skipping = head.split("#")[0].strip() == "[saison]"
+        if not skipping:
+            out.append(line)
+    return hashlib.sha256("".join(out).encode("utf-8")).hexdigest()
+
+
+def _saison(raw: object) -> SaisonConfig | None:
+    """Table [saison] facultative : sans elle, rien ne change."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise TypeError("[saison] doit être une table")
+    need = {"numero", "nom", "debut_ts", "duree_jours"}
+    if set(raw) != need:
+        raise ValueError(f"[saison] doit contenir exactement {sorted(need)}")
+    for k in ("numero", "debut_ts", "duree_jours"):
+        if isinstance(raw[k], bool) or not isinstance(raw[k], int):
+            raise TypeError(f"[saison] {k} doit être un entier, reçu {raw[k]!r}")
+    if not isinstance(raw["nom"], str) or not raw["nom"].strip():
+        raise TypeError("[saison] nom doit être un texte non vide")
+    if raw["numero"] < 1 or raw["debut_ts"] <= 0 or raw["duree_jours"] < 1:
+        raise ValueError("[saison] numero >= 1, debut_ts > 0 et duree_jours >= 1 sont requis")
+    return SaisonConfig(raw["numero"], raw["nom"], raw["debut_ts"], raw["duree_jours"])
 
 
 def _veille(raw: object) -> VeilleConfig:
@@ -150,6 +195,8 @@ def load_config(path: Path | str = DEFAULT_PATH) -> Config:
             slippage_bp=int(t["slippage_bp"]),
             decider_backend=str(t.get("decider_backend", "api")),
             veille=_veille(t.get("veille")),
+            saison=_saison(t.get("saison")),
+            sha256_hors_saison=sha256_hors_saison(raw),
             instrument_refs=tuple(
                 InstrumentRef(i["symbol"], i["kraken_pair"], i["binance_symbol"]) for i in t["instruments"]
             ),

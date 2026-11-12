@@ -39,6 +39,7 @@ from typing import Any
 
 import httpx
 
+from arene import saison
 from arene.config import Config, ConfigError, load_config, load_instruments
 from arene.data import DataError
 from arene.data.binance import BinanceClient
@@ -333,6 +334,7 @@ class _Runner:
             return CycleReport("stale", t)
 
         self._config_and_portfolios()
+        self._saison_gel()
         self._veille_absente()
         self.instruments = {i.symbol: i for i in load_instruments(cfg, self.clients.kraken)}
         self.symbols = tuple(self.instruments)
@@ -352,6 +354,7 @@ class _Runner:
             self.alert("info", "cycle_resumed", f"reprise du cycle {t} interrompu")
         self._journal_market()
         self._view()
+        self._saison_debut()
 
         self._resolve_unknowns()
         self._stops()
@@ -359,6 +362,7 @@ class _Runner:
         self._freeze_halt()
         self._decide_and_execute()
         self._equities()
+        self._saison_apres_equity()
         self.wn("cycle_completed", {"cycle": t})
         self.heartbeat.ping(True, self.now)
         self.log.refresh()
@@ -397,6 +401,57 @@ class _Runner:
                      "venue_mode": self.cfg.venue_mode},
                 )  # fmt: skip
         self.since_ts = self.log.events[0]["ts"]
+
+    # -------------------------------------------------------------- saison gelée
+
+    def _saison_hashes(self) -> dict[str, str]:
+        """Hashes gelés : config SANS la table [saison], politique, consigne système."""
+        return {
+            "config_sha256": self.cfg.sha256_hors_saison,
+            "policy_sha256": self.policy.sha256,
+            "prompt_sha256": prompt_sha256(),
+        }
+
+    def _saison_gel(self) -> None:
+        """Refuse de tourner si un hash gelé a changé pendant la saison, sauf dérogation écrite (journalisée)."""
+        g = saison.verifier_gel(self.log.events, self._saison_hashes(), self.t, saison.lire_derogation(self.paths))
+        if g.statut == "gele":
+            raise CycleAbort("panique", "saison_gelee", g.message)
+        if g.statut == "derogation":
+            self.wn(
+                "saison_derogation",
+                {"numero": g.numero, "raison": saison.lire_derogation(self.paths)[:1000],
+                 "hashes_avant": g.avant, "hashes_apres": g.apres},
+            )  # fmt: skip
+            self.alert("action", "saison_derogation", f"saison {g.numero} : dérogation journalisée ({', '.join(g.diff)})")
+
+    def _saison_debut(self) -> None:
+        """Premier cycle dont t >= debut_ts - cycle_delay_s : `saison_debut`, avant toute décision."""
+        s = self.cfg.saison
+        if s is None or self.t < s.debut_ts - self.cfg.cycle_delay_s:
+            return
+        if any(e["payload"]["numero"] == s.numero for e in self._events_of("saison_debut")):
+            return
+        self.wn(
+            "saison_debut",
+            {"numero": s.numero, "nom": s.nom, "cycle": self.t, "fin_prevue_cycle": self.t + s.duree_jours * DAY_S,
+             **self._saison_hashes(), "git_head": self._git_head(),
+             "portefeuilles": list(self.llm_portfolios + self.temoin_portfolios)},
+        )  # fmt: skip
+
+    def _saison_apres_equity(self) -> None:
+        """Après les `equity` du cycle : `saison_reference` (base des classements), puis `saison_fin` si la saison est finie."""
+        t = self.t
+        debut = saison.saison_ouverte(self.log.events)
+        if debut is None:
+            return
+        n = debut["numero"]
+        if not any(e["payload"]["numero"] == n for e in self._events_of("saison_reference")):
+            eq = {e["payload"]["portfolio"]: e["payload"]["equity_ueur"] for e in self._events_of("equity") if e["payload"]["cycle"] == t}
+            self.wn("saison_reference", {"numero": n, "cycle": t, "equity": dict(sorted(eq.items()))})
+        if t >= debut["fin_prevue_cycle"]:
+            eq = {e["payload"]["portfolio"]: e["payload"]["equity_ueur"] for e in self._events_of("equity") if e["payload"]["cycle"] == t}
+            self.wn("saison_fin", {"numero": n, "cycle": t, "equity": dict(sorted(eq.items()))})
 
     def _veille_absente(self) -> None:
         """Alerte (une fois par absence) si la veille s'est arrêtée : dernier événement `veille` vieux de plus de 30 min,

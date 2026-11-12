@@ -159,6 +159,43 @@ def cmd_resume(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
     return 0
 
 
+def _status_saison(paths: Paths, ev: list[dict], now: int) -> None:
+    """Saison : en attente, en cours (jour N sur D) ou terminée, et la performance depuis `saison_reference`."""
+    try:
+        cfg = load_config(paths.config)
+    except ConfigError:
+        cfg = None
+    debuts = [e["payload"] for e in ev if e["type"] == "saison_debut"]
+    if not debuts:
+        if cfg is not None and cfg.saison is not None:
+            s = cfg.saison
+            print(f"saison : {s.nom} en attente (début au cycle du {_iso(s.debut_ts)}, {s.duree_jours} jours)")
+        return
+    d = debuts[-1]
+    fins = [e["payload"] for e in ev if e["type"] == "saison_fin" and e["payload"]["numero"] == d["numero"]]
+    refs = [e["payload"] for e in ev if e["type"] == "saison_reference" and e["payload"]["numero"] == d["numero"]]
+    duree = (d["fin_prevue_cycle"] - d["cycle"]) // 86_400
+    derog = sum(1 for e in ev if e["type"] == "saison_derogation" and e["payload"]["numero"] == d["numero"])
+    if fins:
+        etat = f"terminée (cycle {_iso(fins[0]['cycle'])})"
+    else:
+        etat = f"en cours (jour {min(duree, max(0, now - d['cycle']) // 86_400 + 1)} sur {duree})"
+    print(f"saison : {d['nom']} {etat}, début {_iso(d['cycle'])}, dérogations : {derog}")
+    if not refs:
+        print("  (pas encore de saison_reference)")
+        return
+    base = refs[0]["equity"]
+    last = fins[0]["equity"] if fins else {}
+    if not fins:
+        for e in ev:
+            if e["type"] == "equity":
+                last[e["payload"]["portfolio"]] = e["payload"]["equity_ueur"]
+    print("  performance depuis la référence (equity au bid) :")
+    for p, b in sorted(base.items()):
+        cur = last.get(p, b)
+        print(f"  {p:28s} {_eur(cur):>16s} {(cur - b) * 100 / b if b else 0:+7.2f} %")
+
+
 def cmd_status(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
     rep = verify(paths.journal)
     print(f"journal : {'OK' if rep.ok else 'CASSÉ'}  {rep.n_records} événements  tête {rep.head_hash[:12]}")
@@ -183,6 +220,7 @@ def cmd_status(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
         flag = " ARRÊTÉ" if st.halted else " GELÉ" if st.frozen_until_ts > now else ""
         pct = (cur - capital[p]) * 100 / capital[p] if capital.get(p) else 0
         print(f"  {p:28s} {_eur(cur):>16s} {pct:+6.2f} %  positions={len(st.positions)}{flag}")
+    _status_saison(paths, ev, now)
     srcs = killswitch.active_sources(paths)
     print(f"coupe-circuit : {'ARMÉ (' + ', '.join(srcs) + ')' if srcs else 'inactif'}")
     first = ev[0]["ts"]

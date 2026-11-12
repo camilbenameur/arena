@@ -21,6 +21,7 @@ import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, NamedTuple
 
+from arene import saison
 from arene.config import Config, ConfigError, load_config, load_instruments
 from arene.cycle import (
     ALEATOIRE,
@@ -35,6 +36,7 @@ from arene.cycle import (
 )
 from arene.data import DataError
 from arene.data.store import BarStore
+from arene.deciders.llm import prompt_sha256
 from arene.journal import Journal, intent_from_payload, verify
 from arene.ledger import equity_ueur, replay
 from arene.ops.heartbeat import Heartbeat
@@ -457,14 +459,22 @@ class _Veille:
         stop_ids = [e["payload"]["order_id"] for e in self._of("fill") if e["payload"]["order_id"].endswith(suffix)]
         rep = VeilleReport("done", tick, stops=stop_ids, rejets=rejets, confirmes=confirmes, alerts=self.alerts)
 
-        # 3. réveil interrompu : reprise, ou réparation puis abandon
+        # 3. saison gelée : aucun réveil (ni reprise) si un hash gelé a changé, sauf dérogation écrite
+        gel = saison.verifier_gel(
+            self.log.events,
+            {"config_sha256": cfg.sha256_hors_saison, "policy_sha256": policy.sha256, "prompt_sha256": prompt_sha256()},
+            tick, saison.lire_derogation(self.paths),
+        )  # fmt: skip
+        gele = gel.statut == "gele"
+
+        # 3 bis. réveil interrompu : reprise, ou réparation puis abandon
         closed = {e["payload"]["reveil"] for e in self._of("reveil_completed", "reveil_abandonne")}
         started = {e["payload"]["reveil"]: e for e in self._of("reveil_started")}
         pending = [(r, e) for r, e in sorted(started.items()) if r not in closed]
         last_cycle_seq = max((e["seq"] for e in self._of("cycle_completed")), default=-1)
         resume: tuple[int, dict[str, Any]] | None = None
         for i, (r, e) in enumerate(pending):
-            if i == len(pending) - 1 and tick - r <= REVEIL_ABANDON_S and last_cycle_seq < e["seq"]:
+            if i == len(pending) - 1 and tick - r <= REVEIL_ABANDON_S and last_cycle_seq < e["seq"] and not gele:
                 resume = (r, e["payload"]["declencheur"])
                 continue
             self._abandonner(executor, r)
@@ -475,12 +485,18 @@ class _Veille:
         if resume is None:
             trigger = mouvement(qd, hist, tick, v.seuil_mouvement_bp, v.fenetre_mouvement_s)
             rep.declencheur = trigger
-            if trigger is not None:
+            if trigger is not None and gele:
+                rep.refus = "saison_gelee"
+            elif trigger is not None:
                 rep.refus = self._garde_fous(tick)
                 if rep.refus is None:
                     launch = trigger
                     # Le réveil est consigné d'abord : avant l'événement `veille` et avant tout appel réseau du réveil.
                     self.log.add("reveil_started", {"reveil": tick, "declencheur": trigger}, self.now)
+
+        deja = any(e["payload"]["code"] == "saison_gelee" and e["payload"]["message"] == gel.message for e in self._of("alert"))
+        if gele and (rep.refus == "saison_gelee" or pending) and not deja:
+            self._alert("panique", "saison_gelee", gel.message)
 
         # 5. événement veille, après les stops
         states = replay(self.log.events)

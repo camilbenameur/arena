@@ -18,6 +18,14 @@ cooldown_s = 3600             # délai minimal depuis la dernière ronde LLM (cy
 max_reveils_jour = 6          # par jour UTC
 garde_avant_cycle_s = 1800    # aucun réveil à moins de 30 min du prochain rendez-vous
 
+[saison]
+# Saison 1 (décision du propriétaire) : 8 semaines gelées (config hors cette table, politique de risque, consigne),
+# classées depuis le cycle de début ; le rodage d'avant est exclu. Cette table et ses commentaires sont hors du hash gelé.
+numero = 1
+nom = "Saison 1"
+debut_ts = 1794528300       # 13/11/2026 à 00:05 UTC : exécution du cycle de 00:00
+duree_jours = 56
+
 [[instruments]]
 symbol = "BTC/EUR"
 kraken_pair = "XBTEUR"
