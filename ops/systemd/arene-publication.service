@@ -1,0 +1,13 @@
+[Unit]
+Description=Arène de trading : publie la version publique du dashboard (GitHub Pages, en sortie seulement)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/dev/arene-trading
+# Construit la version publique, refuse de publier si elle contient quoi que ce soit de privé,
+# puis pousse un commit orphelin sur gh-pages. Aucun port ouvert ; l'authentification passe par `gh`.
+ExecStart=%h/dev/arene-trading/.venv/bin/python ops/publier.py --depot OWNER/arene --racine /arene/
+TimeoutStartSec=300
+Nice=10

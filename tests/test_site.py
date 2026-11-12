@@ -172,7 +172,7 @@ def test_bandeau_simule_partout(site):
     out, _ = site
     for f in out.rglob("*.html"):
         txt = f.read_text(encoding="utf-8")
-        assert "Simulation — aucun argent réel" in txt, f.name
+        assert "Simulation\u202f: argent fictif, aucun ordre réel" in txt, f.name
         assert "ARGENT RÉEL" not in txt, f.name
 
 
@@ -183,7 +183,7 @@ def test_bandeau_argent_reel_si_venue_live():
             "journal": {"n_records": 1, "head_hash": "a" * 64}}  # fmt: skip
     page = layout(title="t", body="", root="", active="index", data=data)
     assert "ARGENT RÉEL" in page and "venue_mode" in page
-    assert "Simulation — aucun argent réel" not in page
+    assert "Simulation\u202f: argent fictif, aucun ordre réel" not in page
 
 
 def test_csp_stricte_et_aucun_style_inline(site):
@@ -246,7 +246,7 @@ def test_rejet_riskd_en_clair_et_sauts_comptes(site):
     sonnet = read(site, "modele/llm-claude-sonnet-5-5.html")
     assert "MAX_ORDER_SIZE" in sonnet and "ordre trop gros" in sonnet and "refusé" in sonnet
     haiku = read(site, "modele/llm-claude-haiku-5-5.html")
-    assert "sautée" in haiku and "pas de clé d’API" in haiku
+    assert "sautée" in haiku and "modèle pas encore branché" in haiku
     summary = json.loads(read(site, "data/summary.json"))
     h = next(p for p in summary["portfolios"] if p["id"] == "llm:claude-haiku-5-5")
     assert h["skipped"] == {"no_key": N_CYCLES}
@@ -351,3 +351,21 @@ def test_pas_de_courbe_sous_trois_cycles(tmp_path):
     index = (tmp_path / "s" / "index.html").read_text(encoding="utf-8")
     assert "Courbe à partir de 3" in index
     assert "chart.js" not in index
+
+
+def test_version_publique_sans_texte_operateur_avec_404_et_frise(site, tmp_path):
+    out_prive, j = site
+    cfg = load_config(ROOT / "config" / "arene.toml")
+    cfg = dataclasses.replace(cfg, temoins=dataclasses.replace(cfg.temoins, aleatoire_trajectoires=60))
+    out = tmp_path / "public"
+    build(j.path, out, config=cfg, policy=load_policy(ROOT / "config" / "policy.toml"), now_ts=NOW, public=True, racine="/arene/")
+    index = (out / "index.html").read_text(encoding="utf-8")
+    assert 'class="a-faire' not in index
+    assert "RUNBOOK" not in index and ".config/arene" not in index
+    page404 = (out / "404.html").read_text(encoding="utf-8")
+    assert 'href="/arene/assets/site.css"' in page404 and "Cette page n’existe pas" in page404
+    assert not (out_prive / "404.html").exists()  # sans racine, pas de 404 (le site privé n'en a pas besoin)
+    # Frise : chaque cycle affiché porte le préfixe de l'empreinte de son événement cycle_completed.
+    hashes = [e["hash"][:8] for e in j.iter_events(strict=False) if e["type"] == "cycle_completed"]
+    assert hashes and all(h in index for h in hashes[-6:])
+    assert f"Cycle {len(hashes) + 1}" in index  # le prochain cycle, à venir

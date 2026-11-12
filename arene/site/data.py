@@ -52,9 +52,9 @@ NOMS = {
     "temoin:aleatoire": "Témoin aléatoire",
 }
 DESCRIPTIONS = {
-    "temoin:panier": "1/6 de l’equity sur chacune des 6 paires au premier cycle, puis conservé.",
-    "temoin:6040": "60 % BTC / 40 % cash, rééquilibré le premier cycle de chaque mois civil.",
-    "temoin:e0065": "Règle F1 du labo (pression taker), paramètres L = 20, k = 3, H = 10, adaptée à l’univers Kraken EUR.",
+    "temoin:panier": "1/6 du portefeuille sur chacune des 6 cryptos au premier cycle, puis conservé : le marché.",
+    "temoin:6040": "60 % en bitcoin, 40 % en euros, rééquilibré au début de chaque mois.",
+    "temoin:e0065": "Règle fixe fondée sur la pression acheteuse (part des achats passés au prix du marché), paramètres L = 20, k = 3, H = 10.",
     "temoin:aleatoire": "Tire 0 à 2 actions au hasard par cycle, avec exactement les mêmes règles de risque que les modèles.",
 }
 
@@ -89,7 +89,7 @@ CODES_RISQUE = {
 }
 
 SAUTS = {
-    "no_key": "pas de clé d’API",
+    "no_key": "modèle pas encore branché",
     "budget": "budget quotidien d’API atteint",
     "frozen": "portefeuille gelé",
     "halted": "portefeuille arrêté",
@@ -399,6 +399,11 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
         "distribution_note": dist_note,
         "portfolios": portfolios,
         "chart": {"x": x, "series": chart},
+        # Cycles terminés et leur maillon du journal chaîné (empreinte de l'événement cycle_completed).
+        "cycles": [
+            {"ts": e["payload"]["cycle"], "hash": e.get("hash"), "seq": e.get("seq")}
+            for e in sorted((e for e in events if e["type"] == "cycle_completed"), key=lambda e: e["payload"]["cycle"])
+        ],
         "journal": {
             "verify_ok": report.ok, "n_records": report.n_records, "head_seq": report.head_seq,
             "head_hash": report.head_hash, "errors": [

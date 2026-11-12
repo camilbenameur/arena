@@ -17,32 +17,35 @@
     return h + " h" + (r ? " " + (r < 10 ? "0" : "") + r : "");
   }
 
-  function maj() {
-    var now = Date.now() / 1000;
-    var ecart = prochain - now;
-    detail.classList.remove("warn-txt", "perte-txt");
-    if (ecart > 0) {
-      detail.textContent = "dans " + duree(ecart) + " · " + original;
-    } else if (-ecart < 3600) {
-      // Le minuteur tourne à HH:05 et la page est reconstruite à la fin du cycle.
-      detail.textContent = "en cours ou imminent · " + original;
-    } else {
-      var manques = Math.floor(-ecart / intervalle) + 1;
-      detail.textContent = "en retard de " + duree(-ecart) + " : " + manques + " cycle" + (manques > 1 ? "s" : "") +
-        " sans mise à jour de cette page";
-      detail.classList.add(-ecart > intervalle ? "perte-txt" : "warn-txt");
-    }
-  }
-
   // Heure locale du lecteur à côté de l'heure UTC (la page est générée en UTC).
+  var locale = "";
   try {
     var d = new Date(prochain * 1000);
     var mm = d.getMinutes();
-    var sfx = document.createElement("span");
-    sfx.className = "heure-locale";
-    sfx.textContent = (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (mm < 10 ? "0" : "") + mm + " heure locale";
-    t.parentNode.appendChild(sfx);
-  } catch (err) { /* navigateur sans Intl : l'heure UTC suffit */ }
+    locale = (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (mm < 10 ? "0" : "") + mm + " heure locale";
+  } catch (err) { /* l'heure UTC suffit */ }
+
+  // Le texte remplace un emplacement déjà réservé (une ligne) : aucun décalage de mise en page.
+  function maj() {
+    var now = Date.now() / 1000;
+    var ecart = prochain - now;
+    var parts = [];
+    detail.classList.remove("warn-txt", "perte-txt");
+    if (ecart > 0) {
+      parts.push("dans " + duree(ecart));
+    } else if (-ecart < 3600) {
+      // Le minuteur tourne à HH:05 et la page est reconstruite à la fin du cycle.
+      parts.push("en cours ou imminent");
+    } else {
+      var manques = Math.floor(-ecart / intervalle) + 1;
+      parts.push("en retard de " + duree(-ecart) + " : " + manques + " cycle" + (manques > 1 ? "s" : "") +
+        " sans mise à jour de cette page");
+      detail.classList.add(-ecart > intervalle ? "perte-txt" : "warn-txt");
+    }
+    if (locale) parts.push(locale);
+    if (original) parts.push(original);
+    detail.textContent = parts.join(" · ");
+  }
 
   maj();
   setInterval(maj, 60000);

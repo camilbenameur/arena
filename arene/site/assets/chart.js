@@ -90,6 +90,57 @@
     });
   }
 
+  /* Étiquettes en bout de courbe (valeur et nom court), à la place d'une légende à décoder.
+     Les courbes qui finissent à la même valeur partagent une étiquette ; les autres sont écartées verticalement. */
+  function etiquettes(u) {
+    var r = uPlot.pxRatio, ctx = u.ctx, gap = 16 * r;
+    var groupes = [];
+    data.series.forEach(function (s, i) {
+      if (!u.series[i + 1].show) return;
+      var j = s.values.length - 1;
+      while (j >= 0 && s.values[j] == null) j--;
+      if (j < 0) return;
+      var txt = ecart(s.values[j], 2);
+      var y = u.valToPos(s.values[j], "y", true);
+      var g = null;
+      for (var k = 0; k < groupes.length; k++) {
+        if (groupes[k].txt === txt && Math.abs(groupes[k].y - y) < 2 * r) { g = groupes[k]; break; }
+      }
+      var llm = s.kind === "llm";
+      var c = llm ? css(data.styles[i].color) : css("--muted");
+      if (g) { g.noms.push(data.short[i]); g.couleurs.push(c); g.llm = g.llm || llm; g.couleur = css("--text"); }
+      else groupes.push({ txt: txt, y: y, noms: [data.short[i]], couleurs: [c], llm: llm, couleur: c });
+    });
+    groupes.sort(function (a, b) { return a.y - b.y; });
+    for (var k = 1; k < groupes.length; k++) {
+      if (groupes[k].y - groupes[k - 1].y < gap) groupes[k].y = groupes[k - 1].y + gap;
+    }
+    var x = u.bbox.left + u.bbox.width + 10 * r;
+    var compact = u.bbox.width / r < 360;
+    ctx.save();
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    groupes.forEach(function (g) {
+      ctx.fillStyle = g.couleur;
+      ctx.font = (g.llm ? "600 " : "400 ") + Math.round(12 * r) + "px " + css("--mono");
+      ctx.fillText(g.txt, x, g.y);
+      var w = ctx.measureText(g.txt + " ").width;
+      ctx.font = (g.llm ? "600 " : "400 ") + Math.round(12 * r) + "px " + css("--sans");
+      var court = function (n) { return n.replace(/ \d+(\.\d+)?$/, ""); };
+      var noms = g.noms.length > 1 || compact ? g.noms.map(court) : g.noms;
+      var couleurs = g.couleurs;
+      if (compact && noms.length > 1) { noms = [noms.length + (g.llm ? " IA" : " courbes")]; couleurs = [g.couleur]; }
+      var cx = x + w;
+      noms.forEach(function (n, k) {
+        var morceau = n + (k < noms.length - 1 ? ", " : "");
+        ctx.fillStyle = couleurs[k];
+        ctx.fillText(morceau, cx, g.y);
+        cx += ctx.measureText(morceau).width;
+      });
+    });
+    ctx.restore();
+  }
+
   function build() {
     if (plot) { plot.destroy(); plot = null; }
     var width = host.clientWidth || 600;
@@ -117,9 +168,10 @@
     var font = "12px " + css("--sans");
     var opts = {
       width: width,
-      height: compact ? 240 : 320,
+      height: compact ? 280 : 320,
       series: series,
       legend: { show: false },
+      padding: [12, compact ? 112 : 190, 0, 0],
       cursor: { drag: { x: false, y: false }, points: { size: 9 } },
       scales: {
         x: { time: false },
@@ -165,6 +217,7 @@
           ctx.stroke();
           ctx.restore();
         }],
+        draw: [etiquettes],
         setCursor: [function (u) { afficherValeurs(u.cursor.idx); }]
       }
     };
@@ -181,7 +234,7 @@
       var w = host.clientWidth;
       if (!plot || !w) return;
       if ((w < 520) !== compactActuel) build();
-      else plot.setSize({ width: w, height: w < 520 ? 240 : 320 });
+      else plot.setSize({ width: w, height: w < 520 ? 280 : 320 });
     }, 120);
   }
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(onResize).observe(host.parentNode);

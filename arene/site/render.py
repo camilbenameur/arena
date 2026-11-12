@@ -19,8 +19,12 @@ NNBSP = "\u202f"
 MINUS = "\u2212"
 MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 
-BANDEAU = "Simulation — aucun argent réel"
+BANDEAU = "Simulation\u202f: argent fictif, aucun ordre réel"
 BANDEAU_REEL = "ARGENT RÉEL"
+DESCRIPTION = (
+    "Trois modèles d’IA gèrent chacun un portefeuille crypto fictif, comparés à quatre règles simples. "
+    "Journal d’expérience mis à jour toutes les 4 h, en simulation."
+)
 AVERTISSEMENT = (
     "Expérience personnelle, pas un conseil en investissement. Les décisions sont produites par des IA, "
     "en simulation ; des pertes sont possibles. Chiffres avant impôt."
@@ -189,8 +193,9 @@ def layout(*, title: str, body: str, root: str, active: str, data: dict[str, Any
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="{CSP}">
 <title>{e(title)} · Arène de trading</title>
-<meta name="description" content="Dashboard privé de l’arène de trading : modèles d’IA et témoins en simulation.">
+<meta name="description" content="{e(DESCRIPTION)}">
 <link rel="preload" href="{root}fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}fonts/ibm-plex-serif-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}vendor/uPlot.min.css">
 <link rel="stylesheet" href="{root}assets/site.css">
 </head>
@@ -199,7 +204,7 @@ def layout(*, title: str, body: str, root: str, active: str, data: dict[str, Any
 <header class="entete">
   {bandeau}
   <div class="wrap entete-haut">
-    <a class="marque" href="{root}index.html"><span class="marque-signe" aria-hidden="true"></span>Arène de trading</a>
+    <a class="marque" href="{root}index.html">L’arène <span class="marque-sous">de trading</span></a>
     <nav class="nav" aria-label="Pages principales">{nav_top}</nav>
   </div>
   <nav class="wrap nav-modeles" aria-label="Portefeuilles">{groupes}</nav>
@@ -307,7 +312,10 @@ def _legende(chart: dict[str, Any], focus: str | None) -> str:
 
 
 def _chart_scripts(root: str, chart: dict[str, Any], focus: str | None) -> str:
-    payload = {"x": chart["x"], "series": chart["series"], "styles": _styles(chart, focus)}
+    payload = {
+        "x": chart["x"], "series": chart["series"], "styles": _styles(chart, focus),
+        "short": [nom_court(s["name"]) for s in chart["series"]],
+    }
     return (
         f'<script id="equity-data" type="application/json">{json_inline(payload)}</script>\n'
         f'<script src="{root}vendor/uPlot.iife.min.js"></script>\n'
@@ -342,10 +350,7 @@ def _chart_block(chart: dict[str, Any], *, focus_name: str | None = None, focus:
         )
     else:
         label = f"Rendement net cumulé des {len(chart['series'])} portefeuilles depuis le départ jusqu’après {periode}. Au dernier cycle : {derniers}."
-        legende = (
-            "Rendement net cumulé depuis le départ. Modèles d’IA en couleur et trait plein, témoins en gris et tirets. "
-            f"Un point par cycle de 4{NBSP}h. Les boutons sous le graphique masquent ou réaffichent une courbe."
-        )
+        legende = "Les boutons ci-dessus masquent ou réaffichent une courbe ; le survol montre les valeurs d’un cycle."
     return (
         '<figure class="graphique">'
         f'<div id="chart" class="graphique-zone" role="img" aria-label="{e(label)}">'
@@ -423,7 +428,8 @@ def _rank_cell(p: dict[str, Any]) -> str:
         return '<span class="muted">—</span><small class="sous">sans décision</small>'
     if r is None:
         return NON_APPLICABLE
-    return f'{num(r, 0)}<small class="sous">sur 100</small>'
+    sans = ", sans aucun achat" if p["kind"] == "llm" and not p["n_trades"] else ""
+    return f'{num(r, 0)}<small class="sous">sur 100{sans}</small>'
 
 
 def _cout_cell(p: dict[str, Any]) -> str:
@@ -440,7 +446,7 @@ def _drawdown(p: dict[str, Any]) -> str:
 
 def _cout_titre(data: dict[str, Any]) -> str:
     if data.get("decider_backend") == "abonnement":
-        return 'Coût équivalent API <span class="nb">abonnement, non facturé</span>'
+        return 'Coût de calcul <span class="nb">équivalent API, non facturé</span>'
     return "Coût d’API"
 
 
@@ -462,6 +468,8 @@ def overview_table(data: dict[str, Any]) -> str:
             statut = ' <span class="pastille warn">gelé</span>'
         verdict = _verdict_hasard(p, mc)
         verdict_html = f'<span class="verdict-ligne">{verdict}</span>' if verdict else ""
+        if p["kind"] != "llm" and p.get("description"):
+            verdict_html += f'<small class="desc">{e(p["description"])}</small>'
         inactif = " inactif" if jamais_decide(p) else ""
         rows.append(
             f'<tr class="{e(p["kind"])}{inactif}"><th scope="row"><a href="modele/{e(p["slug"])}.html">{e(p["name"])}</a>{statut}{verdict_html}</th>'
@@ -483,11 +491,11 @@ def overview_table(data: dict[str, Any]) -> str:
     sharpe_titre = f'Sharpe <span class="nb">dès {mc}{NBSP}cycles</span>' if tous_tot else "Sharpe"
     head = (
         '<tr><th scope="col">Portefeuille</th><th scope="col" class="n">Rendement net</th>'
-        '<th scope="col" class="n">Rang <span class="nb">vs hasard</span></th><th scope="col" class="n">Equity</th>'
-        '<th scope="col" class="n">Drawdown max</th><th scope="col" class="n">Trades <span class="nb">et frais</span></th>'
+        '<th scope="col" class="n">Rang <span class="nb">face au hasard</span></th><th scope="col" class="n">Valeur</th>'
+        '<th scope="col" class="n">Pire baisse <span class="nb">depuis un sommet</span></th><th scope="col" class="n">Ordres <span class="nb">et frais</span></th>'
         f'<th scope="col" class="n">{_cout_titre(data)}</th><th scope="col" class="n">{sharpe_titre}</th></tr>'
     )
-    libelles = ["Rendement net", "Rang vs hasard", "Equity", "Drawdown max", "Trades et frais", "Coût d’API", "Sharpe"]
+    libelles = ["Rendement net", "Rang face au hasard", "Valeur", "Pire baisse", "Ordres et frais", "Coût de calcul", "Sharpe"]
     return empiler(
         '<div class="table-scroll" tabindex="0" role="region" aria-label="Tableau comparatif, défilable">'
         '<table class="tableau comparatif empile"><caption class="visuellement-cache">Comparatif des portefeuilles : '
@@ -497,51 +505,110 @@ def overview_table(data: dict[str, Any]) -> str:
     )
 
 
-def _prochain_cycle(data: dict[str, Any]) -> str:
-    last, iv = data["last_cycle_ts"], data.get("interval_s")
-    if last is None or not iv:
-        return '<dd class="kpi-valeur">—</dd><dd class="kpi-detail">dès le premier cycle</dd>'
-    nxt = last + iv
+NOMBRES = {1: "Une", 2: "Deux", 3: "Trois", 4: "Quatre", 5: "Cinq", 6: "Six"}
+
+
+def _intervalle(lo: float, hi: float) -> str:
+    return pct(lo) if round(lo, 4) == round(hi, 4) else f"entre {pct(lo)} et {pct(hi)}"
+
+
+def _etat(data: dict[str, Any], llms: list[dict[str, Any]], actifs: list[dict[str, Any]]) -> tuple[str, str]:
+    """Phrase de tête (faits du dernier cycle) et verdict, en mots de tous les jours."""
+    nc, mc, iv = data["n_cycles"], data["min_cycles_stats"], data.get("interval_s") or 14_400
+    if nc == 0:
+        return "Le premier cycle n’a pas encore eu lieu : les premiers chiffres arriveront juste après.", ""
+    heures = nc * iv // 3600
+    duree_txt = f"{heures}{NBSP}h" if heures < 48 else f"{heures // 24}{NBSP}jours"
+    faits = [f"Après <b>{pluriel(nc, 'cycle')}</b> de décision ({duree_txt}),"]
+    rets = [p["total_return"] or 0.0 for p in actifs]
+    if llms and not actifs:
+        faits.append("les modèles d’IA n’ont encore jamais décidé : seuls les témoins ont joué.")
+    elif actifs and all(p["n_trades"] == 0 for p in actifs) and all(abs(r) < 5e-5 for r in rets):
+        qui = "les modèles d’IA" if len(actifs) > 1 else "le modèle d’IA"
+        faits.append(f"{qui} n’ont rien acheté pour l’instant : ils restent en euros, à <b>{pct(0.0)}</b>." if len(actifs) > 1
+                     else f"{qui} n’a rien acheté pour l’instant : il reste en euros, à <b>{pct(0.0)}</b>.")
+    elif actifs:
+        faits.append(f"les modèles d’IA sont <b>{_intervalle(min(rets), max(rets))}</b>.")
+    tems = [p["total_return"] or 0.0 for p in data["portfolios"] if p["kind"] != "llm"]
+    if tems:
+        faits.append(
+            f"Les {len(tems)} témoins, des règles fixes sans IA qui servent de comparaison, sont {_intervalle(min(tems), max(tems))}."
+        )
+    if data["any_llm_distinguishable"]:
+        verdict = "Au moins un modèle s’écarte significativement du panier. Cela ne dit rien de la suite."
+    elif nc < mc:
+        verdict = "Trop tôt pour conclure."
+    else:
+        verdict = "Aucun modèle n’est distinguable du hasard."
+    return " ".join(faits), verdict
+
+
+def _avancee(data: dict[str, Any]) -> str:
+    nc, mc, iv = data["n_cycles"], data["min_cycles_stats"], data.get("interval_s")
+    if nc >= mc:
+        return f'<p class="avancee">{_svg_jauge(1.0)}<span>Seuil de {mc}{NBSP}cycles atteint : les statistiques sont calculées.</span></p>'
+    vers = ""
+    if data["last_cycle_ts"] and iv:
+        d = datetime.fromtimestamp(data["last_cycle_ts"] + (mc - nc) * iv, UTC)
+        vers = f" (vers le {d.day}{NBSP}{MOIS[d.month - 1]})"
     return (
-        f'<dd class="kpi-valeur"><time datetime="{iso(nxt)}" data-prochain="{nxt}" data-intervalle="{iv}">{e(when(nxt, annee=False))}</time></dd>'
-        f'<dd class="kpi-detail" data-fraicheur>un cycle toutes les {duree(iv)}</dd>'
+        f'<p class="avancee">{_svg_jauge(nc / mc if mc else 1.0)}'
+        f"<span>{nc} cycle{'s' if nc > 1 else ''} sur les {mc} nécessaires à un premier verdict{vers}</span></p>"
     )
 
 
-def _kpis(data: dict[str, Any], llms: list[dict[str, Any]], actifs: list[dict[str, Any]]) -> str:
-    nc, mc = data["n_cycles"], data["min_cycles_stats"]
-    ratio = min(nc / mc, 1.0) if mc else 1.0
-    if llms and not actifs:
-        llm_detail = '<dd class="kpi-detail warn-txt">aucune décision reçue</dd>'
-    else:
-        tot = sum(p.get("n_decided") or 0 for p in llms)
-        llm_detail = f'<dd class="kpi-detail">{pluriel(tot, "décision reçue", "décisions reçues")} au total</dd>'
-    panier = next((p for p in data["portfolios"] if p["id"] == "temoin:panier"), None)
-    if panier:
-        panier_html = (
-            f'<dd class="kpi-valeur">{pct(panier["total_return"])}</dd>'
-            '<dd class="kpi-detail">les 6 paires achetées au départ puis gardées, frais compris : l’étalon à battre</dd>'
+def _releve(data: dict[str, Any]) -> str:
+    """Ligne de relevé : dernier cycle, prochain (rafraîchi par site.js), état du journal."""
+    items = []
+    last, iv = data["last_cycle_ts"], data.get("interval_s")
+    if last:
+        items.append(f"<li>Dernier cycle : {quand(last, annee=False)}</li>")
+    if last and iv:
+        nxt = last + iv
+        items.append(
+            f'<li>Prochain : <time datetime="{iso(nxt)}" data-prochain="{nxt}" data-intervalle="{iv}">{e(when(nxt, annee=False))}</time>'
+            ' <span class="releve-detail" data-fraicheur></span></li>'
         )
+    j = data["journal"]
+    if j["verify_ok"]:
+        items.append('<li><a href="methode.html#m-journal">Historique vérifié, non modifié</a></li>')
     else:
-        panier_html = '<dd class="kpi-valeur">—</dd>'
-    stats_txt = "statistiques disponibles" if nc >= mc else f"statistiques à partir de {mc}"
-    return f"""<dl class="kpis">
-  <div class="kpi"><dt>Cycles terminés</dt><dd class="kpi-valeur">{nc}<span class="kpi-sur">{NNBSP}/{NNBSP}{mc}</span></dd>
-    <dd class="kpi-detail">{_svg_jauge(ratio)}{stats_txt}</dd></div>
-  <div class="kpi"><dt>Prochain cycle</dt>{_prochain_cycle(data)}</div>
-  <div class="kpi"><dt>Modèles d’IA actifs</dt><dd class="kpi-valeur">{len(actifs)}<span class="kpi-sur">{NNBSP}/{NNBSP}{len(llms)}</span></dd>{llm_detail}</div>
-  <div class="kpi"><dt>Le marché <span class="nb">témoin panier</span></dt>{panier_html}</div>
-</dl>"""
+        items.append('<li class="perte-txt"><a href="methode.html#m-journal">Journal : vérification en échec</a></li>')
+    return f'<ul class="releve">{"".join(items)}</ul>'
 
 
-def _dernier_saut(p: dict[str, Any]) -> str | None:
-    """Raison du saut au dernier cycle journalisé, ou None si la dernière décision n'a pas été sautée."""
-    d = p["decisions"][0] if p["decisions"] else None
-    return d["skip_reason"] if d and d["kind"] == "skipped" else None
+def _frise(data: dict[str, Any]) -> str:
+    """Signature : chaque cycle terminé est un maillon du journal chaîné, avec son empreinte."""
+    cycles = data.get("cycles") or []
+    if not cycles:
+        return ""
+    total = len(cycles)
+    montres = cycles[-6:]
+    items = []
+    for i, c in enumerate(montres, start=total - len(montres) + 1):
+        d = datetime.fromtimestamp(c["ts"], UTC)
+        h = (c.get("hash") or "")[:8]
+        items.append(
+            f'<li><b>Cycle {i}</b><span>{d.day}{NBSP}{MOIS[d.month - 1]}, {d:%H}{NBSP}h</span>'
+            f'<code title="Empreinte sha256 du cycle dans le journal">{e(h)}</code></li>'
+        )
+    iv = data.get("interval_s")
+    if iv:
+        d = datetime.fromtimestamp(cycles[-1]["ts"] + iv, UTC)
+        items.append(f'<li class="a-venir"><b>Cycle {total + 1}</b><span>{d.day}{NBSP}{MOIS[d.month - 1]}, {d:%H}{NBSP}h</span><span>à venir</span></li>')
+    avant = f" Les {total - len(montres)} précédents sont sur la page Méthode." if total > len(montres) else ""
+    return (
+        '<div class="frise-bloc"><ol class="frise" aria-label="Derniers cycles et leur empreinte dans le journal">'
+        f'{"".join(items)}</ol>'
+        f'<p class="frise-legende">Chaque cycle est scellé dans un journal chaîné : son empreinte figure ici, et la page '
+        f'<a href="methode.html#m-journal">Méthode</a> dit comment la recalculer.{avant}</p></div>'
+    )
 
 
 def _a_faire(data: dict[str, Any], llms: list[dict[str, Any]]) -> str:
-    """Une ligne : ce que le propriétaire doit faire maintenant, ou « rien »."""
+    """Une ligne pour l'opérateur : ce qu'il faut faire maintenant, ou « rien ». Absente de la version publique."""
+    if data.get("public"):
+        return ""
     if not data["n_cycles"]:
         return '<p class="a-faire info"><strong>Rien à faire.</strong> Le premier cycle n’a pas encore eu lieu.</p>'
     sauts = {p["name"]: r for p in llms if (r := _dernier_saut(p))}
@@ -570,38 +637,27 @@ def _a_faire(data: dict[str, Any], llms: list[dict[str, Any]]) -> str:
         )
     if halted:
         return f'<p class="a-faire warn"><strong>À vérifier.</strong> Portefeuille arrêté : {e(", ".join(halted))}.</p>'
-    return '<p class="a-faire ok"><strong>Rien à faire.</strong> Tous les portefeuilles ont joué au dernier cycle.</p>'
+    return ""
+
+
+def _dernier_saut(p: dict[str, Any]) -> str | None:
+    """Raison du saut au dernier cycle journalisé, ou None si la dernière décision n'a pas été sautée."""
+    d = p["decisions"][0] if p["decisions"] else None
+    return d["skip_reason"] if d and d["kind"] == "skipped" else None
 
 
 def index_page(data: dict[str, Any]) -> str:
     nc, mc = data["n_cycles"], data["min_cycles_stats"]
     llms = [p for p in data["portfolios"] if p["kind"] == "llm"]
     actifs = [p for p in llms if p.get("n_decided")]
-    cyc = f"{pluriel(nc, 'cycle')} terminé{'s' if nc > 1 else ''}"
-    if nc == 0:
-        titre, phrase = "Aucun cycle terminé pour l’instant", f"Les premiers chiffres apparaîtront après le premier cycle de 4{NBSP}h."
-    elif llms and not actifs:
-        raisons = sorted({r for p in llms if (r := _raison_sauts(p))})
-        raison = f" ({', '.join(raisons)})" if raisons else ""
-        if len(llms) == 1:
-            titre = "Le modèle d’IA n’a pas encore décidé"
-            phrase = f"Ses décisions ont été sautées{raison}."
-        else:
-            titre = f"Les {len(llms)} modèles d’IA n’ont pas encore décidé"
-            phrase = f"Au dernier cycle, leurs décisions ont été sautées{raison}."
-        if nc < mc:
-            phrase += f" Seuls les témoins ont joué : {cyc} sur les {mc} nécessaires avant toute statistique."
-        else:
-            phrase += f" Seuls les témoins ont joué, pendant {pluriel(nc, 'cycle')} : aucun modèle ne peut être évalué."
-    elif data["any_llm_distinguishable"]:
-        titre = "Au moins un modèle s’écarte du panier"
-        phrase = f"L’écart est statistiquement significatif après {cyc}. Cela ne dit rien de la suite."
-    elif nc < mc:
-        titre = "Trop tôt pour conclure"
-        phrase = f"{cyc[0].upper()}{cyc[1:]} sur les {mc} nécessaires avant toute statistique. D’ici là, aucun modèle ne peut être distingué du hasard."
+    n_tem = sum(1 for p in data["portfolios"] if p["kind"] != "llm")
+    nombre = NOMBRES.get(len(llms), str(len(llms)))
+    if len(llms) == 1:
+        titre = "Une IA gère un portefeuille crypto fictif. Fait-elle mieux que des règles simples ?"
     else:
-        titre = "Aucun modèle n’est distinguable du hasard"
-        phrase = f"Après {cyc}, aucun modèle d’IA ne fait significativement mieux ni moins bien que le témoin panier."
+        titre = f"{nombre} IA gèrent chacune un portefeuille crypto fictif. Font-elles mieux que des règles simples ?"
+    faits, verdict = _etat(data, llms, actifs)
+    verdict_html = f" <strong>{e(verdict)}</strong>" if verdict else ""
     m = data["method"]
     dist = data["distribution"]
     lecture = [
@@ -610,7 +666,8 @@ def index_page(data: dict[str, Any]) -> str:
             f"({bp_pct(m['slippage_bp'])}) simulés, avant impôt.</li>"
         ),
         "<li><strong>Non distinguable du hasard</strong> : l’écart de rendement au témoin panier n’est pas statistiquement significatif.</li>",
-        f"<li><strong>Sharpe</strong> : annualisé, avec son intervalle de confiance à 95{NBSP}% (bootstrap par blocs), affiché à partir de {mc}{NBSP}cycles.</li>",
+        f"<li><strong>Sharpe</strong> : rendement rapporté au risque pris, annualisé, avec sa fourchette à 95{NBSP}%, affiché à partir de {mc}{NBSP}cycles.</li>",
+        "<li><strong>Rang face au hasard</strong> d’un modèle qui n’a rien acheté : il bat les tirages au sort parce qu’eux paient des frais, pas par talent.</li>",
     ]
     if dist:
         lecture.insert(1,
@@ -620,19 +677,32 @@ def index_page(data: dict[str, Any]) -> str:
         )  # fmt: skip
     elif data["distribution_note"]:
         lecture.insert(1, f"<li><strong>Rang vs hasard</strong> : {e(data['distribution_note'])}.</li>")
+    sous_titre = (
+        "Frais compris, en écart au capital de départ. Modèles d’IA en couleur, témoins en gris pointillé ; "
+        f"un point par cycle de {duree(data.get('interval_s') or 14_400)}."
+    )
+    finaux = {round(s["values"][-1], 4) for s in data["chart"]["series"] if s["kind"] == "llm" and s["values"] and s["values"][-1] is not None}
+    if len(llms) > 1 and len(finaux) == 1 and all(p["n_trades"] == 0 for p in llms):
+        sous_titre += f" Les {len(llms)} courbes d’IA sont confondues : aucun achat, donc aucun écart."
     body = f"""
 <section class="hero" aria-labelledby="titre-etat">
   <h1 id="titre-etat">{e(titre)}</h1>
-  <p class="chapo">{e(phrase)}</p>
+  <div class="hero-texte">
+  <p class="chapo">{faits}{verdict_html}</p>
+  {_avancee(data) if nc else ""}
+  {_releve(data)}
   {_a_faire(data, llms)}
-  {_kpis(data, llms, actifs)}
+  </div>
 </section>
-<section aria-labelledby="titre-courbes">
-  <h2 id="titre-courbes">Rendement des {len(data["portfolios"])} portefeuilles</h2>
+<section class="courbes" aria-labelledby="titre-courbes">
+  <h2 id="titre-courbes">Rendement net depuis le départ</h2>
+  <p class="sous-titre">{sous_titre}</p>
   {_chart_block(data["chart"])}
+  {_frise(data)}
 </section>
 <section aria-labelledby="titre-comparatif">
-  <h2 id="titre-comparatif">Comparatif</h2>
+  <h2 id="titre-comparatif">Les {len(llms) + n_tem} portefeuilles</h2>
+  <p class="sous-titre">Modèles d’IA puis témoins (règles fixes). Chaque nom mène à la page du portefeuille : positions, décisions et justifications.</p>
   {overview_table(data)}
   <details class="lecture"><summary>Comment lire ce tableau</summary><ul class="liste-simple">{"".join(lecture)}</ul></details>
 </section>
@@ -641,6 +711,18 @@ def index_page(data: dict[str, Any]) -> str:
         title="Vue d’ensemble", body=body, root="", active="index", data=data,
         scripts=_chart_scripts("", data["chart"], None) if len(data["chart"]["x"]) - 1 >= MIN_POINTS_COURBE else "",
     )  # fmt: skip
+
+
+def page_404(data: dict[str, Any], racine: str) -> str:
+    """Page d'erreur : servie à n'importe quelle profondeur, d'où la racine absolue du site."""
+    body = """
+<section class="hero" aria-labelledby="titre-404">
+  <h1 id="titre-404">Cette page n’existe pas</h1>
+  <p class="chapo">L’adresse est peut-être mal recopiée, ou la page a été renommée. Le journal, lui, n’a rien perdu.</p>
+  <p class="actions-404"><a class="bouton" href="{r}index.html">Revenir à la vue d’ensemble</a> <a href="{r}methode.html">Lire la méthode</a></p>
+</section>
+""".replace("{r}", e(racine))
+    return layout(title="Page introuvable", body=body, root=racine, active="", data=data)
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +872,7 @@ def _decision_compact(d: dict[str, Any], equivalent: bool = False) -> str | None
     if d["kind"] != "decided":
         return None
     corps = _justif(d)
-    resume = f'<span class="quand">{quand(d["cycle"])}</span><span class="muted">Aucune action</span>{_meta(d, equivalent)}'
+    resume = f'<span class="quand">{quand(d["cycle"])}</span><span class="muted">Aucun ordre</span>{_meta(d, equivalent)}'
     if not corps:
         return f'<li class="ligne">{resume}</li>'
     return f'<li class="ligne"><details><summary>{resume}</summary>{corps}</details></li>'
@@ -822,10 +904,10 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
     llm = p["kind"] == "llm"
     communs = [
         _stat("Rendement net", pct(p["total_return"]), cls=f"grand {tone(p['total_return'])}", carte="cle"),
-        _stat("Equity", eur(p["equity_ueur"]), f'<small class="sous">départ {eur(p["capital_ueur"], decimals=0)}</small>'),
-        _stat("Drawdown max", _drawdown(p)),
-        _stat("Rang <span class=\"nb\">vs hasard</span>", _rank_cell(p)),
-        _stat(f"Sharpe <span class=\"nb\">IC 95{NBSP}%</span>", _sharpe_cell(p, mc)),
+        _stat("Valeur du portefeuille", eur(p["equity_ueur"]), f'<small class="sous">départ {eur(p["capital_ueur"], decimals=0)}</small>'),
+        _stat("Pire baisse <span class=\"nb\">depuis un sommet</span>", _drawdown(p)),
+        _stat("Rang <span class=\"nb\">face au hasard</span>", _rank_cell(p)),
+        _stat(f"Sharpe <span class=\"nb\">fourchette à 95{NBSP}%</span>", _sharpe_cell(p, mc)),
     ]
     if llm:
         n_dec = p.get("n_decided") or 0
@@ -835,13 +917,13 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
             f'<small class="sous">{pluriel(n_saut, "sautée", "sautées")}{f" : {e(raison)}" if raison else ""}</small>' if n_saut else ""
         )
         extra = [
-            _stat("Trades", str(p["n_trades"]), f'<small class="sous">{eur(p["fees_paid_ueur"])} de frais</small>'),
+            _stat("Ordres", str(p["n_trades"]), f'<small class="sous">{eur(p["fees_paid_ueur"])} de frais</small>'),
             _stat(_cout_titre(data), _cout_cell(p)),
             _stat("Décisions reçues", str(n_dec), saut_txt),
         ]
     else:
         extra = [
-            _stat("Trades", str(p["n_trades"])),
+            _stat("Ordres", str(p["n_trades"])),
             _stat("Frais payés", eur(p["fees_paid_ueur"])),
             _stat("Cash", eur(p["cash_ueur"])),
         ]
@@ -903,8 +985,9 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
 </header>
 {"".join(alertes)}
 <dl class="stats">{stats_html}</dl>
-<section aria-labelledby="titre-courbe"><h2 id="titre-courbe">Rendement depuis le départ</h2>{_chart_block(baseline_chart, focus_name=p["name"], focus=p["id"])}</section>
-<section aria-labelledby="titre-positions"><h2 id="titre-positions">Positions courantes</h2>{_positions(p)}</section>
+<section aria-labelledby="titre-courbe"><h2 id="titre-courbe">Rendement net depuis le départ</h2>{_chart_block(baseline_chart, focus_name=p["name"], focus=p["id"])}</section>
+<section aria-labelledby="titre-positions"><h2 id="titre-positions">Positions courantes</h2>{_positions(p)}
+<p class="muted note">Positions fictives, publiées pour suivre l’expérience : ce n’est ni un conseil ni un signal.</p></section>
 <section aria-labelledby="titre-decisions"><h2 id="titre-decisions">Décisions</h2>
 <p class="muted note">{note_dec}</p>
 {"".join(resume)}
@@ -964,13 +1047,13 @@ def methode_page(data: dict[str, Any]) -> str:
     m, j, pv = data["method"], data["journal"], data["provenance"]
     pol_rows = "".join(
         f'<tr><th scope="row">{e(POLITIQUE_LIBELLES[k][0])}</th><td class="n" data-label="Valeur">{e(_policy_value(k, v)[0])}</td>'
-        f'<td class="muted" data-label="Base">{e(_policy_value(k, v)[1])}</td><td data-label="Clé"><code>{e(k)}</code></td></tr>'
+        f'<td class="muted" data-label="Base">{e(_policy_value(k, v)[1])}</td></tr>'
         for k, v in m["policy"].items()
         if k in POLITIQUE_LIBELLES
     )
     ok = j["verify_ok"]
     verif = (
-        f'<p><span class="pastille {"ok" if ok else "perte-bg"}">verify() : {"chaîne intacte" if ok else "ÉCHEC"}</span> '
+        f'<p><span class="pastille {"ok" if ok else "perte-bg"}">Vérification du journal : {"chaîne intacte" if ok else "ÉCHEC"}</span> '
         f'{pluriel(j["n_records"], "événement")}, dernier seq {e(j["head_seq"])}.</p>'
     )
     if j["errors"]:
@@ -986,9 +1069,11 @@ def methode_page(data: dict[str, Any]) -> str:
         pv["journal_policy_sha256"] is None or pv["journal_policy_sha256"] == pv["policy_sha256"]
     )
     prompts = ", ".join(f'<code>{e(h)}</code>' for h in pv["prompt_hashes"]) or "non journalisé"
-    if data.get("decider_backend") == "abonnement":
+    if data.get("decider_backend") == "abonnement" and data.get("public"):
+        backend = "<p>Le coût affiché est l’équivalent au prix catalogue de l’API ; il sert de garde-fou de quota.</p>"
+    elif data.get("decider_backend") == "abonnement":
         backend = (
-            "<p>Les modèles sont appelés par la CLI Claude Code (<code>claude -p</code>) sur l’abonnement : rien n’est facturé à l’usage. "
+            "<p>Les modèles sont appelés par l’abonnement Claude Code : rien n’est facturé à l’usage. "
             "Le coût affiché est l’équivalent au prix catalogue renvoyé par la CLI ; il sert de garde-fou de quota.</p>"
         )
     elif data.get("decider_backend") == "api":
@@ -999,19 +1084,19 @@ def methode_page(data: dict[str, Any]) -> str:
     body = f"""
 <header class="tete-modele">
   <h1>Méthode</h1>
-  <p class="chapo">L’expérience telle qu’elle est paramétrée aujourd’hui, ses règles et ses limites. Ce n’est pas un conseil en investissement.</p>
+  <p class="chapo">L’expérience telle qu’elle est paramétrée aujourd’hui, ses règles et ses limites.</p>
 </header>
 
 <section aria-labelledby="m-arene"><h2 id="m-arene">Ce que fait l’arène</h2>
 <p>Trois modèles d’IA (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5) et quatre témoins gèrent chacun {eur(m["capital_ueur"], decimals=0)} fictifs sur 6 paires cotées en euros
-chez Kraken. Toutes les {duree(m["interval_s"])}, chaque portefeuille décide ; un module de contrôle des risques (<code>riskd</code>) accepte ou refuse chaque ordre voulu ;
-un simulateur pessimiste exécute les ordres acceptés. Long seulement, sans levier. Chaque événement est écrit dans un journal chaîné.</p></section>
+chez Kraken. Toutes les {duree(m["interval_s"])}, chaque portefeuille décide ; un module de contrôle des risques accepte ou refuse chaque ordre voulu ;
+un simulateur pessimiste exécute les ordres acceptés. Achats uniquement (pas de vente à découvert), sans effet de levier. Chaque événement est écrit dans un journal chaîné.</p></section>
 
 <section aria-labelledby="m-temoins"><h2 id="m-temoins">Les témoins</h2>
 <dl class="regles">
 <div><dt>Panier</dt><dd>1/6 de l’equity sur chaque paire au premier cycle (frais compris), puis conservé : achat et conservation.</dd></div>
 <div><dt>60/40</dt><dd>60{NBSP}% en BTC, 40{NBSP}% en cash, rééquilibré le premier cycle de chaque mois civil.</dd></div>
-<div><dt>E0065 (adapté)</dt><dd>Règle F1 du labo, pression taker : L = {m["e0065"]["L"]}, k = {m["e0065"]["k"]}, H = {m["e0065"]["H"]}. Adaptée : univers des 6 paires, ratio taker calculé sur les bougies journalières Binance USDT, exécution au prix Kraken EUR, reconstitution tous les {m["e0065"]["H"]} jours.</dd></div>
+<div><dt>E0065 (adapté)</dt><dd>Règle fixe fondée sur la pression acheteuse, c’est-à-dire la part des achats passés au prix du marché (E0065 est son nom de code) : L = {m["e0065"]["L"]}, k = {m["e0065"]["k"]}, H = {m["e0065"]["H"]}. Adaptée : univers des 6 paires, ratio taker calculé sur les bougies journalières Binance USDT, exécution au prix Kraken EUR, reconstitution tous les {m["e0065"]["H"]} jours.</dd></div>
 <div><dt>Aléatoire</dt><dd>À chaque cycle, 0 à 2 actions tirées au hasard dans le même espace d’actions que les modèles, avec exactement les mêmes règles de risque. Hors ligne, {_group(m["n_trajectoires"])}{NBSP}trajectoires sont rejouées sur les mêmes cycles et les mêmes prix ; le rang d’un portefeuille est son percentile dans cette distribution.</dd></div>
 </dl></section>
 
@@ -1021,16 +1106,16 @@ arrondis au pas de prix dans le sens défavorable. Frais de {bp_pct(m["taker_fee
 Quantités arrondies vers le bas. Un stop est posé à l’entrée ; la détention est limitée à {duree(policy_max_holding(m))}. Les positions sont valorisées au dernier bid.</p></section>
 
 <section aria-labelledby="m-risque"><h2 id="m-risque">Politique de risque (simulation)</h2>
-<p class="muted">Politique chargée à la construction du site. Valeurs de la simulation, plus souples que ne le serait une politique réelle.</p>
+<p class="muted">Valeurs de la simulation, plus souples que ne le serait une politique réelle.</p>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Tableau de la politique de risque, défilable"><table class="tableau empile"><caption class="visuellement-cache">Règles du contrôle de risque</caption>
-<thead><tr><th scope="col">Règle</th><th scope="col" class="n">Valeur</th><th scope="col">Base</th><th scope="col">Clé</th></tr></thead><tbody>{pol_rows}</tbody></table></div></section>
+<thead><tr><th scope="col">Règle</th><th scope="col" class="n">Valeur</th><th scope="col">Base</th></tr></thead><tbody>{pol_rows}</tbody></table></div></section>
 
 <section aria-labelledby="m-modeles"><h2 id="m-modeles">Modèles d’IA et coût</h2>
 {backend}
 <div class="table-scroll" tabindex="0" role="region" aria-label="Tableau des modèles, défilable"><table class="tableau empile"><caption class="visuellement-cache">Budget et prix des modèles</caption>
 <thead><tr><th scope="col">Modèle</th><th scope="col" class="n">Budget par jour</th><th scope="col" class="n">Prix par million de jetons <span class="nb">entrée / sortie</span></th></tr></thead><tbody>{modeles}</tbody></table></div>
 <p class="muted note">Le prompt système est versionné et son hash est journalisé : {prompts}. Un modèle n’a accès qu’à des barres closes calculées par le code, aucun texte web.
-Une décision peut être sautée (pas de clé, budget quotidien atteint, portefeuille gelé…) ; ces décisions sont comptées sur la page de chaque modèle.</p></section>
+Une décision peut être sautée (modèle pas encore branché, budget quotidien atteint, portefeuille gelé…) ; ces décisions sont comptées sur la page de chaque modèle.</p></section>
 
 <section aria-labelledby="m-journal"><h2 id="m-journal">Intégrité du journal</h2>
 {verif}
@@ -1039,14 +1124,14 @@ Une décision peut être sautée (pas de clé, budget quotidien atteint, portefe
 <div><dt>Politique de risque (sha256)</dt><dd><code class="hash">{e(pv["policy_sha256"])}</code>{divergence}</dd></div>
 <div><dt>Configuration (sha256)</dt><dd><code class="hash">{e(pv["config_sha256"])}</code></dd></div>
 <div><dt>Commit</dt><dd><code>{e(pv["git_head"] or "non journalisé")}</code></dd></div>
-<div><dt>Mode d’exécution</dt><dd><code>venue_mode = {e(data["venue_mode"])}</code></dd></div>
+<div><dt>Mode d’exécution</dt><dd>{"simulation (aucun ordre réel)" if data["venue_mode"] == "paper" else e(data["venue_mode"])}</dd></div>
 </dl></section>
 
 <section aria-labelledby="m-limites"><h2 id="m-limites">Limites, sans maquillage</h2>
 <ul class="liste-simple">
 <li><strong>Simulation.</strong> Aucun ordre réel n’est passé. Un vrai ordre aurait des refus, des exécutions partielles, des pannes et un impact sur le marché que ce simulateur ne reproduit pas.</li>
 <li><strong>Frais pessimistes, modèle simplifié.</strong> Les frais et le glissement sont volontairement élevés, mais le glissement est constant et ne dépend ni de la taille ni de la profondeur du carnet.</li>
-<li><strong>Petit échantillon.</strong> Quelques semaines de décisions toutes les 4{NBSP}h ne distinguent presque jamais un modèle du hasard. C’est pourquoi le Sharpe et son intervalle n’apparaissent qu’à partir de {data["min_cycles_stats"]}{NBSP}cycles, et pourquoi « non distinguable du hasard » est le verdict par défaut.</li>
+<li><strong>Petit échantillon.</strong> Quelques jours à quelques semaines de décisions toutes les 4{NBSP}h ne distinguent presque jamais un modèle du hasard. C’est pourquoi le Sharpe et son intervalle n’apparaissent qu’à partir de {data["min_cycles_stats"]}{NBSP}cycles, et pourquoi « non distinguable du hasard » est le verdict par défaut.</li>
 <li><strong>Ce que le journal chaîné prouve.</strong> Qu’aucun événement n’a été modifié, supprimé ou réordonné après coup : chaque ligne contient le hash de la précédente, et le rejeu du journal redonne les chiffres affichés.</li>
 <li><strong>Ce qu’il ne prouve pas.</strong> Qu’il n’y a pas eu de triche avant l’écriture : rien n’atteste, à lui seul, que les prix journalisés sont ceux du marché ni que les décisions n’ont pas été choisies parmi plusieurs essais.</li>
 <li><strong>Univers étroit et période courte.</strong> 6 cryptos, long seulement ; un résultat ici ne se transpose pas à d’autres marchés, d’autres périodes ni à de l’argent réel.</li>

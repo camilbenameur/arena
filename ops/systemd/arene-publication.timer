@@ -1,0 +1,10 @@
+[Unit]
+Description=Arène de trading : publie le dashboard 20 min après chaque cycle
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:25:00 UTC
+Persistent=true
+Unit=arene-publication.service
+
+[Install]
+WantedBy=timers.target

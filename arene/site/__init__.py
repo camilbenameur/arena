@@ -35,9 +35,15 @@ def _json(path: Path, obj: Any) -> None:
     _write(path, json.dumps(obj, ensure_ascii=False, indent=1, sort_keys=False) + "\n")
 
 
-def build(journal_path: Path, out_dir: Path, *, config: Config, policy: Policy, now_ts: int | None = None) -> None:
+def build(
+    journal_path: Path, out_dir: Path, *, config: Config, policy: Policy, now_ts: int | None = None,
+    public: bool = False, racine: str | None = None,
+) -> None:
+    """`public` retire la ligne destinée à l'opérateur ; `racine` (chemin absolu du site, ex. « /arene/ »)
+    sert à la page 404, servie à n'importe quelle profondeur par l'hébergeur."""
     journal_path, out_dir = Path(journal_path), Path(out_dir)
     data = site_data.compute(journal_path, config, policy, now_ts)
+    data["public"] = public
     vm, gen = data["venue_mode"], data["generated_ts"]
 
     tmp = out_dir.with_name(f".{out_dir.name}.tmp-{os.getpid()}")
@@ -74,6 +80,8 @@ def build(journal_path: Path, out_dir: Path, *, config: Config, policy: Policy, 
 
         _write(tmp / "index.html", render.index_page(data))
         _write(tmp / "methode.html", render.methode_page(data))
+        if racine is not None:
+            _write(tmp / "404.html", render.page_404(data, racine))
         for p in data["portfolios"]:
             focus_chart = _model_chart(data, p)
             _write(tmp / "modele" / f"{p['slug']}.html", render.model_page(data, p, focus_chart))
