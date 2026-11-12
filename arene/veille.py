@@ -3,7 +3,7 @@
 `run_veille(paths, clients, now_ts, deciders=None)` est lancé toutes les 5 min par `arene-veille.timer`, sans LLM :
 1. verrou du cycle SANS attente (cycle ou réveil en cours : sortie sans rien écrire) ; journal cassé : rien écrit ;
 2. tick = `now_ts // tick_s * tick_s` ; un événement `veille` déjà journalisé pour ce tick : sortie sans rien écrire ;
-3. quotes Kraken, contrôlés symbole par symbole (invalide, spread, saut) ; un symbole invalide est exclu du tick ;
+3. quotes Kraken, contrôlés symbole par symbole (invalide, spread, saut, confirmation de rupture) ; un symbole rejeté est exclu du tick ;
 4. stops en direct, confirmés sur deux ticks, au bid avec glissement et frais, idempotents par `order_id` ;
 5. déclencheur de mouvement (confirmé sur deux ticks) et garde-fous ; si un réveil part, `reveil_started` est écrit
    AVANT l'événement `veille` et avant tout appel réseau du réveil ;
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 from arene.config import Config, ConfigError, load_config, load_instruments
 from arene.cycle import (
@@ -34,6 +34,7 @@ from arene.cycle import (
     cycle_lock,
 )
 from arene.data import DataError
+from arene.data.store import BarStore
 from arene.journal import Journal, intent_from_payload, verify
 from arene.ledger import equity_ueur, replay
 from arene.ops.heartbeat import Heartbeat
@@ -53,6 +54,8 @@ SPREAD_MIN_HISTORIQUE = 5
 SPREAD_MULTIPLE = 5
 SAUT_MAX_PCT = 15  # un milieu qui s'écarte de 15 % ou plus du dernier quote valide est écarté
 SAUT_HORIZON_S = 1800
+COHERENCE_PCT = 2  # deux quotes rejetés dont les milieux sont à moins de 2 % l'un de l'autre se confirment
+REJETS_AVANT_ALERTE = 3
 CONFIRMATION_S = 600  # le tick précédent (stops, mouvement) doit dater de 10 min au plus
 REFERENCE_TOLERANCE_S = 900  # référence du mouvement : quote valide à tick - fenêtre ou avant, de 15 min au plus
 ALERTE_JOURNAL_CASSE_S = 3600
@@ -68,6 +71,7 @@ class VeilleReport:
     n_events: int = 0  # événements ajoutés au journal par ce lancement
     stops: list[str] = field(default_factory=list)  # order_id des stops de ce tick
     rejets: dict[str, str] = field(default_factory=dict)  # symbole -> motif du quote écarté
+    confirmes: list[str] = field(default_factory=list)  # symboles acceptés par confirmation de rupture
     declencheur: dict[str, Any] | None = None  # déclencheur évalué (même s'il a été refusé)
     refus: str | None = None  # garde-fou qui a refusé le réveil
     reveil: str | None = None  # None | completed | resumed | abandonne
@@ -81,7 +85,17 @@ class VeilleReport:
 
 # ---------------------------------------------------------------------------------------- fonctions pures
 
-Hist = dict[str, list[tuple[int, int, int]]]  # symbole -> [(tick, bid, ask)] des quotes valides, croissant
+class H(NamedTuple):
+    """Un symbole à un tick passé, relu dans les événements `veille`."""
+
+    tick: int
+    bid: int | None  # quote brut (None : quote invalide, non journalisé)
+    ask: int | None
+    acc: bool  # accepté (dans `quotes`)
+    flag: str | None  # motif du rejet (spread, saut, invalide, erreur...), "confirme" si accepté par rupture, sinon None
+
+
+Hist = dict[str, list[H]]
 
 
 def prochain_rendez_vous(ts: int, interval_s: int, cycle_delay_s: int) -> int:
@@ -97,36 +111,64 @@ def quote_valide(bid: Any, ask: Any) -> bool:
     return all(isinstance(x, int) and not isinstance(x, bool) for x in (bid, ask)) and 0 < bid <= ask
 
 
-def classer_quote(bid: Any, ask: Any, hist: list[tuple[int, int, int]], tick: int) -> str | None:
-    """Motif de rejet d'un quote (`invalide`, `spread`, `saut`), ou None s'il est valide.
+def construire_hist(veilles: list[dict[str, Any]]) -> Hist:
+    """Historique par symbole depuis les événements `veille` (croissant). Les événements sans `quotes_bruts`
+    (ancien format) ne donnent que leurs quotes acceptés."""
+    hist: Hist = {}
+    for pl in sorted(veilles, key=lambda p: p["tick"]):
+        bruts, acc = pl.get("quotes_bruts") or pl["quotes"], pl["quotes"]
+        rejets, confirmes = pl.get("rejets", {}), pl.get("confirmes", [])
+        for sym in sorted(set(bruts) | set(rejets) | set(acc)):
+            b, a = bruts.get(sym, (None, None)) if sym in bruts else acc.get(sym, (None, None))
+            flag = "confirme" if sym in confirmes else rejets.get(sym)
+            hist.setdefault(sym, []).append(H(pl["tick"], b, a, sym in acc, flag))
+    return hist
 
-    `hist` : quotes valides déjà journalisés dans les événements `veille` pour ce symbole.
+
+def classer_quote(
+    bid: Any, ask: Any, hist: list[H], tick: int, close: int | None = None
+) -> tuple[str | None, bool]:
+    """(motif de rejet, accepté par confirmation de rupture).
+
+    - `invalide` : toujours rejeté.
+    - `spread` : spread > 5 x la médiane des 20 derniers spreads BRUTS du symbole (au moins 5).
+    - `saut` : milieu à 15 % ou plus du dernier quote accepté de moins de 30 min, sinon de la dernière clôture 4 h.
+    - Un quote rejeté pour spread ou saut est ACCEPTÉ si le tick précédent (à moins de 10 min) a lui aussi été
+      rejeté pour spread ou saut (ou accepté par confirmation) et si les deux milieux bruts sont à moins de 2 %.
     """
     if not quote_valide(bid, ask):
-        return "invalide"
-    spreads = sorted(a - b for _, b, a in hist[-SPREAD_FENETRE:])
+        return "invalide", False
+    flag = None
+    spreads = sorted(e.ask - e.bid for e in [e for e in hist if e.bid is not None][-SPREAD_FENETRE:])
     if len(spreads) >= SPREAD_MIN_HISTORIQUE and ask - bid > SPREAD_MULTIPLE * spreads[len(spreads) // 2]:
-        return "spread"
-    if hist and tick - hist[-1][0] < SAUT_HORIZON_S:
-        prev = _mid(hist[-1][1], hist[-1][2])
-        if prev > 0 and abs(_mid(bid, ask) - prev) * 100 >= SAUT_MAX_PCT * prev:
-            return "saut"
-    return None
+        flag = "spread"
+    acc = [e for e in hist if e.acc]
+    ref = _mid(acc[-1].bid, acc[-1].ask) if acc and tick - acc[-1].tick < SAUT_HORIZON_S else close
+    if flag is None and ref and ref > 0 and abs(_mid(bid, ask) - ref) * 100 >= SAUT_MAX_PCT * ref:
+        flag = "saut"
+    if flag is None:
+        return None, False
+    prev = precedent(hist, tick)
+    if prev is not None and prev.flag in ("spread", "saut", "confirme") and (prev.flag == "confirme" or not prev.acc):
+        pm = _mid(prev.bid, prev.ask)
+        if pm > 0 and abs(_mid(bid, ask) - pm) * 100 < COHERENCE_PCT * pm:
+            return None, True
+    return flag, False
 
 
-def reference_a(hist: list[tuple[int, int, int]], target: int) -> tuple[int, int, int] | None:
-    """Quote valide le plus proche de `target` ou avant, à moins de 15 min."""
+def reference_a(hist: list[H], target: int) -> H | None:
+    """Quote ACCEPTÉ le plus proche de `target` ou avant, à moins de 15 min."""
     best = None
     for h in hist:
-        if h[0] <= target and target - h[0] <= REFERENCE_TOLERANCE_S:
+        if h.acc and h.tick <= target and target - h.tick <= REFERENCE_TOLERANCE_S:
             best = h
     return best
 
 
-def precedent(hist: list[tuple[int, int, int]], tick: int) -> tuple[int, int, int] | None:
-    """Quote valide du tick précédent de ce symbole, à moins de 10 min."""
-    prev = [h for h in hist if h[0] < tick]
-    return prev[-1] if prev and tick - prev[-1][0] <= CONFIRMATION_S else None
+def precedent(hist: list[H], tick: int) -> H | None:
+    """Quote (brut, accepté ou non) du tick précédent de ce symbole, à moins de 10 min."""
+    prev = [h for h in hist if h.tick < tick and h.bid is not None]
+    return prev[-1] if prev and tick - prev[-1].tick <= CONFIRMATION_S else None
 
 
 def _depasse(mid: int, ref_mid: int, seuil_bp: int) -> bool:
@@ -136,18 +178,19 @@ def _depasse(mid: int, ref_mid: int, seuil_bp: int) -> bool:
 def mouvement(
     quotes: dict[str, tuple[int, int]], hist: Hist, tick: int, seuil_bp: int, fenetre_s: int
 ) -> dict[str, Any] | None:
-    """Instrument dont le milieu a bougé d'au moins `seuil_bp` sur la fenêtre, au tick courant ET au tick précédent
-    (même sens, chacun contre sa propre référence). Le plus grand |variation| l'emporte. Mesuré au milieu du quote."""
-    best: tuple[int, int, str, int] | None = None  # (|d|·BP/ref arrondi bas en 1e-8, d, symbole, ref)
+    """Instrument dont le milieu a bougé d'au moins `seuil_bp` sur la fenêtre, au tick courant (quote accepté) ET au
+    tick précédent (quote brut, même rejeté), dans le même sens, chacun contre sa propre référence (quote accepté).
+    Le plus grand |variation| l'emporte. Mesuré au milieu du quote."""
+    best: tuple[int, int, str, int] | None = None  # (|d|·1e8/ref, d, symbole, ref)
     for sym in sorted(quotes):
         h = hist.get(sym, [])
         ref = reference_a(h, tick - fenetre_s)
         prev = precedent(h, tick)
-        prev_ref = reference_a(h, prev[0] - fenetre_s) if prev else None
+        prev_ref = reference_a(h, prev.tick - fenetre_s) if prev else None
         if ref is None or prev is None or prev_ref is None:
             continue
-        mid, rmid = _mid(*quotes[sym]), _mid(ref[1], ref[2])
-        pmid, prmid = _mid(prev[1], prev[2]), _mid(prev_ref[1], prev_ref[2])
+        mid, rmid = _mid(*quotes[sym]), _mid(ref.bid, ref.ask)
+        pmid, prmid = _mid(prev.bid, prev.ask), _mid(prev_ref.bid, prev_ref.ask)
         d, pd = mid - rmid, pmid - prmid
         if not (_depasse(mid, rmid, seuil_bp) and _depasse(pmid, prmid, seuil_bp)) or (d > 0) != (pd > 0):
             continue
@@ -202,6 +245,7 @@ class _ReveilRunner(_Runner):
         self.quote_symbols = set(quotes)
         self.quote_type = "quote_reveil"
         self.fetch_binance = False  # E0065 ne tourne pas au réveil
+        self.reuse_partial_quotes = True  # reprise : uniquement les `quote_reveil` déjà écrits, jamais réécrits
 
     def alert(self, level: str, code: str, message: str) -> None:
         if _alerte_reveil(self.log, self.notifier, self.now, self.t, level, code, message):
@@ -349,28 +393,38 @@ class _Veille:
         veilles = {e["payload"]["tick"]: e["payload"] for e in self._of("veille")}
         if tick in veilles:
             return VeilleReport("already_done", tick)
-        hist: Hist = {}
-        for t_, pl in sorted(veilles.items()):
-            for sym, (b, a) in pl["quotes"].items():
-                hist.setdefault(sym, []).append((t_, b, a))
+        hist = construire_hist(list(veilles.values()))
+        store = BarStore(paths.data, "kraken")
 
         # 1. quotes, contrôlés symbole par symbole
         rejets: dict[str, str] = {}
+        confirmes: list[str] = []
+        bruts: dict[str, tuple[int, int]] = {}
         quotes: dict[str, Quote] = {}
         try:
             instruments = {i.symbol: i for i in load_instruments(cfg, self.clients.kraken)}
             for s, inst in instruments.items():
+                h = hist.get(s, [])
                 try:
                     q = self.clients.kraken.ticker(s, inst.kraken_pair)
-                    motif = classer_quote(q.bid, q.ask, hist.get(s, []), tick)
+                    acc = [e for e in h if e.acc]
+                    close = None
+                    if not (acc and tick - acc[-1].tick < SAUT_HORIZON_S):  # historique périmé : clôture 4 h du store
+                        bars = store.load(s, cfg.interval_s, tick)
+                        close = bars[-1].close if bars else None
+                    motif, confirme = classer_quote(q.bid, q.ask, h, tick, close)
                 except Exception as exc:  # noqa: BLE001 - un symbole illisible est écarté, pas tout le tick
-                    motif = f"erreur : {type(exc).__name__}"
+                    motif, confirme, q = f"erreur : {type(exc).__name__}", False, None
+                if motif != "invalide" and q is not None and not str(motif).startswith("erreur"):
+                    bruts[s] = (q.bid, q.ask)
                 if motif is None:
                     quotes[s] = q
+                    if confirme:
+                        confirmes.append(s)
                 else:
                     rejets[s] = motif
-            if not quotes:
-                raise DataError("aucun quote valide : " + ", ".join(f"{s} {m}" for s, m in sorted(rejets.items())))
+            if not bruts:
+                raise DataError("aucun quote exploitable : " + ", ".join(f"{s} {m}" for s, m in sorted(rejets.items())))
         except Exception as exc:  # noqa: BLE001 - rien n'est écrit ; une alerte au début de la panne
             msg = f"{type(exc).__name__}: {str(exc)[:200]}"
             n = self._echecs() + 1
@@ -381,9 +435,19 @@ class _Veille:
         if self._echecs(0) >= ECHECS_AVANT_ALERTE:
             self._alert("info", "veille_data", "veille : quotes Kraken rétablis")
         qd = {s: (q.bid, q.ask) for s, q in quotes.items()}
+        for s in instruments:  # épisodes de rejets consécutifs d'un même symbole
+            n_prev = 0
+            for e in reversed(hist.get(s, [])):
+                if e.acc:
+                    break
+                n_prev += 1
+            if s in rejets and n_prev + 1 == REJETS_AVANT_ALERTE:
+                self._alert("action", "veille_symbole_ecarte", f"{s} : quotes écartés depuis {REJETS_AVANT_ALERTE} ticks ({rejets[s]})")
+            elif s not in rejets and n_prev >= REJETS_AVANT_ALERTE:
+                self._alert("info", "veille_symbole_ecarte", f"{s} : quotes de nouveau acceptés")
 
         # 2. stops en direct, confirmés par le tick valide précédent (à moins de 10 min)
-        prev_bids = {s: p[1] for s in quotes if (p := precedent(hist.get(s, []), tick)) is not None}
+        prev_bids = {s: p.bid for s in quotes if (p := precedent(hist.get(s, []), tick)) is not None}
         executor = SimExecutor(
             self.journal, instruments, cfg.taker_fee_bp, cfg.slippage_bp, cfg.venue_mode, self.fault_injector
         )
@@ -391,7 +455,7 @@ class _Veille:
         self.log.refresh()
         suffix = f":veille:{tick}"
         stop_ids = [e["payload"]["order_id"] for e in self._of("fill") if e["payload"]["order_id"].endswith(suffix)]
-        rep = VeilleReport("done", tick, stops=stop_ids, rejets=rejets, alerts=self.alerts)
+        rep = VeilleReport("done", tick, stops=stop_ids, rejets=rejets, confirmes=confirmes, alerts=self.alerts)
 
         # 3. réveil interrompu : reprise, ou réparation puis abandon
         closed = {e["payload"]["reveil"] for e in self._of("reveil_completed", "reveil_abandonne")}
@@ -424,7 +488,8 @@ class _Veille:
         bids = {s: b for s, (b, _a) in qd.items()}
         for s in instruments:  # symbole écarté : valorisé à son dernier quote valide
             if s not in qd:
-                last = hist[s][-1][1:] if hist.get(s) else self._dernier_quote_cycle(s)
+                acc_h = [e for e in hist.get(s, []) if e.acc]
+                last = (acc_h[-1].bid, acc_h[-1].ask) if acc_h else self._dernier_quote_cycle(s)
                 if last is not None:
                     marks[s], bids[s] = _mid(*last), last[0]
         self.log.add(
@@ -432,7 +497,9 @@ class _Veille:
             {
                 "tick": tick,
                 "quotes": {s: [b, a] for s, (b, a) in sorted(qd.items())},
+                "quotes_bruts": {s: [b, a] for s, (b, a) in sorted(bruts.items())},
                 "rejets": dict(sorted(rejets.items())),
+                "confirmes": sorted(confirmes),
                 "equity": {p: equity_ueur(st, marks, bids) for p, st in sorted(states.items())},
                 "stops": rep.stops,
                 "reveil": launch,

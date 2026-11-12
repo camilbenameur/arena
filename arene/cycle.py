@@ -273,6 +273,7 @@ class _Runner:
         self.prefetched_quotes: dict[str, Quote] | None = None  # quotes du tick, sinon ticker Kraken
         self.fetch_binance = True
         self.quote_type = "quote"  # le réveil journalise ses quotes sous `quote_reveil` (médiane des spreads intacte)
+        self.reuse_partial_quotes = False
         self.quote_symbols: set[str] | None = None  # symboles dont le quote est attendu (None : tous)
 
     # -------------------------------------------------------------- écriture
@@ -420,7 +421,10 @@ class _Runner:
                     q = Quote(**{k: e["payload"][k] for k in ("symbol", "ts", "bid", "ask")})
                     quotes[q.symbol] = q
         expected = set(self.symbols) if self.quote_symbols is None else self.quote_symbols
-        self.quotes_already_journaled = bool(expected) and expected <= set(quotes)
+        if self.reuse_partial_quotes:  # réveil : une ronde garde les quotes déjà écrits, même incomplets
+            self.quotes_already_journaled = bool(quotes)
+        else:
+            self.quotes_already_journaled = bool(expected) and expected <= set(quotes)
         if not self.quotes_already_journaled:
             quotes = {}
             for inst in self.instruments.values():

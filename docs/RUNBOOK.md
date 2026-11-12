@@ -62,7 +62,8 @@ Spécification : `docs/VEILLE.md`. Le rendez-vous de 4 h ne change pas ; `arene-
 **Nouvelles alertes**
 | code | niveau | action |
 |---|---|---|
-| `veille_data` | action puis info | Action : aucun symbole n'a de quote valide depuis 3 ticks consécutifs (une seule alerte au début de la panne ; les ticks en échec n'écrivent rien, code de sortie 1). Les stops en direct ne tournent pas : le filet des barres de 4 h reste actif. Info « rétabli » au premier tick réussi. |
+| `veille_data` | action puis info | Action : aucun symbole n'a de quote exploitable (tous invalides ou illisibles) depuis 3 ticks consécutifs (une seule alerte au début de la panne ; les ticks en échec n'écrivent rien, code de sortie 1). Les stops en direct ne tournent pas : le filet des barres de 4 h reste actif. Info « rétabli » au premier tick réussi. |
+| `veille_symbole_ecarte` | action puis info | Les quotes d'un symbole sont rejetés (`spread` ou `saut`, voir `rejets` des événements `veille`) depuis 3 ticks consécutifs sans qu'une rupture cohérente se confirme : quotes erratiques de Kraken. Pas de stop ni de déclencheur sur lui, equity à son dernier quote accepté. Se lève seul ; info au retour. |
 | `veille_absente` | action | Posée par le cycle : plus aucun événement `veille` depuis plus de 30 min. `systemctl --user status arene-veille.timer`, `journalctl --user -u arene-veille.service`. Une alerte par absence. |
 | `journal_casse` (veille) | panique | La veille refuse de tourner sur un journal cassé (une alerte par heure au plus, ntfy seulement). Voir « Journal cassé ». |
 | `reveil_resumed` | info | Un réveil interrompu a été repris par un tick suivant (sans double décision ni double fill). Rien à faire. |

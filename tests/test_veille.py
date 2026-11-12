@@ -29,7 +29,7 @@ from arene.sim.executor import SimExecutor
 from arene.sim.fills import market_fill
 from arene.temoins.aleatoire import seed_for
 from arene.types import Instrument, Quote, Side, notional_ueur
-from arene.veille import classer_quote, mouvement, precedent, prochain_rendez_vous, reference_a, run_veille
+from arene.veille import H, classer_quote, mouvement, precedent, prochain_rendez_vous, reference_a, run_veille
 from tests.fakes import (
     H4,
     HAIKU,
@@ -209,7 +209,8 @@ def test_forme_de_l_evenement_veille_et_equity_au_bid(tmp_path: Path):
     before = env.events()
     tick(env, T0 + 600)
     p = of(env, "veille")[-1]["payload"]
-    assert set(p) == {"tick", "quotes", "rejets", "equity", "stops", "reveil", "refus"}
+    assert set(p) == {"tick", "quotes", "quotes_bruts", "rejets", "confirmes", "equity", "stops", "reveil", "refus"}
+    assert p["quotes_bruts"] == p["quotes"] and p["confirmes"] == []
     assert p["stops"] == [] and p["reveil"] is None and p["refus"] is None and p["rejets"] == {}
     assert set(p["quotes"]) == set(SYMBOLS)
     q = env.kraken.ticker("ETH/EUR", "ETHEUR")
@@ -282,34 +283,63 @@ def test_aucun_fill_a_zero_ni_negatif_avant_ecriture(tmp_path: Path):
 # ---------------------------------------------------------------------------------------------- 2. quotes douteux
 
 
-def hist_of(n: int, spread: int, mid: int = 1_000_000, step: int = 300):
-    return [(1000 + step * k, mid - spread // 2, mid + spread // 2) for k in range(n)]
+def hist_of(n: int, spread: int, mid: int = 1_000_000, step: int = 300, start: int = 1000):
+    return [H(start + step * k, mid - spread // 2, mid + spread // 2, True, None) for k in range(n)]
 
 
 def test_classer_quote_invalide_spread_saut_aux_bornes_exactes():
     t = 1000 + 300 * 6
-    assert classer_quote(0, 10, [], t) == "invalide"
-    assert classer_quote(10, 9, [], t) == "invalide"
-    assert classer_quote(5, 5, [], t) is None  # bid == ask est valide
-    assert classer_quote(True, 10, [], t) == "invalide"
-    h = hist_of(5, 1000)  # 5 quotes valides de spread 1000 : le contrôle du spread s'applique
-    assert classer_quote(1_000_000 - 2500, 1_000_000 + 2500, h, t) is None  # 5 000 = 5 x la médiane : accepté
-    assert classer_quote(1_000_000 - 2500, 1_000_000 + 2501, h, t) == "spread"
+    assert classer_quote(0, 10, [], t) == ("invalide", False)
+    assert classer_quote(10, 9, [], t) == ("invalide", False)
+    assert classer_quote(5, 5, [], t) == (None, False)  # bid == ask est valide
+    assert classer_quote(True, 10, [], t) == ("invalide", False)
+    h = hist_of(5, 1000)  # 5 spreads bruts de 1000 : le contrôle du spread s'applique
+    assert classer_quote(1_000_000 - 2500, 1_000_000 + 2500, h, t) == (None, False)  # 5 000 = 5 x la médiane : accepté
+    assert classer_quote(1_000_000 - 2500, 1_000_000 + 2501, h, t) == ("spread", False)
     h4 = hist_of(4, 1000)  # 4 quotes seulement : pas de contrôle du spread
-    assert classer_quote(1_000_000 - 50_000, 1_000_000 + 50_000, h4, 1000 + 300 * 4) is None
-    # Médiane sur les 20 derniers : 20 spreads de 1000 après 10 de 100 000.
-    h30 = [(0 + 300 * k, 999_000, 1_099_000) for k in range(10)] + [
-        (3000 + 300 * k, 999_500, 1_000_500) for k in range(20)
+    assert classer_quote(1_000_000 - 50_000, 1_000_000 + 50_000, h4, 1000 + 300 * 4) == (None, False)
+    # La médiane porte sur les 20 derniers spreads BRUTS, rejetés compris : 20 spreads de 1000 après 10 de 100 000.
+    h30 = [H(300 * k, 999_000, 1_099_000, False, "spread") for k in range(10)] + [
+        H(3000 + 300 * k, 999_500, 1_000_500, True, None) for k in range(20)
     ]
-    assert classer_quote(997_500, 1_002_500, h30, 3000 + 300 * 20) is None
-    assert classer_quote(997_500, 1_002_501, h30, 3000 + 300 * 20) == "spread"
-    # Saut : milieu à 15 % ou plus du dernier quote valide de moins de 30 min.
-    last = [(1000, 999_999, 1_000_001)]
-    assert classer_quote(1_149_999, 1_149_999, last, 1000 + 1799) is None  # 14,9999 %
-    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1799) == "saut"
-    assert classer_quote(850_000, 850_000, last, 1000 + 1799) == "saut"
-    assert classer_quote(850_001, 850_001, last, 1000 + 1799) is None
-    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1800) is None  # dernier quote vieux de 30 min : pas de contrôle
+    assert classer_quote(997_500, 1_002_500, h30, 3000 + 300 * 20) == (None, False)
+    assert classer_quote(997_500, 1_002_501, h30, 3000 + 300 * 20) == ("spread", False)
+    # Médiane sur les bruts : 10 spreads bruts larges rejetés + 10 acceptés étroits -> médiane large (index 10).
+    mix = [H(300 * k, 999_000, 1_099_000, False, "spread") for k in range(11)] + [
+        H(3300 + 300 * k, 999_500, 1_000_500, True, None) for k in range(9)
+    ]
+    assert classer_quote(950_000, 1_050_000, mix, 3300 + 300 * 9) == (None, False)  # spread 100 000 <= 5 x 100 000
+    # Saut : milieu à 15 % ou plus du dernier quote accepté de moins de 30 min.
+    last = [H(1000, 999_999, 1_000_001, True, None)]
+    assert classer_quote(1_149_999, 1_149_999, last, 1000 + 1799) == (None, False)  # 14,9999 %
+    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1799) == ("saut", False)
+    assert classer_quote(850_000, 850_000, last, 1000 + 1799) == ("saut", False)
+    assert classer_quote(850_001, 850_001, last, 1000 + 1799) == (None, False)
+    # Historique périmé (30 min pile) : le saut se mesure contre la clôture 4 h, avec la même tolérance.
+    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1800) == (None, False)  # sans clôture : pas de contrôle
+    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1800, close=1_000_000) == ("saut", False)
+    assert classer_quote(1_149_999, 1_149_999, last, 1000 + 1800, close=1_000_000) == (None, False)
+
+
+def test_confirmation_de_rupture_aux_bornes_exactes():
+    prev_saut = [H(1000, 800_000, 800_000, False, "saut")]
+    t = 1300
+    assert classer_quote(800_000, 800_000, prev_saut, t, close=1_000_000) == (None, True)  # même milieu : confirmé
+    assert classer_quote(815_999, 815_999, prev_saut, t, close=1_000_000) == (None, True)  # 1,99 % d'écart
+    assert classer_quote(816_000, 816_000, prev_saut, t, close=1_000_000) == ("saut", False)  # 2 % : plus cohérent
+    assert classer_quote(784_000, 784_000, prev_saut, t, close=1_000_000) == ("saut", False)
+    assert classer_quote(784_001, 784_001, prev_saut, t, close=1_000_000) == (None, True)
+    assert classer_quote(800_000, 800_000, prev_saut, 1000 + 601, close=1_000_000) == ("saut", False)  # tick précédent à plus de 10 min
+    assert classer_quote(800_000, 800_000, prev_saut, 1000 + 600, close=1_000_000) == (None, True)
+    # Le tick précédent doit avoir été rejeté pour spread ou saut (ou confirmé), pas invalide ni normal.
+    for flag in ("invalide", "erreur : X", None):
+        h = [H(1000, 800_000, 800_000, False, flag)]
+        assert classer_quote(800_000, 800_000, h, t, close=1_000_000) == ("saut", False), flag
+    # Un quote confirmé devient la référence du saut ; son tick suivant, encore trop large, est confirmé par chaînage.
+    assert classer_quote(800_000, 800_000, [H(1000, 800_000, 800_000, True, "confirme")], t, close=1_000_000) == (None, False)
+    chain = hist_of(5, 1000, start=0) + [H(1500, 995_000, 1_005_000, True, "confirme")]
+    assert classer_quote(995_000, 1_005_000, chain, 1800) == (None, True)
+    assert classer_quote(995_000, 1_005_000, chain[:-1], 1800) == ("spread", False)  # sans le tick confirmé : rejeté
 
 
 def test_quote_ecarte_par_symbole_exclu_du_tick_equity_au_dernier_quote_valide(tmp_path: Path):
@@ -334,6 +364,152 @@ def test_quote_ecarte_par_symbole_exclu_du_tick_equity_au_dernier_quote_valide(t
     assert tick(env, T0 + 1500).rejets == {}
 
 
+def wide_quote(env: Env, bid_or_mid: int, spread: int, *, bid: bool = False) -> None:
+    """BTC avec un spread donné : autour du milieu (défaut) ou à partir du bid (`bid=True`)."""
+    if bid:
+        env.kraken.override[BTC] = (bid_or_mid, bid_or_mid + spread)
+    else:
+        env.kraken.override[BTC] = (bid_or_mid - spread // 2, bid_or_mid + spread // 2)
+
+
+def veille_p(env: Env) -> dict:
+    return of(env, "veille")[-1]["payload"]
+
+
+def test_spread_x10_durable_accepte_au_2e_tick_et_le_stop_part(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    normal = env.kraken.ticker(BTC, "XBTEUR")
+    spread10 = 10 * (normal.ask - normal.bid)
+    for k in range(5):  # 5 ticks normaux : le contrôle du spread s'applique
+        assert tick(env, T0 + 600 + 300 * k, d).rejets == {}
+    bid = S - 1_000_000
+    wide_quote(env, bid, spread10, bid=True)
+    w1 = tick(env, T0 + 2100, d)
+    assert w1.rejets == {BTC: "spread"} and w1.confirmes == [] and w1.stops == []
+    p1 = veille_p(env)
+    assert BTC not in p1["quotes"] and p1["quotes_bruts"][BTC] == [bid, bid + spread10]
+    assert BTC in replay(env.events())[HAIKU].positions
+    r = T0 + 2400
+    w2 = tick(env, r, d)  # deuxième tick cohérent : la rupture est acceptée, et le stop part à ce tick
+    assert w2.rejets == {} and w2.confirmes == [BTC]
+    p2 = veille_p(env)
+    assert p2["quotes"][BTC] == [bid, bid + spread10] and p2["confirmes"] == [BTC] and p2["rejets"] == {}
+    oid = f"stop:{HAIKU}:{BTC}:veille:{r}"
+    assert oid in w2.stops
+    fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
+    assert fill["price_ueur"] == bid * 9995 // 10_000 // 100_000 * 100_000 and fill["ts"] == r
+    assert BTC not in replay(env.events())[HAIKU].positions
+    check_journal(env)
+
+
+def test_krach_stable_de_20_pct_stop_au_2e_tick_et_equity_a_jour(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    set_btc(env, BTC_REF)
+    tick(env, T0 + 600, d)
+    ok = veille_p(env)["quotes"][BTC]
+    set_btc(env, BTC_REF * 80 // 100)
+    crash = env.kraken.override[BTC]
+    w1 = tick(env, T0 + 900, d)
+    assert w1.rejets == {BTC: "saut"} and w1.stops == []
+    p1 = veille_p(env)
+    assert p1["quotes_bruts"][BTC] == list(crash) and BTC not in p1["quotes"]
+    pre = replay(env.events()[: of(env, "veille")[-1]["seq"]])["temoin:panier"]
+    bids = {s: b for s, (b, _a) in p1["quotes"].items()} | {BTC: ok[0]}  # valorisé au dernier quote accepté
+    marks = {s: (b + a) // 2 for s, (b, a) in p1["quotes"].items()} | {BTC: sum(ok) // 2}
+    assert p1["equity"]["temoin:panier"] == equity_ueur(pre, marks, bids)
+    r = T0 + 1200
+    w2 = tick(env, r, d)
+    assert w2.rejets == {} and w2.confirmes == [BTC] and f"stop:{HAIKU}:{BTC}:veille:{r}" in w2.stops
+    p2 = veille_p(env)
+    pre2 = replay(env.events()[: of(env, "veille")[-1]["seq"]])["temoin:panier"]
+    bids2 = {s: b for s, (b, _a) in p2["quotes"].items()}
+    marks2 = {s: (b + a) // 2 for s, (b, a) in p2["quotes"].items()}
+    assert p2["equity"]["temoin:panier"] == equity_ueur(pre2, marks2, bids2)
+    assert p2["equity"]["temoin:panier"] < p1["equity"]["temoin:panier"]  # le krach est enfin visible
+    assert bids2[BTC] == crash[0]
+    check_journal(env)
+
+
+def test_tick_aberrant_isole_jamais_accepte_ni_vente_ni_reveil(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    set_btc(env, BTC_REF)
+    tick(env, T0 + 600, d)
+    set_btc(env, BTC_REF * 50 // 100)
+    b = tick(env, T0 + 900, d)
+    assert b.rejets == {BTC: "saut"} and b.confirmes == [] and b.stops == [] and b.declencheur is None
+    assert BTC not in veille_p(env)["quotes"]
+    set_btc(env, BTC_REF)
+    c = tick(env, T0 + 1200, d)  # retour à la normale : accepté normalement, pas par confirmation
+    assert c.rejets == {} and c.confirmes == [] and c.stops == []
+    assert BTC in veille_p(env)["quotes"]
+    assert BTC in replay(env.events())[HAIKU].positions and not reveil_events(env)
+    assert not [f for f in pl(env, "fill") if f["order_id"].endswith(":veille:" + str(T0 + 900))]
+
+
+def test_deux_ticks_aberrants_incoherents_entre_eux_restent_rejetes(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    set_btc(env, BTC_REF)
+    tick(env, T0 + 600, d)
+    set_btc(env, BTC_REF * 50 // 100)
+    assert tick(env, T0 + 900, d).rejets == {BTC: "saut"}
+    set_btc(env, BTC_REF * 70 // 100)  # -30 % : 40 % d'écart avec le tick précédent
+    c = tick(env, T0 + 1200, d)
+    assert c.rejets == {BTC: "saut"} and c.confirmes == [] and c.stops == []
+    assert BTC not in veille_p(env)["quotes"] and BTC in replay(env.events())[HAIKU].positions
+
+
+def test_historique_perime_le_saut_se_mesure_contre_la_cloture_4h(tmp_path: Path):
+    env = make_env(tmp_path)  # aucun quote de veille : le premier tick compare à la clôture 4 h du store
+    cycle(env, 0)
+    close = max(env.kraken.ohlc(BTC, "XBTEUR", H4, None), key=lambda b: b.ts).close
+    set_btc(env, close // 10_000 * 10_000 // 2)
+    first = tick(env, T0 + 600)
+    assert first.rejets == {BTC: "saut"} and BTC not in veille_p(env)["quotes"]
+    # Historique accepté vieux de 30 min pile : même règle, puis confirmation au tick suivant.
+    env2 = make_env(tmp_path, "e2")
+    cycle(env2, 0)
+    tick(env2, T0 + 600)  # BTC normal accepté
+    set_btc(env2, close // 10_000 * 10_000 // 2)
+    b = tick(env2, T0 + 600 + 1800)
+    assert b.rejets == {BTC: "saut"} and b.confirmes == []
+    c = tick(env2, T0 + 600 + 2100)
+    assert c.rejets == {} and c.confirmes == [BTC]
+
+
+def test_alerte_symbole_ecarte_et_mediane_sur_les_quotes_bruts(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    for k in range(5):
+        set_btc(env, BTC_REF)
+        tick(env, T0 + 600 + 300 * k)
+    # Spread x10 durable avec un milieu qui oscille de 3 % : jamais confirmé (écart de 2 % ou plus entre deux ticks).
+    outcomes = []
+    for w in range(1, 8):
+        mid = BTC_REF * (1015 if w % 2 else 985) // 1000
+        env.kraken.override[BTC] = (mid * 995 // 1000, mid * 1005 // 1000)
+        rep = tick(env, T0 + 1800 + 300 * w)
+        outcomes.append((rep.rejets.get(BTC), rep.confirmes))
+    # La médiane brute rattrape le régime large au 6e tick large : accepté normalement, sans confirmation.
+    assert outcomes == [("spread", [])] * 5 + [(None, [])] * 2
+    syms = [(a["level"], a["code"], a["message"][:24]) for a in pl(env, "alert") if a["code"] == "veille_symbole_ecarte"]
+    assert syms == [
+        ("action", "veille_symbole_ecarte", "BTC/EUR : quotes écartés"),
+        ("info", "veille_symbole_ecarte", "BTC/EUR : quotes de nouv"),
+    ]
+    alerts = [e for e in of(env, "alert") if e["payload"]["code"] == "veille_symbole_ecarte"]
+    ticks = [e["ts"] for e in alerts]
+    assert ticks == [T0 + 1800 + 300 * 3 + 30, T0 + 1800 + 300 * 6 + 30]  # au 3e rejet, puis à la levée (6e tick)
+
+
 def test_symbole_ecarte_pas_de_stop_ni_de_declencheur_sur_lui(tmp_path: Path):
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
@@ -356,7 +532,7 @@ def test_aucun_symbole_valide_le_tick_echoue_sans_rien_ecrire(tmp_path: Path):
     size = env.paths.journal.stat().st_size
     env.kraken.fail_ticker = True
     rep = tick(env, T0 + 600)
-    assert rep.status == "failed" and not rep.ok and "aucun quote valide" in rep.error
+    assert rep.status == "failed" and not rep.ok and "aucun quote exploitable" in rep.error
     assert env.paths.journal.stat().st_size == size
     env.kraken.fail_ticker = False
     assert tick(env, T0 + 900).status == "done"
@@ -419,8 +595,6 @@ def test_stop_pas_confirme_si_le_tick_precedent_a_plus_de_10_minutes(tmp_path: P
     tick(env2, T0 + 600, d)
     rep2 = tick(env2, T0 + 1500, d)  # tick précédent à 900 s : pas confirmé
     assert rep2.stops == [] and BTC in replay(env2.events())[HAIKU].positions
-    assert precedent([(100, 1, 2)], 700) == (100, 1, 2) and precedent([(100, 1, 2)], 701) is None
-    assert precedent([(100, 1, 2)], 100) is None  # strictement avant
 
 
 def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
@@ -458,12 +632,16 @@ def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
 
 
 def test_reference_et_tick_precedent_fonctions_pures():
-    h = [(1000, 10, 12), (1900, 20, 22), (2800, 30, 32)]
-    assert reference_a(h, 2800) == (2800, 30, 32)  # le plus proche à la cible ou avant
-    assert reference_a(h, 2500) == (1900, 20, 22)
-    assert reference_a([(1000, 1, 2)], 1900) == (1000, 1, 2)  # 900 s : accepté
-    assert reference_a([(1000, 1, 2)], 1901) is None  # 901 s : trop vieux
-    assert reference_a([(1000, 1, 2)], 999) is None  # jamais après la cible
+    h = [H(1000, 10, 12, True, None), H(1900, 20, 22, True, None), H(2800, 30, 32, False, "saut")]
+    assert reference_a(h, 2500) == h[1]
+    assert reference_a(h, 2800) == h[1]  # un quote rejeté n'est jamais une référence
+    assert reference_a([H(1000, 1, 2, True, None)], 1900) == H(1000, 1, 2, True, None)  # 900 s : accepté
+    assert reference_a([H(1000, 1, 2, True, None)], 1901) is None  # 901 s : trop vieux
+    assert reference_a([H(1000, 1, 2, True, None)], 999) is None  # jamais après la cible
+    assert precedent(h, 3100) == h[2]  # le tick précédent compte même rejeté (quote brut)
+    assert precedent([H(100, 1, 2, True, None)], 700) is not None and precedent([H(100, 1, 2, True, None)], 701) is None
+    assert precedent([H(100, 1, 2, True, None)], 100) is None  # strictement avant
+    assert precedent([H(100, None, None, False, "invalide")], 200) is None
 
 
 @pytest.mark.parametrize(
@@ -484,9 +662,9 @@ def test_mouvement_confirme_sur_deux_ticks_meme_sens_chacun_contre_sa_reference(
     assert (rep.declencheur is not None) is trigger and (rep.reveil == "completed") is trigger
 
 
-def test_mouvement_fonction_pure_le_plus_grand_l_emporte(tmp_path: Path):
-    def hist(mids: dict[int, int]):
-        return [(t, m - 5, m + 5) for t, m in sorted(mids.items())]
+def test_mouvement_fonction_pure_le_plus_grand_l_emporte_et_le_tick_precedent_rejete_confirme(tmp_path: Path):
+    def hist(mids: dict[int, int], rejected: tuple[int, ...] = ()):
+        return [H(t, m - 5, m + 5, t not in rejected, "saut" if t in rejected else None) for t, m in sorted(mids.items())]
 
     # A : +4 % ; B : -10 % ; C : plat, tous deux ticks confirmés contre leur référence (tick 7200 et 6900).
     h = {
@@ -499,6 +677,11 @@ def test_mouvement_fonction_pure_le_plus_grand_l_emporte(tmp_path: Path):
     assert out == {"type": "mouvement", "symbole": "B", "variation_bp": -1000, "fenetre_s": 3600}
     assert mouvement(cur, {}, 7200, 300, 3600) is None  # pas d'historique : pas de déclencheur
     assert mouvement(cur, {k: v[:2] for k, v in h.items()}, 7200, 300, 3600) is None  # pas de tick précédent
+    # Le tick précédent REJETÉ confirme s'il va dans le même sens (milieu brut) ; en sens inverse, non.
+    rej = {"B": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 900_000}, rejected=(6900,))}
+    assert mouvement({"B": cur["B"]}, rej, 7200, 300, 3600)["symbole"] == "B"
+    inv = {"B": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 1_100_000}, rejected=(6900,))}
+    assert mouvement({"B": cur["B"]}, inv, 7200, 300, 3600) is None
 
 
 # ---------------------------------------------------------------------------------------------- 4. déclencheur de stop supprimé
@@ -938,6 +1121,51 @@ def test_reprise_d_un_reveil_interrompu_sans_double_decision_ni_double_fill(tmp_
         # 7. Les quotes du réveil sont relus à la reprise, pas journalisés une seconde fois.
         assert len(of(env, "quote_reveil")) == 6
         check_journal(env)
+
+
+def test_reprise_sur_les_quotes_d_origine_jamais_reecrits(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = prepare(env, X, deciders(buy_eth_at_reveil))
+    d[SONNET].plan = buy_eth_at_reveil  # Sonnet décide à la reprise, Haiku avant le crash
+    crashed_reveil(env, d, X, HAIKU)
+    origine = {e["payload"]["symbol"]: [e["payload"]["bid"], e["payload"]["ask"]] for e in of(env, "quote_reveil")}
+    assert origine["ETH/EUR"] == veille_p(env)["quotes"]["ETH/EUR"]
+    eth = origine["ETH/EUR"]
+    env.kraken.override["ETH/EUR"] = (eth[0] * 101 // 100, eth[1] * 101 // 100)  # le marché a bougé de 1 % depuis
+    rep = tick(env, X + 300, d)
+    assert rep.reveil == "resumed"
+    again = {e["payload"]["symbol"]: [e["payload"]["bid"], e["payload"]["ask"]] for e in of(env, "quote_reveil")}
+    assert len(of(env, "quote_reveil")) == 6 and again == origine  # rien de réécrit
+    fills = {f["portfolio"]: f for f in pl(env, "fill") if f["side"] == "buy" and f["symbol"] == "ETH/EUR" and f["ts"] == X}
+    assert HAIKU in fills and SONNET in fills
+    assert fills[HAIKU]["price_ueur"] == fills[SONNET]["price_ueur"]  # tous les modèles ont vu les mêmes quotes
+    assert fills[SONNET]["price_ueur"] < eth[1] * 101 // 100  # et pas ceux du tick de reprise
+    check_journal(env)
+
+
+def test_reprise_apres_un_crash_pendant_l_ecriture_des_quotes_garde_ceux_deja_ecrits(tmp_path: Path, monkeypatch):
+    env = make_env(tmp_path)
+    d = prepare(env, X, deciders(buy_eth_at_reveil))
+    real, n = Journal.append, []
+
+    def flaky(self, type, payload, ts):
+        if type == "quote_reveil" and len(n) == 2:
+            raise RuntimeError("crash au 3e quote")
+        if type == "quote_reveil":
+            n.append(payload.symbol)
+        return real(self, type, payload, ts)
+
+    monkeypatch.setattr(Journal, "append", flaky)
+    assert tick(env, X, d).status == "reveil_failed"
+    monkeypatch.undo()
+    assert [e["payload"]["symbol"] for e in of(env, "quote_reveil")] == n and len(n) == 2
+    rep = tick(env, X + 300, d)
+    assert rep.reveil == "resumed"
+    assert [e["payload"]["symbol"] for e in of(env, "quote_reveil")] == n  # jamais réécrits, jamais complétés
+    # Les symboles sans quote journalisé ne sont pas négociables dans cette ronde.
+    traded = {f["symbol"] for f in pl(env, "fill") if f["ts"] == X and f["side"] == "buy"}
+    assert traded <= set(n)
+    check_journal(env)
 
 
 def test_reveil_abandonne_apres_30_minutes_et_repris_avant(tmp_path: Path):
