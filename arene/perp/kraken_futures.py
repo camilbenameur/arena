@@ -200,6 +200,12 @@ class KrakenFuturesClient:
         )
         max_rel = i.get("maxRelativeFundingRate")
         max_pos = i.get("maxPositionSize")
+        prec = i.get("contractValueTradePrecision")
+        lot = None
+        if prec is not None:
+            if type(prec) is not int or not -8 <= prec <= 8:
+                raise DataError(f"instrument {sym}: bad contractValueTradePrecision {prec!r}")
+            lot = 10 ** (8 - prec)
         return InstrumentSpec(
             kraken_symbol=sym,
             tradeable=_strict_bool(i.get("tradeable")),
@@ -208,6 +214,7 @@ class KrakenFuturesClient:
             max_position_qty=_opt(_qty, max_pos),
             margin_levels=tuple(sorted(levels, key=lambda lv: lv.threshold_uusd)),
             max_relative_funding_e12=_opt(lambda x: to_scaled(str(x), E12), max_rel),
+            lot_step_qty=lot,
         )
 
     def order_book(self, kraken_symbol: str, depth: int) -> BookSnapshot:

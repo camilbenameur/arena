@@ -56,6 +56,7 @@ class InstrumentSpec:
     max_position_qty: int | None
     margin_levels: tuple[MarginLevel, ...]
     max_relative_funding_e12: int | None
+    lot_step_qty: int | None = None  # smallest tradeable quantity step (contractValueTradePrecision)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

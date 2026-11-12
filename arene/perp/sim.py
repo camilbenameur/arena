@@ -106,7 +106,15 @@ def _fx(fx: tuple[int, int]) -> tuple[int, int]:
 
 
 class PerpSimulator:
-    def __init__(self, journal: Journal, ticks: Mapping[str, int], params: SimParams | None = None) -> None:
+    def __init__(
+        self,
+        journal: Journal,
+        ticks: Mapping[str, int],
+        params: SimParams | None = None,
+        *,
+        exclusive: bool = False,
+    ) -> None:
+        """`exclusive=True`: the caller guarantees no other writer (offline replays): no lock, no re-sync."""
         for inst, tick in ticks.items():
             if type(tick) is not int or tick <= 0:
                 raise ValueError(f"tick of {inst} must be a positive integer")
@@ -116,12 +124,20 @@ class PerpSimulator:
         self._book = PerpBook()
         self._lock_depth = 0
         self._lock_fd: int | None = None
+        self.exclusive = exclusive
+        self._synced = False
 
     # ------------------------------------------------------------------ journal, lock, cache
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
         """One writer at a time (re-entrant within this object): the check-then-append is atomic."""
+        if self.exclusive:
+            if not self._synced:
+                self._sync()
+                self._synced = True
+            yield
+            return
         if self._lock_depth == 0:
             self._lock_fd = os.open(f"{self.journal.path}.sim.lock", os.O_CREAT | os.O_RDWR, 0o644)
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX)

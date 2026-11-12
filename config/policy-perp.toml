@@ -1,0 +1,47 @@
+# Risk policy of the PERP league, paper (docs/ETUDE-AGENTS-TRADERS.md §4, decisions D2, D11a-c of
+# docs/DECISION-OWNER-agents-traders.md). Hashed (sha256 of the bytes), journaled, copied into every verdict.
+# Integers only; bp = 1/10 000 of the portfolio equity unless stated.
+
+instruments = ["PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD", "PF_XRPUSD", "PF_LINKUSD", "PF_LTCUSD"]
+
+# --- Size and leverage (entries only; reductions and closes are never capped) ---
+max_order_bp     = 5000    # one entry <= 50 % of equity in notional (MAX_ORDER_SIZE)
+max_position_bp  = 10000   # notional of one instrument <= 100 % of equity after the order (MAX_POSITION)
+max_leverage_bp  = 20000   # gross exposure <= 200 % of equity after the order: 2x (MAX_LEVERAGE)
+
+# --- Loss at the stop ---
+stop_bp_min        = 100   # stop distance from the expected fill: 1 % ... (STOP_REQUIRED, STOP_RANGE)
+stop_bp_max        = 1500  # ... to 15 %
+max_trade_loss_bp  = 300   # equity lost if the stop of the position (after the order) fills NOW, from the mark: <= 3 % (MAX_TRADE_LOSS)
+max_open_risk_bp   = 750   # sum of those losses over all positions: <= 7.5 % of equity (MAX_OPEN_RISK)
+stop_gap_bp        = 100   # the loss at a stop assumes a fill 1 % beyond it (gaps), plus the simulator's slippage
+
+# --- Cost versus expected move ---
+max_cost_to_expected_move_pct = 33   # (round-trip cost + adverse funding over the horizon) <= 33 % of the move (EDGE_TOO_SMALL)
+max_funding_horizon_h         = 168  # horizon_h above 7 days (the maximum holding) is refused (BAD_HORIZON)
+max_expected_move_bp          = 3000 # a declared move above 30 % is refused (BAD_EXPECTED_MOVE): the edge rule cannot be gamed
+funding_extreme_e12           = 200000000  # no entry on the paying side if |funding| >= 0.02 % per hour (FUNDING_EXTREME)
+
+# --- Frequency ---
+max_opens_per_day          = 4      # entries per portfolio over 24 h (DAILY_TRADES); reductions and closes do not count
+max_orders_per_minute      = 20     # all portfolios (ORDER_RATE)
+min_interval_same_open_s   = 14400  # 4 h between two entries on the same instrument, any side (TOO_SOON)
+
+# --- Fees ---
+monthly_fee_budget_bp = 300  # fees of every kind in the calendar month <= 3 % of the month-start equity (FEE_BUDGET)
+
+# --- Freeze and halt (also enforced every tick by the perp watcher) ---
+daily_loss_freeze_bp = 500    # loss >= 5 % over 24 h: freeze (FROZEN)
+freeze_duration_s    = 86400
+drawdown_halt_bp     = 1500   # drawdown >= 15 % from the peak: flatten and halt (HALTED)
+
+# --- Market sanity (entries only) ---
+max_mark_index_bp    = 100    # |mark - index| <= 1 % of the index (MARK_SANITY)
+max_mid_index_bp     = 200    # |mid - index| <= 2 % of the index (MARK_SANITY)
+max_mid_mark_bp      = 50     # |mid - mark| <= 0.5 % of the mark (MARK_SANITY); the gap also counts in the cost
+max_spread_multiple  = 3      # spread <= 3 x the median of the recent spreads (SPREAD_ANOMALY)
+max_data_age_s       = 600    # quote, mark, index, funding (of every held instrument) and EUR/USD no older than 10 min,
+                               # and never in the future (DATA_STALE); an intent older than that is refused (INTENT_STALE)
+
+# --- Minimum size ---
+min_order_ueur = 5000000   # 5 EUR of notional, besides Kraken's lot step (ORDER_TOO_SMALL)
