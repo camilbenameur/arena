@@ -1,0 +1,202 @@
+"""Journal synthétique de la ligue dérivés, cohérent pour le ledger du moteur (fills, funding, equity recalculés).
+
+Deux jours, un tick toutes les 5 min, 4 IA et 3 témoins. Couvre : ouverture long et short avec stop et objectif,
+refus du garde-fou, stop touché par la veille, réveil, ronde sautée (budget), réponse sans décision, funding payé
+et reçu, gel. Y glisse aussi des champs privés (chemins, stderr, version du CLI, outils offerts, message d'alerte)
+pour vérifier qu'ils ne sortent jamais sur le site.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+from arene.journal import Journal
+from arene.perp.ledger import (
+    PerpBook,
+    equity_ueur,
+    funding_amount_ueur,
+    gross_exposure_ueur,
+    qty_seconds,
+    unrealized_ueur,
+)
+
+T0 = 1_794_528_000  # 13/11/2026 ? multiple de 3600 ; les rendez-vous tombent à k*14400 + 7200
+FX = (1_105_100, 1_105_160)
+BASE = {"BTC-PERP": 88_650_000_000, "ETH-PERP": 3_200_000_000, "SOL-PERP": 140_000_000, "XRP-PERP": 550_000,
+        "LINK-PERP": 14_000_000, "LTC-PERP": 85_000_000}  # fmt: skip
+PF_KRAKEN = {"BTC-PERP": "PF_XBTUSD", "ETH-PERP": "PF_ETHUSD", "SOL-PERP": "PF_SOLUSD", "XRP-PERP": "PF_XRPUSD",
+             "LINK-PERP": "PF_LINKUSD", "LTC-PERP": "PF_LTCUSD"}  # fmt: skip
+LLMS = ["llm-perp:claude-haiku-5-5", "llm-perp:claude-sonnet-5-5", "llm-perp:claude-opus-5-5", "llm-perp:claude-fable-5-2"]
+TEMOINS = ["benchmark-perp:basket-1x", "benchmark-perp:trend", "benchmark-perp:random"]
+FABLE_RAISON = "ETH perd 3 % sur 24 h, funding positif : les longs paient. RSI 4 h sous 45. Je vends 25 % à découvert."
+INVALIDATION = "clôture 4 h au-dessus de 3 300 $"
+SECRET = "/tmp/arena/var-perp/rounds/x"
+
+
+def prix(inst: str, ts: int) -> int:
+    k = list(BASE).index(inst)
+    t = (ts - T0) / 86_400
+    drift = {0: 0.02, 1: -0.05, 2: 0.03, 3: -0.01, 4: 0.015, 5: -0.02}[k] * t
+    return int(BASE[inst] * (1 + drift + 0.012 * math.sin(t * 9 + k)))
+
+
+def qty_pour(eur: int, inst: str, ts: int) -> int:
+    usd = eur * FX[0] // 1_000_000  # µEUR -> µUSD
+    return usd * 100_000_000 // prix(inst, ts)
+
+
+class Gen:
+    def __init__(self, path: Path) -> None:
+        self.j = Journal(path)
+        self.book = PerpBook()
+        self.n = 0
+
+    def add(self, t: str, p: dict, ts: int) -> None:
+        rec = self.j.append(t, p, ts)
+        self.book.apply(rec)
+
+    def fill(self, pf: str, inst: str, qty: int, ts: int, reason: str = "intent", oid: str | None = None) -> str:
+        self.n += 1
+        oid = oid or f"t:{pf}:{inst}:{self.n}"
+        px = prix(inst, ts)
+        fee = abs(qty) * px // 100_000_000 * 7 // 10_000 * 1_000_000 // FX[0] + 1
+        self.add("perp_fill", {"order_id": oid, "portfolio": pf, "instrument": inst, "qty": qty, "price_uusd": px,
+                               "fee_ueur": fee, "fx_bid": FX[0], "fx_ask": FX[1], "reason": reason,
+                               "fill_model_version": "pessimiste-perp-v1", "ts": ts}, ts)  # fmt: skip
+        return oid
+
+    def cond(self, pf: str, inst: str, kind: str, px: int | None, ts: int) -> None:
+        self.add("conditional_order", {"portfolio": pf, "instrument": inst, "kind": kind, "price_uusd": px, "ts": ts}, ts)
+
+
+def build(path: Path) -> Path:
+    g = Gen(path)
+    for pf in TEMOINS + LLMS:
+        g.add("portfolio_opened", {"portfolio": pf, "kind": "llm" if pf in LLMS else "benchmark", "league": "perp",
+                                   "capital_ueur": 1_000_000_000, "venue_mode": "paper"}, T0)  # fmt: skip
+    rdvs = [T0 + 7_200 + 14_400 * k for k in range(12)]
+    wake = rdvs[2] + 5_400
+    fin = T0 + 2 * 86_400
+    rnd = 0
+    for ts in range(T0 + 300, fin + 1, 300):
+        # Funding de l'heure close, pour chaque position tenue pendant l'heure.
+        if ts % 3_600 == 0:
+            for pf, acc in g.book.states.items():
+                for inst, hist in acc.qty_history.items():
+                    qs = qty_seconds(hist, ts - 3_600, ts)
+                    if qs:
+                        rate = prix(inst, ts) // 100 * (1 if inst != "XRP-PERP" else -1)  # ±0,001 % par heure
+                        if inst == "LTC-PERP" and ts == T0 + 4 * 3_600:
+                            g.add("funding_missing", {"portfolio": pf, "instrument": inst, "stamp": ts, "qty_seconds": qs}, ts)
+                            continue
+                        amt = funding_amount_ueur(qs, rate, *FX)
+                        g.add("funding", {"portfolio": pf, "instrument": inst, "stamp": ts, "qty_seconds": qs, "rate_nusd": rate,
+                                          "fx_bid": FX[0], "fx_ask": FX[1], "amount_ueur": amt}, ts)  # fmt: skip
+        if ts in rdvs or ts == wake:
+            rnd += 1
+            _ronde(g, ts, rnd, wake=ts == wake)
+        if ts == rdvs[1] + 3_000:  # la veille touche le stop de Sonnet
+            acc = g.book.states["llm-perp:claude-sonnet-5-5"]
+            if "BTC-PERP" in acc.positions:
+                g.fill("llm-perp:claude-sonnet-5-5", "BTC-PERP", -acc.positions["BTC-PERP"].qty, ts + 59, "stop",
+                       f"stop:llm-perp:claude-sonnet-5-5:BTC-PERP:1:{ts}")  # fmt: skip
+        if ts == rdvs[3] + 600:
+            g.add("portfolio_frozen", {"portfolio": "llm-perp:claude-opus-5-5", "reason": "daily_loss", "until_ts": ts + 86_400 * 30}, ts)
+            g.add("alert", {"level": "action", "code": "perp_llm_round_failed", "message": f"OSError: {SECRET} the host"}, ts)
+        for pf, acc in g.book.states.items():
+            marks = {i: prix(i, ts) for i in acc.positions}
+            g.add("perp_equity", {"portfolio": pf, "ts": ts, "collateral_ueur": acc.collateral_ueur,
+                                  "unrealized_ueur": unrealized_ueur(acc, marks, *FX), "equity_ueur": equity_ueur(acc, marks, *FX),
+                                  "gross_ueur": gross_exposure_ueur(acc, marks, *FX), "marks": marks,
+                                  "fx_bid": FX[0], "fx_ask": FX[1]}, ts)  # fmt: skip
+        g.add("perp_tick", {"tick": ts, "last_minute": ts - 60, "minutes": 5, "fills": 0, "rounds": [], "pending_funding": [],
+                            "notes": [f"note {SECRET}"], "problems": []}, ts)  # fmt: skip
+    return path
+
+
+def _decision(g: Gen, pf: str, rnd: int, ts: int, kind: str, actions: list[dict], raison: str, outils: list[tuple[str, dict]]) -> None:
+    trig = json.dumps({"instrument": "PF_SOLUSD", "move_bp": -342, "window_s": 3600, "pending_ts": ts - 300}) if kind == "wakeup" else "null"
+    g.add("round_data", {"portfolio": pf, "round": rnd, "kind": kind, "trigger": trig, "sha256": "a" * 64, "message_sha256": "b" * 64,
+                         "path": SECRET, "llm_config_sha256": "c" * 64, "budget_ceiling_uusd": 1_000_000}, ts)  # fmt: skip
+    for n, (tool, args) in enumerate(outils, 1):
+        g.add("tool_call", {"portfolio": pf, "round": rnd, "n": n, "tool": tool, "arguments": json.dumps(args, sort_keys=True),
+                            "response": json.dumps({"brut": SECRET}), "response_sha256": "d" * 64, "is_error": False}, ts)  # fmt: skip
+    g.add("agent_decision", {
+        "portfolio": pf, "round": rnd, "kind": kind, "model_requested": pf.split(":")[1], "model_returned": pf.split(":")[1],
+        "prompt_sha256": "e" * 64, "parsed": {"actions": actions, "justification": raison, "action_errors": []}, "parse_error": None,
+        "tool_calls": len(outils), "num_turns": 3, "input_tokens": 12, "output_tokens": 640, "cache_read_tokens": 6400,
+        "cache_write_tokens": 0, "cost_uusd": 75_000, "latency_ms": 13_200, "attempts": 1, "first_error": None, "cli_rc": 0,
+        "cli_version": "2.1.99-secret", "stderr_tail": f"warning {SECRET}", "mcp_status": "connected",
+        "tools_offered": ["mcp__arene__bougies-secret"], "stream_sha256": "f" * 64, "budget_ceiling_uusd": 1_000_000,
+        "result_seen": True, "charge_ceiling": False,
+    }, ts)  # fmt: skip
+
+
+def _action(inst: str, action: str, size: str, stop: str | None = None, tp: str | None = None, inval: str | None = None) -> dict:
+    return {"instrument": PF_KRAKEN[inst], "action": action, "size_pct": size, "stop_pct": stop, "take_profit_pct": tp,
+            "horizon_h": 24, "expected_move_pct": "5", "confidence_pct": "60", "invalidation": inval}  # fmt: skip
+
+
+def _executer(g: Gen, pf: str, inst: str, action: str, ts: int, k: int, approuve: bool, motifs: list[str] | None = None,
+              qty: int = 0, stop_pct: int | None = None, tp_pct: int | None = None) -> None:  # fmt: skip
+    iid = f"{pf}:{ts}:{k}".encode().hex()[:64]
+    g.add("perp_verdict", {"intent_id": iid, "portfolio": pf, "instrument": PF_KRAKEN[inst], "action": action, "approved": approuve,
+                           "reasons": motifs or [], "qty": qty if approuve else None, "policy_sha256": "9" * 64, "error": None}, ts)  # fmt: skip
+    if not approuve:
+        return
+    g.fill(pf, inst, qty, ts, "intent", iid)
+    px = prix(inst, ts)
+    if stop_pct:
+        g.cond(pf, inst, "stop", px * (100 - stop_pct) // 100 if qty > 0 else px * (100 + stop_pct) // 100, ts)
+    if tp_pct:
+        g.cond(pf, inst, "take_profit", px * (100 + tp_pct) // 100 if qty > 0 else px * (100 - tp_pct) // 100, ts)
+    g.add("perp_execution", {"intent_id": iid, "portfolio": pf, "instrument": PF_KRAKEN[inst], "status": "filled", "error": None}, ts)
+
+
+def _ronde(g: Gen, ts: int, rnd: int, *, wake: bool) -> None:
+    kind = "wakeup" if wake else "rendezvous"
+    trig = {"instrument": "PF_SOLUSD", "move_bp": -342, "window_s": 3600, "pending_ts": ts - 300} if wake else None
+    g.add("perp_round", {"round": ts, "kind": kind, "trigger": trig, "ts": ts}, ts)
+    t = ts + 30
+    if rnd == 1:  # témoins : panier 1/6 long partout, tendance long/short avec stop 10 %
+        for i, inst in enumerate(BASE):
+            g.fill("benchmark-perp:basket-1x", inst, qty_pour(166_000_000, inst, t), t)
+            q = qty_pour(160_000_000, inst, t) * (1 if i % 2 == 0 else -1)
+            g.fill("benchmark-perp:trend", inst, q, t)
+            px = prix(inst, t)
+            g.cond("benchmark-perp:trend", inst, "stop", px * 90 // 100 if q > 0 else px * 110 // 100, t)
+        _executer(g, "benchmark-perp:random", "LTC-PERP", "open_long", t, 0, True, qty=qty_pour(100_000_000, "LTC-PERP", t), stop_pct=5)
+        _executer(g, "benchmark-perp:random", "XRP-PERP", "open_short", t, 1, False, ["EDGE_TOO_SMALL", "MAX_TRADE_LOSS"])
+    t = ts + 60
+    fable, sonnet, opus, haiku = LLMS[3], LLMS[1], LLMS[2], LLMS[0]
+    if rnd == 1:
+        _decision(g, fable, ts, t, kind, [_action("ETH-PERP", "open_short", "25", "4", "8", INVALIDATION)], FABLE_RAISON,
+                  [("indicateurs", {"instrument": "PF_ETHUSD", "intervalle": "4h"}), ("derives", {"instrument": "PF_ETHUSD"})])
+        _executer(g, fable, "ETH-PERP", "open_short", t, 0, True, qty=-qty_pour(250_000_000, "ETH-PERP", t), stop_pct=4, tp_pct=8)
+        _decision(g, sonnet, ts, t, kind, [_action("BTC-PERP", "open_long", "30", "1", None, "BTC sous 87 000 $")],
+                  "Tendance haussière sur 4 h, funding neutre. Long BTC 30 %, stop serré.", [("bougies", {"instrument": "PF_XBTUSD", "intervalle": "1h", "n": 24})])
+        _executer(g, sonnet, "BTC-PERP", "open_long", t, 0, True, qty=qty_pour(300_000_000, "BTC-PERP", t), stop_pct=1)
+        _decision(g, opus, ts, t, kind, [_action("SOL-PERP", "open_long", "20", "5", "10", "SOL sous 130 $"),
+                                         _action("LINK-PERP", "open_short", "10", "3", None, "LINK au-dessus de 15 $")],
+                  "SOL rebondit sur un support, LINK s'essouffle. Deux positions modestes.", [("simuler_ordre", {"instrument": "PF_SOLUSD", "action": "open_long", "size_pct": 20})])
+        _executer(g, opus, "SOL-PERP", "open_long", t, 0, True, qty=qty_pour(200_000_000, "SOL-PERP", t), stop_pct=5, tp_pct=10)
+        _executer(g, opus, "LINK-PERP", "open_short", t, 1, False, ["EDGE_TOO_SMALL", "TOO_SOON"])
+        _decision(g, haiku, ts, t, kind, [], "Signal contradictoire, le coût aller-retour n'est pas couvert. Je ne fais rien.", [])
+    elif rnd == 2:
+        _decision(g, fable, ts, t, kind, [_action("ETH-PERP", "close", "100")], "L'objectif est loin, le funding s'inverse : je ferme.", [])
+        acc = g.book.states[fable]
+        _executer(g, fable, "ETH-PERP", "close", t, 0, True, qty=-acc.positions["ETH-PERP"].qty)
+        g.add("perp_llm_skipped", {"portfolio": haiku, "round": ts, "reason": "daily_budget"}, t)
+    elif rnd == 3:
+        g.add("round_data", {"portfolio": haiku, "round": ts, "kind": kind, "trigger": "null", "sha256": "a" * 64, "message_sha256": "b" * 64,
+                             "path": SECRET, "llm_config_sha256": "c" * 64, "budget_ceiling_uusd": 100_000}, t)  # fmt: skip
+        g.add("agent_decision", {"portfolio": haiku, "round": ts, "kind": kind, "model_requested": "claude-haiku-5-5", "parsed": None,
+                                 "parse_error": f"no structured output: Traceback {SECRET}", "cost_uusd": 1_600, "latency_ms": 8_800,
+                                 "stderr_tail": SECRET, "cli_version": "2.1.99-secret"}, t)  # fmt: skip
+    if wake:
+        _decision(g, opus, ts, t, kind, [_action("SOL-PERP", "reduce", "50")], "SOL chute de 3,4 % en une heure : je réduis de moitié.", [])
+        acc = g.book.states[opus]
+        _executer(g, opus, "SOL-PERP", "reduce", t, 0, True, qty=-acc.positions["SOL-PERP"].qty // 2)
+    g.add("perp_round_done", {"round": ts}, t + 30)

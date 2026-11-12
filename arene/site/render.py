@@ -183,28 +183,45 @@ NON_APPLICABLE = '<span class="muted" aria-hidden="true">—</span><span class="
 # ---------------------------------------------------------------------------
 
 
-def layout(*, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "") -> str:
+def layout(
+    *, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "", ligue: str = "spot"
+) -> str:
+    """`ligue` choisit la rangée de portefeuilles de l'en-tête : « perp » (ligue dérivés) ou « spot » (comptant)."""
+    perp = data.get("perp")
+    if ligue == "perp" and not perp:
+        ligue = "spot"
+    dossier, pfs = ("derives", perp["portfolios"]) if ligue == "perp" else ("modele", data["portfolios"])
+
     def lien(p: dict[str, Any]) -> str:
         courant = ' aria-current="page"' if active == p["id"] else ""
-        return f'<a href="{root}modele/{e(p["slug"])}.html"{courant}>{e(nom_court(p["name"]))}</a>'
+        return f'<a href="{root}{dossier}/{e(p["slug"])}.html"{courant}>{e(nom_court(p["name"]))}</a>'
 
-    llms = "".join(lien(p) for p in data["portfolios"] if p["kind"] == "llm")
-    tems = "".join(lien(p) for p in data["portfolios"] if p["kind"] != "llm")
+    llms = "".join(lien(p) for p in pfs if p["kind"] == "llm")
+    tems = "".join(lien(p) for p in pfs if p["kind"] != "llm")
     groupes = ""
     if llms:
         groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Modèles d’IA</span>{llms}</div>'
     if tems:
         groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Témoins</span>{tems}</div>'
-    nav_top = (
-        f'<a href="{root}index.html"{" aria-current=\"page\"" if active == "index" else ""}>Vue d’ensemble</a>'
-        f'<a href="{root}methode.html"{" aria-current=\"page\"" if active == "methode" else ""}>Méthode</a>'
-    )
+    def cur(x: str) -> str:
+        return ' aria-current="page"' if active == x else ""
+
+    if perp:
+        nav_top = (
+            f'<a href="{root}index.html"{cur("index")}>Dérivés</a>'
+            f'<a href="{root}comptant.html"{cur("comptant")}>Comptant</a>'
+            f'<a href="{root}methode.html"{cur("methode")}>Méthode</a>'
+        )
+    else:
+        nav_top = f'<a href="{root}index.html"{cur("index")}>Vue d’ensemble</a><a href="{root}methode.html"{cur("methode")}>Méthode</a>'
     n_llm = sum(1 for p in data["portfolios"] if p["kind"] == "llm")
     accroche = (
         f"{n_llm}{NBSP}IA gèrent chacune {eur(data['method']['capital_ueur'], decimals=0)} fictifs, "
         "comparées à des témoins sans IA"
         if n_llm > 1 else "Une IA gère un portefeuille fictif, comparée à des témoins sans IA"
     )
+    if ligue == "perp":
+        accroche = f"Des IA gèrent chacune {eur(1_000_000_000, decimals=0)} fictifs en contrats perpétuels, face à des témoins sans IA"
     vm = data["venue_mode"]
     if vm == "paper":
         bandeau = f'<p class="bandeau"><span class="bandeau-point" aria-hidden="true"></span><strong>{e(BANDEAU)}</strong></p>'
@@ -295,7 +312,8 @@ def empiler(table: str, libelles: list[str]) -> str:
 DASHES = [[6, 4], [2, 3], [10, 3, 2, 3], [1, 3]]
 COULEUR_LLM = {"llm:claude-haiku-5-5": 0, "llm:claude-sonnet-5-5": 1, "llm:claude-opus-5-5": 2, "llm:claude-fable-5-2": 3}
 N_COULEURS_LLM = 4
-COULEUR_TEMOIN = {"temoin:6040": 0, "temoin:e0065": 1, "temoin:aleatoire": 2}
+COULEUR_TEMOIN = {"temoin:6040": 0, "temoin:e0065": 1, "temoin:aleatoire": 2, "benchmark-perp:trend": 0, "benchmark-perp:random": 2}
+REFERENCES = {"temoin:panier", "benchmark-perp:basket-1x"}  # « acheter et garder » de chaque ligue
 MIN_POINTS_COURBE = 3  # sous 3 cycles terminés, une courbe ne montre qu'une droite : le tableau suffit
 
 
@@ -305,10 +323,10 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
     for s in chart["series"]:
         focused = focus is not None and s["id"] == focus
         if s["kind"] == "llm":
-            k = COULEUR_LLM.get(s["id"], llm)
+            k = COULEUR_LLM.get(s["id"].replace("llm-perp:", "llm:"), llm)
             st = {"color": f"--llm{k % N_COULEURS_LLM}", "dash": None, "width": 2.5}
             llm += 1
-        elif s["id"] == "temoin:panier":
+        elif s["id"] in REFERENCES:
             st = {"color": "--tem-ref", "dash": [8, 4], "width": 2}
         else:
             k = COULEUR_TEMOIN.get(s["id"], tem)
@@ -318,7 +336,7 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
             st["width"], st["dash"] = 3, None
             if s["kind"] != "llm":
                 st["color"] = "--accent"
-        st["visible"] = focus is None or focused or s["id"] == "temoin:panier"
+        st["visible"] = focus is None or focused or s["id"] in REFERENCES
         out.append(st)
     return out
 
@@ -745,7 +763,8 @@ def index_page(data: dict[str, Any]) -> str:
 </section>
 """
     return layout(
-        title="Vue d’ensemble", body=body, root="", active="index", data=data,
+        title="Ligue comptant" if data.get("perp") else "Vue d’ensemble", body=body, root="",
+        active="comptant" if data.get("perp") else "index", data=data,
         scripts=_chart_scripts("", data["chart"], None) if _courbe_visible(data["chart"]) else "",
     )  # fmt: skip
 
@@ -759,7 +778,7 @@ def page_404(data: dict[str, Any], racine: str) -> str:
   <p class="actions-404"><a class="bouton" href="{r}index.html">Revenir à la vue d’ensemble</a> <a href="{r}methode.html">Lire la méthode</a></p>
 </section>
 """.replace("{r}", e(racine))
-    return layout(title="Page introuvable", body=body, root=racine, active="", data=data)
+    return layout(title="Page introuvable", body=body, root=racine, active="", data=data, ligue="perp")
 
 
 # ---------------------------------------------------------------------------
@@ -1024,7 +1043,7 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
     titre_h1 = f'<h1>{e(p["name"])}</h1>'
     verdict_html = f'<p class="verdict-tete">{verdict}</p>' if verdict else ""
     body = f"""
-<p class="fil"><a href="../index.html"><span aria-hidden="true">← </span>Vue d’ensemble</a><span class="fil-sep" aria-hidden="true">/</span><span>{"Modèles d’IA" if llm else "Témoins"}</span></p>
+<p class="fil"><a href="../{"comptant.html" if data.get("perp") else "index.html"}"><span aria-hidden="true">← </span>{"Ligue comptant" if data.get("perp") else "Vue d’ensemble"}</a><span class="fil-sep" aria-hidden="true">/</span><span>{"Modèles d’IA" if llm else "Témoins"}</span></p>
 <header class="tete-modele">
   {titre_h1}{verdict_html}
   {f'<p class="chapo">{e(desc)}</p>' if desc else ""}
@@ -1184,7 +1203,7 @@ def methode_page(data: dict[str, Any]) -> str:
 <header class="tete-modele">
   <h1>Méthode</h1>
 </header>
-
+{_methode_perp(data)}
 <section aria-labelledby="m-arene"><h2 id="m-arene">Ce que fait l’arène</h2>
 <p>{phrase_modeles} et {NOMBRES_MIN.get(n_tem, n_tem)} témoins sans IA gèrent chacun {eur(m["capital_ueur"], decimals=0)} fictifs sur 6 paires en euros de Kraken.
 Toutes les {duree(m["interval_s"])} : décision, contrôle de risque, exécution simulée. Achats seuls, sans levier. Tout est écrit dans un journal chaîné.{arrivees}</p></section>
@@ -1238,7 +1257,14 @@ Positions valorisées au dernier bid.</p></section>
 <section class="avis" aria-labelledby="m-avertissement"><h2 id="m-avertissement">Avertissement</h2>
 <p><strong>Ce n’est pas un conseil en investissement.</strong> Expérience personnelle en simulation, sans recommandation ni promesse de rendement. Investir dans des crypto-actifs comporte un risque de perte totale.</p></section>
 """
-    return layout(title="Méthode", body=body, root="", active="methode", data=data)
+    return layout(title="Méthode", body=body, root="", active="methode", data=data, ligue="perp")
+
+
+def _methode_perp(data: dict[str, Any]) -> str:
+    from arene.site.render_perp import methode_section  # import local : render_perp importe ce module
+
+    sec = methode_section(data)
+    return f'{sec}<h2 class="titre-ligue">La ligue comptant</h2>' if sec else ""
 
 
 def policy_max_holding(m: dict[str, Any]) -> int:

@@ -7,6 +7,7 @@ Tout est recalculé depuis le seul journal à chaque appel ; le dossier de sorti
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from pathlib import Path
@@ -15,7 +16,8 @@ from typing import Any
 from arene.config import Config
 from arene.risk.policy import Policy
 from arene.site import data as site_data
-from arene.site import render
+from arene.site import perp as site_perp
+from arene.site import render, render_perp
 
 HERE = Path(__file__).resolve().parent
 VENDOR = HERE / "vendor"
@@ -37,13 +39,22 @@ def _json(path: Path, obj: Any) -> None:
 
 def build(
     journal_path: Path, out_dir: Path, *, config: Config, policy: Policy, now_ts: int | None = None,
-    public: bool = False, racine: str | None = None,
+    public: bool = False, racine: str | None = None, perp_journal: Path | None = None,
 ) -> None:
     """`public` retire la ligne destinée à l'opérateur ; `racine` (chemin absolu du site, ex. « /arene/ »)
-    sert à la page 404, servie à n'importe quelle profondeur par l'hébergeur."""
+    sert à la page 404, servie à n'importe quelle profondeur par l'hébergeur.
+
+    La ligue dérivés (`perp_journal`, par défaut <dépôt>/var-perp/journal/events.jsonl voisin du journal spot) passe
+    au premier plan dès que son journal existe : l'accueil est alors la sienne, et le spot passe sur comptant.html."""
     journal_path, out_dir = Path(journal_path), Path(out_dir)
     data = site_data.compute(journal_path, config, policy, now_ts)
     data["public"] = public
+    pj = site_perp.perp_journal_path(journal_path) if perp_journal is None else Path(perp_journal)
+    try:
+        data["perp"] = site_perp.compute(pj, data["generated_ts"])
+    except Exception:  # la ligue dérivés ne doit jamais empêcher la construction du site comptant
+        logging.getLogger("arene.site").exception("ligue dérivés : calcul en échec, site construit sans elle")
+        data["perp"] = None
     vm, gen = data["venue_mode"], data["generated_ts"]
 
     tmp = out_dir.with_name(f".{out_dir.name}.tmp-{os.getpid()}")
@@ -78,7 +89,15 @@ def build(
         for p in data["portfolios"]:
             _json(tmp / "data" / f"modele-{p['slug']}.json", {**meta, **p})
 
-        _write(tmp / "index.html", render.index_page(data))
+        perp = data["perp"]
+        if perp:
+            _write(tmp / "index.html", render_perp.index_page(data))
+            _write(tmp / "comptant.html", render.index_page(data))
+            for p in perp["portfolios"]:
+                _write(tmp / "derives" / f"{p['slug']}.html", render_perp.portfolio_page(data, p))
+            _json(tmp / "data" / "derives.json", {**meta, **perp})  # déjà filtré par site.perp
+        else:
+            _write(tmp / "index.html", render.index_page(data))
         _write(tmp / "methode.html", render.methode_page(data))
         if racine is not None:
             _write(tmp / "404.html", render.page_404(data, racine))

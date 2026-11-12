@@ -316,3 +316,25 @@ main section > p, .liste-simple, .alerte, .note, .lecture { max-width: 66ch; }
 .pastille.reveil { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text); }
 .rodage { margin-top: 12px; }
 .rodage-table { max-width: 420px; margin-top: 8px; }
+
+/* Ligue dérivés */
+.sens { display: inline-block; font-size: .8rem; font-weight: 500; padding: 1px 8px; border-radius: 999px; white-space: nowrap; margin: 1px 4px 1px 0; }
+.sens-long { background: var(--ok-bg); color: var(--ok-text); }
+.sens-short { background: var(--bad-bg); color: var(--bad-text); }
+.positions-cell { min-width: 9rem; }
+.invalidation { display: block; margin-top: 4px; font-size: .86rem; color: var(--muted); font-style: italic; overflow-wrap: anywhere; }
+.outils { margin: 10px 0 0; font-size: .86rem; color: var(--muted); }
+.outils .etiquette { display: inline; margin-right: 8px; }
+.dernieres .dernier-nom { font-weight: 600; min-width: 10rem; }
+.autre-ligue { margin: 40px 0 0; padding-top: 14px; border-top: 1px solid var(--border); }
+.autre-ligue a { font-family: var(--serif); font-size: 1.15rem; }
+.titre-ligue { margin-top: 56px; padding-top: 18px; border-top: 2px solid var(--rule); }
+.h2-inline { display: inline; margin: 0; font-size: inherit; }
+details.lecture > summary .h2-inline { font-family: var(--serif); font-size: 1.35rem; font-weight: 400; color: var(--text); }
+.decision-pile { display: flex; flex-direction: column; gap: 10px; }
+.decision-pile .justif { margin: 0; border-left: 3px solid var(--rule); max-width: 80ch; }
+.decision-pile .outils { margin: 0; }
+.decision-pile .actions-scroll { margin-top: 4px; }
+.actions td:nth-child(2) { min-width: 18rem; }
+.dernieres .sans-detail { padding-left: calc(1em + 14px); }
+.exec-note { display: block; font-size: .82rem; margin-top: 2px; }
