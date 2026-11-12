@@ -32,7 +32,7 @@ from tests.fakes import (
     make_deciders,
 )
 
-ALL = (HAIKU, SONNET, OPUS, "temoin:panier", "temoin:6040", "temoin:e0065", "temoin:aleatoire")
+ALL = (HAIKU, SONNET, OPUS, "llm:claude-fable-5-2", "temoin:panier", "temoin:6040", "temoin:e0065", "temoin:aleatoire")
 
 
 def run_cycles(env: Env, n: int, start: int = 0, deciders=None, **kw) -> list[CycleReport]:
@@ -68,7 +68,7 @@ def test_30_cycles_de_bout_en_bout(env: Env):
     assert [r.status for r in reps] == ["completed"] * 30
     assert verify(env.paths.journal).ok
 
-    # Premier lancement : une config, 7 portefeuilles de 1 000 EUR en paper.
+    # Premier lancement : une config, 8 portefeuilles de 1 000 EUR en paper (Fable sans décideur factice : sauté).
     assert len(env.of_type("config_loaded")) == 1
     opened = payloads(env, "portfolio_opened")
     assert sorted(o["portfolio"] for o in opened) == sorted(ALL)
@@ -114,7 +114,7 @@ def test_30_cycles_de_bout_en_bout(env: Env):
 
     # Vue SQLite dérivée.
     counts = rebuild_sqlite(Journal(env.paths.journal).iter_events(), env.paths.sqlite)
-    assert counts["equity"] == 30 * 7
+    assert counts["equity"] == 30 * len(ALL)
 
 
 def test_determinisme(tmp_path: Path):

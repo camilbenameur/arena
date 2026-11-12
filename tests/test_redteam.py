@@ -379,7 +379,8 @@ def test_crash_avant_equity_puis_reprise_sans_double_execution(env: Env, monkeyp
     assert r2.status == "completed" and r2.resumed
     assert len(payloads(env, "fill")) == n_fills  # aucun fill en double
     eq = [e for e in payloads(env, "equity") if e["cycle"] == T0 + H4]
-    assert len(eq) == 7 and len({e["portfolio"] for e in eq}) == 7
+    n_pf = len(load_config(env.paths.config).models) + 4  # LLM + 4 témoins
+    assert len(eq) == n_pf and len({e["portfolio"] for e in eq}) == n_pf
     assert verify(env.paths.journal).ok
     replay(env.events())  # ne lève pas
 
