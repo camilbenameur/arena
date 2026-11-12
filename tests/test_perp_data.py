@@ -314,7 +314,10 @@ def test_corrupt_line_is_quarantined_and_series_keeps_working(tmp_path):
     s = Series(tmp_path / "x", FundingRate.from_dict, lambda ts: "shard", warnings)
     s.add([FundingRate("PF_XBTUSD", 3600, 1, 1)])
     with (tmp_path / "x" / "shard.jsonl").open("a", encoding="utf-8") as f:
-        f.write('{"ts": 7200, "kraken_sym')  # a line torn by a crash during an append
+        f.write('{"ts": 7200, "kraken_sym')  # an append in progress (no newline yet): ignored, not corruption
+    assert s.last_ts() == 3600 and not warnings
+    with (tmp_path / "x" / "shard.jsonl").open("a", encoding="utf-8") as f:
+        f.write("\n")  # the torn line is now complete and unreadable: quarantined
     assert s.last_ts() == 3600
     assert (tmp_path / "x" / "shard.jsonl.corrupt-1").exists() and len(warnings) == 1
     assert s.add([FundingRate("PF_XBTUSD", 7200, 2, 2)]) == 1

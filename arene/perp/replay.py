@@ -23,7 +23,6 @@ multiplies every log-return by K.
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import random
 import sys
@@ -45,9 +44,10 @@ from arene.perp.ledger import (
     MINUTE_S,
     PerpBook,
     PerpLedgerError,
-    apply_fill,
     equity_ueur,
     gross_exposure_ueur,
+    price_pnl_uusd,
+    to_eur,
 )
 from arene.perp.policy import DEFAULT_POLICY, PerpPolicy, load_perp_policy
 from arene.perp.riskd import InstrumentMarket, PerpCounters, PerpIntent, PerpMarketView, evaluate_perp
@@ -125,7 +125,12 @@ def load_series(
 
 
 def random_intents(
-    rng: random.Random, n: int, ts: int, held: Mapping[str, Any], symbols: list[str]
+    rng: random.Random,
+    n: int,
+    ts: int,
+    held: Mapping[str, Any],
+    symbols: list[str],
+    min_move_bp: int = 100,
 ) -> list[PerpIntent]:
     """0-2 actions in the agents' action space (study §6); the side is drawn among those the held position
     allows; the declared move goes down to 1 % so that the cost rule is exercised."""
@@ -155,7 +160,7 @@ def random_intents(
                 stop_bp=stop,
                 take_profit_bp=tp,
                 horizon_h=rng.randint(24, 168),
-                expected_move_bp=rng.randint(100, 1500),
+                expected_move_bp=rng.randint(min_move_bp, 1500),
                 confidence_pct=rng.randint(0, 100),
             )
         )
@@ -184,7 +189,8 @@ def run_trajectory(
     last_rel: dict[str, tuple[int, int]] = {}  # instrument -> (stamp, relative rate)
     opens: list[tuple[int, str]] = []
     month_start: dict[str, tuple[int, int]] = {}
-    predicted: dict[tuple[str, int], int] = {}  # (instrument, open_seq) -> riskd's loss at stop
+    # (instrument, open_seq) -> (riskd's loss at stop, mark it was measured from) at the last entry
+    predicted: dict[tuple[str, int], tuple[int, int]] = {}
     peak = params.capital_ueur
     hourly_equity: list[tuple[int, int]] = []
     n = 0
@@ -309,12 +315,16 @@ def run_trajectory(
                         sim.set_conditional("R", it.instrument, "take_profit", v.take_profit_uusd, minute)
                     opens.append((minute, it.instrument))
                     pos = book.states["R"].positions[it.instrument]
-                    predicted[(it.instrument, pos.open_seq)] = v.metrics["trade_loss_ueur"]
+                    predicted[(it.instrument, pos.open_seq)] = (
+                        v.metrics["trade_loss_ueur"],
+                        last_mark[it.instrument],
+                    )
                 rep.approved += 1
             except PerpLedgerError:
                 rep.problems += 1
     acc = book.states["R"]
-    # stopped trades: realized loss (price + exit fee) versus riskd's prediction at the last entry
+    # stopped trades: the loss from the mark riskd measured from at the last entry (price + exit fee), versus
+    # its prediction; measuring from the average entry would also count a loss already open when adding
     shadow = PerpBook()
     for rec in sim.journal.iter_events():
         if rec["type"] == "perp_fill":
@@ -322,9 +332,10 @@ def run_trajectory(
             rep.fills_by_reason[p["reason"]] = rep.fills_by_reason.get(p["reason"], 0) + 1
             if p["reason"] == "stop":
                 pos = shadow.states["R"].positions[p["instrument"]]
-                eff = apply_fill(copy.deepcopy(shadow.states["R"]), p, rec["ts"], rec["seq"])
-                realized = p["fee_ueur"] - eff.realized_ueur
-                pred = predicted.get((p["instrument"], pos.open_seq))
+                pred, mark0 = predicted.get((p["instrument"], pos.open_seq), (0, 0))
+                realized = p["fee_ueur"] - to_eur(
+                    price_pnl_uusd(-p["qty"], mark0, p["price_uusd"]), p["fx_bid"], p["fx_ask"]
+                )
                 if pred and realized > 0:
                     rep.worst_stop_loss_ratio_pct = max(rep.worst_stop_loss_ratio_pct, realized * 100 // pred)
                     if realized > pred:
