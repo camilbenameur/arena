@@ -1,5 +1,5 @@
 [Unit]
-Description=Arena perp league: watcher tick (minutes, stops, funding, controls, benchmark rounds; paper, no LLM)
+Description=Arena perp league: watcher tick (minutes, stops, funding, controls, benchmark and LLM rounds; paper)
 After=network-online.target
 
 [Service]
