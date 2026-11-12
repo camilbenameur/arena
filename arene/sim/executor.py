@@ -109,7 +109,10 @@ class SimExecutor:
         if reason is None:
             inst = self.instruments[intent.symbol]
             price, fee = market_fill(intent.side, verdict.qty, quote, inst, self.fee_bp, self.slippage_bp)
-            reason = self._funds_check(intent, verdict.qty, price, fee)
+            if price <= 0:
+                reason = f"prix d'exécution nul ({price})"
+            else:
+                reason = self._funds_check(intent, verdict.qty, price, fee)
             if reason is None and intent.side == Side.BUY:
                 # Le quote d'exécution peut avoir bougé depuis le verdict : jamais payer plus que riskd n'a réservé.
                 total = notional_ueur(verdict.qty, price, round_up=True) + fee
@@ -257,6 +260,8 @@ class SimExecutor:
         now_ts: int,
         reason: str,
     ) -> Fill:
+        if price <= 0 or qty <= 0:  # jamais de fill à zéro dans le journal (le ledger le refuserait pour toujours)
+            raise ValueError(f"fill invalide refusé avant écriture ({order_id} : qty={qty}, prix={price})")
         fill = Fill(
             order_id,
             portfolio,
@@ -296,7 +301,7 @@ class SimExecutor:
                         if bar.ts < pos.opened_ts:
                             continue  # barre commencée avant l'entrée
                         px = stop_fill(pos.stop_ueur, bar, inst, self.slippage_bp)
-                        if px is None:
+                        if px is None or px <= 0:
                             continue
                         oid = f"stop:{pname}:{sym}:{bar.ts}"
                         if oid in done:
@@ -315,14 +320,20 @@ class SimExecutor:
                 if q is None or oid in done:
                     continue
                 px, fee = market_fill(Side.SELL, pos.qty, q, inst, self.fee_bp, self.slippage_bp)
+                if px <= 0:
+                    continue
                 out.append(self._forced_sell(oid, pname, sym, pos.qty, px, fee, now_ts, "max_holding"))
                 done.add(oid)
         return out
 
-    def process_live_stops(self, quotes: Mapping[str, Quote], tick: int) -> list[Fill]:
-        """Stops en direct de la veille : toute position dont le bid est au niveau du stop (ou en dessous) est
-        vendue tout de suite, au bid avec glissement et frais taker. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick},
-        idempotent. Le contrôle sur barres du cycle suivant part des positions rejouées : il ne revend rien."""
+    def process_live_stops(
+        self, quotes: Mapping[str, Quote], tick: int, prev_bids: Mapping[str, int] | None = None
+    ) -> list[Fill]:
+        """Stops en direct de la veille : une position dont le bid est au niveau du stop (ou en dessous) est vendue
+        tout de suite, au bid avec glissement et frais taker. `order_id` = stop:{portefeuille}:{symbole}:veille:{tick},
+        idempotent. Confirmation : `prev_bids` (bid du tick valide précédent, à moins de 10 min) doit lui aussi être
+        au niveau du stop ; sans lui (symbole absent), rien n'est vendu. Un prix calculé nul ou négatif est ignoré.
+        Le contrôle sur barres du cycle suivant part des positions rejouées : il ne revend rien."""
         out: list[Fill] = []
         _, done_fills = self._scan()
         for pname, st in sorted(replay(self.journal.iter_events()).items()):
@@ -330,12 +341,31 @@ class SimExecutor:
                 inst, q = self.instruments.get(sym), quotes.get(sym)
                 if inst is None or q is None or pos.stop_ueur is None or q.bid > pos.stop_ueur:
                     continue
+                if prev_bids is not None and not (sym in prev_bids and prev_bids[sym] <= pos.stop_ueur):
+                    continue
                 oid = f"stop:{pname}:{sym}:veille:{tick}"
                 if oid in done_fills:
                     continue
                 px, fee = market_fill(Side.SELL, pos.qty, q, inst, self.fee_bp, self.slippage_bp)
+                if px <= 0:
+                    continue
                 out.append(self._forced_sell(oid, pname, sym, pos.qty, px, fee, tick, "stop"))
         return out
+
+    def settle_interrupted(self, intent: Intent, now_ts: int) -> None:
+        """Répare un ordre interrompu par un crash avant d'abandonner sa ronde : un fill sans `stop_set` reçoit son
+        stop (depuis l'intention) et son état FILLED ; un ordre resté SUBMITTING/ACKED sans fill passe UNKNOWN puis
+        CANCELED (paper : réputé non exécuté). N'envoie jamais d'ordre."""
+        oid = intent.intent_id
+        states, fills = self._scan()
+        hist = states.get(oid, [])
+        if oid in fills:
+            self._repair(intent, fills[oid], hist, now_ts)
+        elif hist and hist[-1] in (OrderState.SUBMITTING.value, OrderState.ACKED.value):
+            self._log_state(oid, OrderState.UNKNOWN, "ronde abandonnée : issue inconnue", now_ts, portfolio=intent.portfolio)
+            self.resolve_unknown(oid, now_ts)
+        elif hist and hist[-1] == OrderState.UNKNOWN.value:
+            self.resolve_unknown(oid, now_ts)
 
     def flatten(self, portfolio: str, quotes: Mapping[str, Quote], now_ts: int, reason: str) -> list[Fill]:
         """Vend toutes les positions au bid (reason : "kill_switch" ou "halt"). Idempotent par (now_ts, reason)."""
@@ -350,5 +380,7 @@ class SimExecutor:
             if q is None or inst is None or oid in done_fills:
                 continue
             px, fee = market_fill(Side.SELL, pos.qty, q, inst, self.fee_bp, self.slippage_bp)
+            if px <= 0:
+                continue
             out.append(self._forced_sell(oid, portfolio, sym, pos.qty, px, fee, now_ts, reason))
         return out

@@ -1,14 +1,17 @@
 """Veille continue et réveils (docs/VEILLE.md) : vrai journal en dossier temporaire, marché et décideurs factices.
 
-Frise commune : cycle 0 à T0+300 (terminé à T0+300), tick de référence R, tick X = R + 3600 où le mouvement joue.
-Fenêtre où un réveil est permis après le cycle 0 : de T0+3900 (délai de 3600 s) à T0+12900 (30 min avant le
-rendez-vous de T0+14700). Aucun test n'appelle `claude -p` ni le réseau.
+Frise commune : cycle 0 à T0+300 (terminé à T0+300). Pour un tick X où le mouvement joue, `prepare` journalise
+les ticks X-3900 et X-3600 (références) puis X-300 (confirmation) ; le tick X est lancé par le test. Fenêtre où un
+réveil est permis après le cycle 0 : de T0+3900 (délai de 3600 s) à T0+12900 (30 min avant le rendez-vous de
+T0+14700). Aucun test n'appelle `claude -p` ni le réseau.
 """
 
 from __future__ import annotations
 
 import random
 import re
+import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -17,14 +20,16 @@ from arene import cli
 from arene import cycle as cyc
 from arene.config import ConfigError, load_config
 from arene.cycle import cycle_lock, run_cycle
+from arene.deciders.llm import load_system_prompt
 from arene.deciders.snapshot import SCHEMA_VERSION
 from arene.journal import Journal, verify
 from arene.ledger import equity_ueur, replay
 from arene.paths import REPO
+from arene.sim.executor import SimExecutor
 from arene.sim.fills import market_fill
 from arene.temoins.aleatoire import seed_for
 from arene.types import Instrument, Quote, Side, notional_ueur
-from arene.veille import mouvement, prochain_rendez_vous, run_veille
+from arene.veille import classer_quote, mouvement, precedent, prochain_rendez_vous, reference_a, run_veille
 from tests.fakes import (
     H4,
     HAIKU,
@@ -34,15 +39,17 @@ from tests.fakes import (
     T0,
     Env,
     FakeKraken,
-    NoKeyDecider,
     ScriptedDecider,
     action,
 )
 
+FABLE = "llm:claude-fable-5-2"
+LLM_ALL = (HAIKU, SONNET, OPUS, FABLE)
 REFS = ("temoin:panier", "temoin:6040", "temoin:e0065")
 BTC = "BTC/EUR"
-BTC_REF = 1_000_000_000  # milieu de référence de BTC aux ticks de test : 1 000 EUR, pour des seuils exacts
+BTC_REF = 60_000_000_000  # milieu de référence de BTC aux ticks de test (multiple de 10 000 : pourcentages exacts)
 BTC_INST = Instrument("BTC/EUR", "XBTEUR", "BTCUSDT", 100_000, 6_000, 450_000)
+X = T0 + 4200  # premier tick où le mouvement et les garde-fous permettent un réveil
 
 
 class LiveKraken(FakeKraken):
@@ -71,22 +78,29 @@ class Recorder(ScriptedDecider):
         return super().decide(snapshot, spent_today_uusd)
 
 
-def make_env(tmp_path: Path, name: str = "e") -> Env:
-    env = Env(tmp_path / name)
+def make_env(tmp_path: Path, name: str = "e", secrets: dict[str, str] | None = None) -> Env:
+    env = Env(tmp_path / name, secrets)
     env.kraken = env.clients.kraken = LiveKraken(env.clock)
     return env
 
 
 def deciders(haiku_plan=None) -> dict:
+    """Un décideur factice par LLM de la config (Fable compris) ; seul Haiku suit un plan."""
+    none = lambda i, s: None
     return {
-        HAIKU: Recorder("claude-haiku-5-5", HAIKU, haiku_plan or (lambda i, s: None)),
-        SONNET: Recorder("claude-sonnet-5-5", SONNET, lambda i, s: None),
-        OPUS: NoKeyDecider("claude-opus-5-5", OPUS),
+        HAIKU: Recorder("claude-haiku-5-5", HAIKU, haiku_plan or none),
+        SONNET: Recorder("claude-sonnet-5-5", SONNET, none),
+        OPUS: Recorder("claude-opus-5-5", OPUS, none),
+        FABLE: Recorder("claude-fable-5-2", FABLE, none),
     }
 
 
 def buy_btc_at_cycle_0(i: int, snap: dict):
     return [action(BTC, size=10, stop=5)] if i == 0 and snap["contexte"]["type"] == "rendez_vous" else None
+
+
+def buy_eth_at_reveil(i: int, snap: dict):
+    return [action("ETH/EUR")] if snap["contexte"]["type"] == "reveil" else None
 
 
 def cycle(env: Env, i: int, d: dict | None = None, **kw):
@@ -108,6 +122,10 @@ def pl(env: Env, t: str) -> list[dict]:
     return [e["payload"] for e in env.of_type(t)]
 
 
+def codes(env: Env) -> list[tuple[str, str]]:
+    return [(a["level"], a["code"]) for a in pl(env, "alert")]
+
+
 def set_veille(env: Env, **kw: int) -> None:
     txt = env.paths.config.read_text()
     for k, v in kw.items():
@@ -116,18 +134,29 @@ def set_veille(env: Env, **kw: int) -> None:
     env.paths.config.write_text(txt)
 
 
-def set_btc(env: Env, mid: int) -> None:
-    env.kraken.override[BTC] = (mid, mid)
+def set_btc(env: Env, mid: int, *, wide: bool = False) -> None:
+    """BTC au milieu `mid` (multiple de 1000) ; `wide` : spread de 3 %, bid et ask très écartés du milieu."""
+    if wide:
+        env.kraken.override[BTC] = (mid * 985 // 1000, mid * 1015 // 1000)
+    else:
+        env.kraken.override[BTC] = (mid * 9995 // 10000, mid * 10005 // 10000)
 
 
-def prepare(env: Env, x: int, d: dict | None = None, bp: int = 300) -> dict:
-    """Cycle 0, tick de référence R = x - 3600 (BTC à BTC_REF), puis BTC forcé à +bp pour le tick x."""
+def up(bp: int) -> int:
+    return BTC_REF * (10_000 + bp) // 10_000
+
+
+def prepare(env: Env, x: int, d: dict | None = None, bp: int = 300, *, wide: bool = False) -> dict:
+    """Cycle 0, références à x-3900 et x-3600 (BTC_REF), confirmation à x-300 (BTC à +bp) ; BTC reste à +bp pour x."""
     d = d if d is not None else deciders()
     cycle(env, 0, d)
     set_btc(env, BTC_REF)
-    ref = tick(env, x - 3600, d)
-    assert ref.status == "done" and ref.declencheur is None
-    set_btc(env, BTC_REF * (10_000 + bp) // 10_000)
+    for t in (x - 3900, x - 3600):
+        r = tick(env, t, d)
+        assert r.status == "done" and r.declencheur is None
+    set_btc(env, up(bp), wide=wide)
+    r = tick(env, x - 300, d)
+    assert r.status == "done" and r.declencheur is None  # pas de tick précédent à moins de 10 min : rien à confirmer
     return d
 
 
@@ -141,7 +170,17 @@ def reveil_events(env: Env) -> list[str]:
     return [e["type"] for e in env.of_type("reveil_started", "reveil_completed", "reveil_abandonne")]
 
 
-X = T0 + 4200  # premier tick où le mouvement (référence à T0+600) et les garde-fous permettent un réveil
+def stop_of(env: Env, portfolio: str = HAIKU, symbol: str = BTC) -> int:
+    return [s for s in pl(env, "stop_set") if s["portfolio"] == portfolio and s["symbol"] == symbol][-1]["stop_ueur"]
+
+
+def aleatoire_tick() -> int:
+    """Premier tick >= X où le tirage de l'aléatoire donne au moins une action (cherché, pas supposé)."""
+    for k in range(40):
+        x = X + 300 * k
+        if x <= T0 + 12900 and random.Random(seed_for(x, 0)).randrange(3) >= 1:
+            return x
+    raise AssertionError("aucun tick favorable")
 
 
 # ---------------------------------------------------------------------------------------------- tick de base
@@ -169,17 +208,15 @@ def test_forme_de_l_evenement_veille_et_equity_au_bid(tmp_path: Path):
     cycle(env, 0, deciders(buy_btc_at_cycle_0))
     before = env.events()
     tick(env, T0 + 600)
-    v = of(env, "veille")[-1]
-    p = v["payload"]
-    assert set(p) == {"tick", "quotes", "equity", "stops", "reveil"}
-    assert p["stops"] == [] and p["reveil"] is None
+    p = of(env, "veille")[-1]["payload"]
+    assert set(p) == {"tick", "quotes", "rejets", "equity", "stops", "reveil", "refus"}
+    assert p["stops"] == [] and p["reveil"] is None and p["refus"] is None and p["rejets"] == {}
     assert set(p["quotes"]) == set(SYMBOLS)
     q = env.kraken.ticker("ETH/EUR", "ETHEUR")
     assert p["quotes"]["ETH/EUR"] == [q.bid, q.ask]
     bids = {s: b for s, (b, _a) in p["quotes"].items()}
     marks = {s: (b + a) // 2 for s, (b, a) in p["quotes"].items()}
-    states = replay(before)
-    assert p["equity"] == {name: equity_ueur(st, marks, bids) for name, st in sorted(states.items())}
+    assert p["equity"] == {name: equity_ueur(st, marks, bids) for name, st in sorted(replay(before).items())}
     assert len(p["equity"]) == 8
     assert not [e for e in of(env, "equity") if e["ts"] >= T0 + 600]  # la veille n'écrit pas d'equity
 
@@ -194,58 +231,20 @@ def test_tick_sans_ecrire_si_le_verrou_est_pris(tmp_path: Path):
     assert tick(env, T0 + 600).status == "done"  # verrou libre : le tick passe
 
 
-def test_journal_casse_rien_ecrit_code_1(tmp_path: Path):
-    env = make_env(tmp_path)
-    cycle(env, 0)
-    p = env.paths.journal
-    lines = p.read_bytes().split(b"\n")
-    lines[3] = lines[3].replace(b'"type"', b'"tYpe"', 1)
-    p.write_bytes(b"\n".join(lines))
-    before = p.read_bytes()
-    rep = tick(env, T0 + 600)
-    assert rep.status == "refused" and not rep.ok and p.read_bytes() == before
-    assert not env.requests
-
-
 def test_avant_le_premier_cycle_la_veille_n_ecrit_rien(tmp_path: Path):
     env = make_env(tmp_path)
     rep = tick(env, T0 + 600)
     assert rep.status == "inactive" and rep.ok and not env.paths.journal.exists()
 
 
-def test_quotes_en_echec_rien_ecrit_alerte_apres_trois_ticks_une_par_heure(tmp_path: Path):
+def test_mediane_des_spreads_du_cycle_inchangee_par_la_veille_et_par_les_reveils(tmp_path: Path):
     env = make_env(tmp_path)
-    cycle(env, 0)
-    size = env.paths.journal.stat().st_size
-    env.kraken.fail_ticker = True
-    for k in range(2):
-        rep = tick(env, T0 + 600 + 300 * k)
-        assert rep.status == "failed" and not rep.ok
-    assert env.paths.journal.stat().st_size == size
-    tick(env, T0 + 1200)  # troisième échec consécutif
-    alerts = [a for a in pl(env, "alert") if a["code"] == "veille_data"]
-    assert len(alerts) == 1 and alerts[0]["level"] == "action"
-    tick(env, T0 + 1500)
-    assert len([a for a in pl(env, "alert") if a["code"] == "veille_data"]) == 1  # au plus une par heure
-    assert not of(env, "veille")
-    tick(env, T0 + 1200 + 3600)
-    assert len([a for a in pl(env, "alert") if a["code"] == "veille_data"]) == 2
-    env.kraken.fail_ticker = False
-    assert tick(env, T0 + 6000).status == "done"
-    env.kraken.fail_ticker = True
-    tick(env, T0 + 6300)  # le compteur est reparti de zéro : un seul échec
-    assert len([a for a in pl(env, "alert") if a["code"] == "veille_data"]) == 2
-    check_journal(env)
-
-
-def test_mediane_des_spreads_du_cycle_inchangee_par_la_veille(tmp_path: Path):
-    env = make_env(tmp_path)
-    cycle(env, 0)
+    d = prepare(env, X, deciders())
+    assert [e["payload"]["tick"] for e in of(env, "veille")] == [X - 3900, X - 3600, X - 300]
     quotes_before = of(env, "quote")
-    for k in range(6):
-        set_btc(env, BTC_REF + k * 1000)
-        tick(env, T0 + 600 + 300 * k)
-    assert of(env, "quote") == quotes_before  # la veille ne journalise aucun `quote`
+    assert tick(env, X, d).reveil == "completed"
+    assert of(env, "quote") == quotes_before  # ni la veille ni le réveil n'ajoutent de `quote`
+    assert len(of(env, "quote_reveil")) == 6  # les quotes du réveil ont leur propre type
 
     def medians(events):
         spreads: dict[str, list[int]] = {}
@@ -254,39 +253,143 @@ def test_mediane_des_spreads_du_cycle_inchangee_par_la_veille(tmp_path: Path):
         return {s: sorted(v[-20:])[len(v[-20:]) // 2] for s, v in spreads.items()}
 
     assert medians(of(env, "quote")) == medians(quotes_before)
-    assert len(of(env, "veille")) == 6
+    assert {e["payload"]["symbol"] for e in of(env, "quote_reveil")} == set(SYMBOLS)
+    check_journal(env)
 
 
-# ---------------------------------------------------------------------------------------------- stops en direct
+# ---------------------------------------------------------------------------------------------- 1. prix à zéro
 
 
-def stop_of(env: Env, portfolio: str = HAIKU, symbol: str = BTC) -> int:
-    return [s for s in pl(env, "stop_set") if s["portfolio"] == portfolio and s["symbol"] == symbol][-1]["stop_ueur"]
+def test_aucun_fill_a_zero_ni_negatif_avant_ecriture(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0, deciders(buy_btc_at_cycle_0))
+    ex = SimExecutor(Journal(env.paths.journal), {BTC: BTC_INST}, 50, 5)
+    before = env.paths.journal.read_bytes()
+    for qty, px in [(1, 0), (1, -5), (0, 100_000), (-1, 100_000)]:
+        with pytest.raises(ValueError, match="fill invalide"):
+            ex._forced_sell("x", HAIKU, BTC, qty, px, 0, T0 + 600, "stop")
+    assert env.paths.journal.read_bytes() == before
+    # Un quote dont le bid tombe à 0 (glissement compris) est ignoré par les stops en direct, la mise à plat
+    # et le contrôle de détention : le journal reste identique.
+    zero = {BTC: Quote(BTC, T0 + 600, 0, 100_000)}
+    assert ex.process_live_stops(zero, T0 + 600) == []
+    assert ex.flatten(HAIKU, zero, T0 + 600, "kill_switch") == []
+    assert ex.process_stops_and_expiry({}, zero, T0 + 600 + 8 * 86_400, 604_800) == []
+    assert env.paths.journal.read_bytes() == before
+    check_journal(env)
 
 
-def test_stop_execute_au_bid_avec_glissement_et_frais_sans_double_vente(tmp_path: Path):
+# ---------------------------------------------------------------------------------------------- 2. quotes douteux
+
+
+def hist_of(n: int, spread: int, mid: int = 1_000_000, step: int = 300):
+    return [(1000 + step * k, mid - spread // 2, mid + spread // 2) for k in range(n)]
+
+
+def test_classer_quote_invalide_spread_saut_aux_bornes_exactes():
+    t = 1000 + 300 * 6
+    assert classer_quote(0, 10, [], t) == "invalide"
+    assert classer_quote(10, 9, [], t) == "invalide"
+    assert classer_quote(5, 5, [], t) is None  # bid == ask est valide
+    assert classer_quote(True, 10, [], t) == "invalide"
+    h = hist_of(5, 1000)  # 5 quotes valides de spread 1000 : le contrôle du spread s'applique
+    assert classer_quote(1_000_000 - 2500, 1_000_000 + 2500, h, t) is None  # 5 000 = 5 x la médiane : accepté
+    assert classer_quote(1_000_000 - 2500, 1_000_000 + 2501, h, t) == "spread"
+    h4 = hist_of(4, 1000)  # 4 quotes seulement : pas de contrôle du spread
+    assert classer_quote(1_000_000 - 50_000, 1_000_000 + 50_000, h4, 1000 + 300 * 4) is None
+    # Médiane sur les 20 derniers : 20 spreads de 1000 après 10 de 100 000.
+    h30 = [(0 + 300 * k, 999_000, 1_099_000) for k in range(10)] + [
+        (3000 + 300 * k, 999_500, 1_000_500) for k in range(20)
+    ]
+    assert classer_quote(997_500, 1_002_500, h30, 3000 + 300 * 20) is None
+    assert classer_quote(997_500, 1_002_501, h30, 3000 + 300 * 20) == "spread"
+    # Saut : milieu à 15 % ou plus du dernier quote valide de moins de 30 min.
+    last = [(1000, 999_999, 1_000_001)]
+    assert classer_quote(1_149_999, 1_149_999, last, 1000 + 1799) is None  # 14,9999 %
+    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1799) == "saut"
+    assert classer_quote(850_000, 850_000, last, 1000 + 1799) == "saut"
+    assert classer_quote(850_001, 850_001, last, 1000 + 1799) is None
+    assert classer_quote(1_150_000, 1_150_000, last, 1000 + 1800) is None  # dernier quote vieux de 30 min : pas de contrôle
+
+
+def test_quote_ecarte_par_symbole_exclu_du_tick_equity_au_dernier_quote_valide(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)  # le panier détient BTC
+    tick(env, T0 + 600)
+    first = of(env, "veille")[-1]["payload"]
+    env.kraken.override[BTC] = (0, 10)  # bid nul : invalide
+    rep = tick(env, T0 + 900)
+    p = of(env, "veille")[-1]["payload"]
+    assert rep.status == "done" and rep.rejets == {BTC: "invalide"} and p["rejets"] == {BTC: "invalide"}
+    assert BTC not in p["quotes"] and set(p["quotes"]) == set(SYMBOLS) - {BTC}
+    states = replay(env.events()[: of(env, "veille")[-1]["seq"]])
+    bids = {s: b for s, (b, _a) in p["quotes"].items()} | {BTC: first["quotes"][BTC][0]}
+    marks = {s: (b + a) // 2 for s, (b, a) in p["quotes"].items()} | {BTC: sum(first["quotes"][BTC]) // 2}
+    assert p["equity"]["temoin:panier"] == equity_ueur(states["temoin:panier"], marks, bids)
+    # Saut de 20 % : écarté aussi ; revenu à la normale, le symbole reprend.
+    mid = sum(first["quotes"][BTC]) // 2
+    env.kraken.override[BTC] = (mid * 12 // 10, mid * 12 // 10 + 1000)
+    assert tick(env, T0 + 1200).rejets == {BTC: "saut"}
+    env.kraken.override.clear()
+    assert tick(env, T0 + 1500).rejets == {}
+
+
+def test_symbole_ecarte_pas_de_stop_ni_de_declencheur_sur_lui(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    set_btc(env, BTC_REF)
+    tick(env, T0 + 600, d)
+    # Quote sous le stop mais avec un saut > 15 % (spread de 3 % : ask 3 % au-dessus) : écarté, pas de vente.
+    bad = S * 80 // 100
+    env.kraken.override[BTC] = (bad, bad + 1000)
+    rep = tick(env, T0 + 900, d)
+    assert rep.rejets == {BTC: "saut"} and rep.stops == []
+    assert BTC in replay(env.events())[HAIKU].positions
+    assert rep.declencheur is None
+
+
+def test_aucun_symbole_valide_le_tick_echoue_sans_rien_ecrire(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    size = env.paths.journal.stat().st_size
+    env.kraken.fail_ticker = True
+    rep = tick(env, T0 + 600)
+    assert rep.status == "failed" and not rep.ok and "aucun quote valide" in rep.error
+    assert env.paths.journal.stat().st_size == size
+    env.kraken.fail_ticker = False
+    assert tick(env, T0 + 900).status == "done"
+
+
+# ---------------------------------------------------------------------------------------------- 3. confirmation sur deux ticks
+
+
+def test_stop_confirme_sur_deux_ticks_au_bid_avec_glissement_et_frais(tmp_path: Path):
     env = make_env(tmp_path)
     d = deciders(buy_btc_at_cycle_0)
     cycle(env, 0, d)
     qty = replay(env.events())[HAIKU].positions[BTC].qty
-    stop = stop_of(env)
-    bid = stop - 1_000_000
-    env.kraken.override[BTC] = (bid, bid + 100_000)
-    r = T0 + 600
-    rep = tick(env, r, d)
+    S = stop_of(env)
+    tick(env, T0 + 600, d)  # bid au-dessus du stop
+    bid = S - 1_000_000
+    env.kraken.override[BTC] = (bid, S * 105 // 100)  # ask bien au-dessus : le milieu reste au-dessus du stop
+    assert (bid + S * 105 // 100) // 2 > S
+    rep1 = tick(env, T0 + 900, d)  # sous le stop, mais le tick précédent ne l'était pas : pas de vente
+    assert rep1.stops == [] and BTC in replay(env.events())[HAIKU].positions
+    r = T0 + 1200
+    rep2 = tick(env, r, d)  # sous le stop deux ticks de suite : vendu au bid
     oid = f"stop:{HAIKU}:{BTC}:veille:{r}"
-    assert oid in rep.stops
+    assert rep2.stops == [oid]
     fill = next(f for f in pl(env, "fill") if f["order_id"] == oid)
     px = bid * (10_000 - 5) // 10_000 // 100_000 * 100_000  # glissement 5 bp, tick vers le bas
     fee = -(-notional_ueur(qty, px, round_up=True) * 50 // 10_000)  # frais taker 50 bp, vers le haut
     assert (fill["side"], fill["qty"], fill["price_ueur"], fill["fee_ueur"], fill["ts"], fill["reason"]) == (
         "sell", qty, px, fee, r, "stop",
     )  # fmt: skip
-    assert (px, fee) == market_fill(Side.SELL, qty, Quote(BTC, r, bid, bid + 100_000), BTC_INST, 50, 5)
-    assert BTC not in replay(env.events())[HAIKU].positions
-    assert of(env, "veille")[-1]["payload"]["stops"] == rep.stops
-    # Le glissement est bien compté : le prix de vente est sous le bid, pas au niveau du stop.
-    assert px < bid
+    assert (px, fee) == market_fill(Side.SELL, qty, Quote(BTC, r, bid, S * 105 // 100), BTC_INST, 50, 5)
+    assert px < bid and BTC not in replay(env.events())[HAIKU].positions
+    assert of(env, "veille")[-1]["payload"]["stops"] == [oid]
     n_fills = len(of(env, "fill"))
     tick(env, r)  # même tick : rien de plus
     assert len(of(env, "fill")) == n_fills
@@ -295,10 +398,29 @@ def test_stop_execute_au_bid_avec_glissement_et_frais_sans_double_vente(tmp_path
     env.kraken.override.clear()
     env.kraken.crash(BTC, T0, 940)
     cycle(env, 1, d)
-    haiku_btc = [f for f in pl(env, "fill") if f["portfolio"] == HAIKU and f["symbol"] == BTC and f["side"] == "sell"]
-    assert [f["order_id"] for f in haiku_btc] == [oid]
+    sells = [f["order_id"] for f in pl(env, "fill") if f["portfolio"] == HAIKU and f["symbol"] == BTC and f["side"] == "sell"]
+    assert sells == [oid]
     assert not [f for f in pl(env, "fill") if f["order_id"] == f"stop:{HAIKU}:{BTC}:{T0}"]
     check_journal(env)
+
+
+def test_stop_pas_confirme_si_le_tick_precedent_a_plus_de_10_minutes(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    env.kraken.override[BTC] = (S - 1_000_000, S - 900_000)
+    tick(env, T0 + 600, d)
+    rep = tick(env, T0 + 1200, d)  # tick précédent à 600 s : confirmé (borne incluse)
+    assert rep.stops == [f"stop:{HAIKU}:{BTC}:veille:{T0 + 1200}"]
+    env2 = make_env(tmp_path, "e2")
+    cycle(env2, 0, d)
+    env2.kraken.override[BTC] = (S - 1_000_000, S - 900_000)
+    tick(env2, T0 + 600, d)
+    rep2 = tick(env2, T0 + 1500, d)  # tick précédent à 900 s : pas confirmé
+    assert rep2.stops == [] and BTC in replay(env2.events())[HAIKU].positions
+    assert precedent([(100, 1, 2)], 700) == (100, 1, 2) and precedent([(100, 1, 2)], 701) is None
+    assert precedent([(100, 1, 2)], 100) is None  # strictement avant
 
 
 def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
@@ -311,8 +433,9 @@ def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
     cycle(env, 0, d)
     stop0 = stop_of(env)
     env.kraken.override[BTC] = (stop0 - 1_000_000, stop0 - 900_000)
-    r = T0 + 600
-    tick(env, r, d)
+    tick(env, T0 + 600, d)
+    r = T0 + 900
+    assert tick(env, r, d).stops == [f"stop:{HAIKU}:{BTC}:veille:{r}"]
     assert BTC not in replay(env.events())[HAIKU].positions
     env.kraken.override.clear()
     env.kraken.crash(BTC, T0, 940)  # la barre T0 est sous l'ancien stop
@@ -334,7 +457,92 @@ def test_position_rachetee_apres_un_stop_de_veille_reste_geree(tmp_path: Path):
     check_journal(env)
 
 
-# ---------------------------------------------------------------------------------------------- déclencheurs
+def test_reference_et_tick_precedent_fonctions_pures():
+    h = [(1000, 10, 12), (1900, 20, 22), (2800, 30, 32)]
+    assert reference_a(h, 2800) == (2800, 30, 32)  # le plus proche à la cible ou avant
+    assert reference_a(h, 2500) == (1900, 20, 22)
+    assert reference_a([(1000, 1, 2)], 1900) == (1000, 1, 2)  # 900 s : accepté
+    assert reference_a([(1000, 1, 2)], 1901) is None  # 901 s : trop vieux
+    assert reference_a([(1000, 1, 2)], 999) is None  # jamais après la cible
+
+
+@pytest.mark.parametrize(
+    ("p_bp", "x_bp", "trigger"),
+    [(300, 300, True), (0, 300, False), (300, 0, False), (-300, 300, False), (299, 300, False), (300, 299, False)],
+)
+def test_mouvement_confirme_sur_deux_ticks_meme_sens_chacun_contre_sa_reference(tmp_path, p_bp, x_bp, trigger):
+    env = make_env(tmp_path)
+    d = deciders()
+    cycle(env, 0, d)
+    set_btc(env, BTC_REF)
+    for t in (X - 3900, X - 3600):
+        tick(env, t, d)
+    set_btc(env, up(p_bp))
+    tick(env, X - 300, d)
+    set_btc(env, up(x_bp))
+    rep = tick(env, X, d)
+    assert (rep.declencheur is not None) is trigger and (rep.reveil == "completed") is trigger
+
+
+def test_mouvement_fonction_pure_le_plus_grand_l_emporte(tmp_path: Path):
+    def hist(mids: dict[int, int]):
+        return [(t, m - 5, m + 5) for t, m in sorted(mids.items())]
+
+    # A : +4 % ; B : -10 % ; C : plat, tous deux ticks confirmés contre leur référence (tick 7200 et 6900).
+    h = {
+        "A": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 1_040_000}),
+        "B": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 900_000}),
+        "C": hist({3300: 1_000_000, 3600: 1_000_000, 6900: 1_000_000}),
+    }
+    cur = {"A": (1_040_000 - 5, 1_040_000 + 5), "B": (899_995, 900_005), "C": (999_995, 1_000_005)}
+    out = mouvement(cur, h, 7200, 300, 3600)
+    assert out == {"type": "mouvement", "symbole": "B", "variation_bp": -1000, "fenetre_s": 3600}
+    assert mouvement(cur, {}, 7200, 300, 3600) is None  # pas d'historique : pas de déclencheur
+    assert mouvement(cur, {k: v[:2] for k, v in h.items()}, 7200, 300, 3600) is None  # pas de tick précédent
+
+
+# ---------------------------------------------------------------------------------------------- 4. déclencheur de stop supprimé
+
+
+def test_un_stop_de_veille_n_est_plus_un_declencheur_et_le_prompt_le_dit(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders(buy_btc_at_cycle_0)
+    cycle(env, 0, d)
+    S = stop_of(env)
+    env.kraken.override[BTC] = (S - 1_000_000, S - 900_000)
+    tick(env, X - 300, d)
+    rep = tick(env, X, d)  # stop confirmé et exécuté sur un portefeuille LLM
+    assert rep.stops == [f"stop:{HAIKU}:{BTC}:veille:{X}"]
+    assert rep.declencheur is None and rep.reveil is None and not reveil_events(env)
+    p = of(env, "veille")[-1]["payload"]
+    assert p["reveil"] is None and p["refus"] is None
+    text = load_system_prompt()
+    assert "stop" not in text.split("## Ce que tu reçois")[0].lower().replace("stop obligatoire", "")
+    assert "Tu décides une fois toutes les 4 heures" not in text
+    assert (
+        "Tu es appelé à un rendez-vous fixe toutes les 4 heures, et tu peux aussi être réveillé entre deux "
+        "rendez-vous quand un instrument bouge d'au moins le seuil en 1 heure ; le champ `contexte` de "
+        "l'instantané dit lequel des deux, et rien ne t'oblige à agir."
+    ) in text
+
+
+def test_stop_d_un_temoin_execute_sans_reveil(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    low = 2_000_000_000
+    Journal(env.paths.journal).append(
+        "stop_set", {"portfolio": "temoin:panier", "symbol": BTC, "stop_ueur": low + 5_000_000}, T0 + 400
+    )
+    env.kraken.override[BTC] = (low, low + 100_000)
+    tick(env, X - 300)
+    rep = tick(env, X)
+    assert f"stop:temoin:panier:{BTC}:veille:{X}" in rep.stops
+    assert BTC not in replay(env.events())["temoin:panier"].positions
+    assert rep.declencheur is None and not reveil_events(env)
+    check_journal(env)
+
+
+# ---------------------------------------------------------------------------------------------- déclencheur de mouvement
 
 
 @pytest.mark.parametrize(("bp", "reveil"), [(299, False), (300, True), (-300, True), (-299, False)])
@@ -353,51 +561,29 @@ def test_declencheur_de_mouvement_au_seuil_exact(tmp_path: Path, bp: int, reveil
         assert not reveil_events(env)
 
 
-def test_mouvement_fonction_pure_le_plus_grand_l_emporte_et_sans_reference_rien():
-    cur = {"A": (1_040_000, 1_040_000), "B": (900_000, 900_000), "C": (1_000_000, 1_000_000)}
-    ref = {"A": (1_000_000, 1_000_000), "B": (1_000_000, 1_000_000), "C": (1_000_000, 1_000_000)}
-    assert mouvement(cur, ref, 300, 3600) == {"type": "mouvement", "symbole": "B", "variation_bp": -1000, "fenetre_s": 3600}
-    assert mouvement(cur, {}, 300, 3600) is None
-    assert mouvement({"A": (1_029_900, 1_029_900)}, {"A": (1_000_000, 1_000_000)}, 300, 3600) is None
-    assert mouvement({"A": (1_030_000, 1_030_000)}, {"A": (1_000_000, 1_000_000)}, 300, 3600)["variation_bp"] == 300
-
-
-def test_pas_de_declencheur_de_mouvement_sans_veille_de_reference(tmp_path: Path):
+def test_mouvement_mesure_au_milieu_et_stop_au_bid_avec_un_spread_large(tmp_path: Path):
     env = make_env(tmp_path)
-    cycle(env, 0)
-    set_btc(env, BTC_REF * 2)  # +100 % mais aucun événement veille à X - 3600
-    rep = tick(env, X)
-    assert rep.declencheur is None and not reveil_events(env)
-
-
-def test_declencheur_de_stop_sur_un_portefeuille_llm_et_pas_sur_un_temoin(tmp_path: Path):
-    # LLM : le stop de Haiku déclenche un réveil.
-    env = make_env(tmp_path, "llm")
-    d = deciders(buy_btc_at_cycle_0)
-    cycle(env, 0, d)
-    stop = stop_of(env)
-    env.kraken.override[BTC] = (stop - 1_000_000, stop - 900_000)
+    d = prepare(env, X, bp=300, wide=True)  # ask > bid de 3 % : le bid ne bouge que de 1,455 %, le milieu de 3 %
+    q = env.kraken.override[BTC]
+    assert q[0] * 10_000 < BTC_REF * 10_300 and sum(q) // 2 == up(300)
     rep = tick(env, X, d)
-    trig = {"type": "stop", "portefeuille": HAIKU, "symbole": BTC}
-    assert rep.declencheur == trig and rep.reveil == "completed"
-    assert pl(env, "reveil_started") == [{"reveil": X, "declencheur": trig}]
-    assert of(env, "veille")[-1]["payload"]["reveil"] == trig
+    assert rep.declencheur == {"type": "mouvement", "symbole": BTC, "variation_bp": 300, "fenetre_s": 3600}
+    assert rep.reveil == "completed" and rep.rejets == {}
 
-    # Témoin : son stop est exécuté par la veille mais ne réveille personne.
-    env2 = make_env(tmp_path, "temoin")
-    cycle(env2, 0)
-    assert BTC in replay(env2.events())["temoin:panier"].positions
-    low = 2_000_000_000
-    Journal(env2.paths.journal).append(
-        "stop_set", {"portfolio": "temoin:panier", "symbol": BTC, "stop_ueur": low + 5_000_000}, T0 + 400
-    )
-    env2.kraken.override[BTC] = (low, low + 100_000)
-    rep2 = tick(env2, X)
-    assert f"stop:temoin:panier:{BTC}:veille:{X}" in rep2.stops
-    assert BTC not in replay(env2.events())["temoin:panier"].positions
-    assert rep2.declencheur is None and rep2.reveil is None and not reveil_events(env2)
-    assert of(env2, "veille")[-1]["payload"]["reveil"] is None
-    check_journal(env2)
+
+def test_pas_de_declencheur_de_mouvement_sans_reference_a_moins_de_15_minutes(tmp_path: Path):
+    for ref_ts, trig in [(X - 3600 - 900, True), (X - 3600 - 1200, False)]:  # 900 s avant la cible : accepté
+        env = make_env(tmp_path, f"ref{ref_ts}")
+        d = deciders()
+        cycle(env, 0, d)
+        set_btc(env, BTC_REF)
+        tick(env, ref_ts, d)
+        # tick précédent : sa référence est la même (à cible - 300, tolérance 900 s) ou plus loin
+        set_btc(env, up(300))
+        tick(env, X - 300, d)
+        rep = tick(env, X, d)
+        # tick précédent X-300 : cible X-3900, ref à ref_ts (X-4500 -> 600 s) ; tick courant : cible X-3600 (900 s ou plus)
+        assert (rep.declencheur is not None) is trig, ref_ts
 
 
 # ---------------------------------------------------------------------------------------------- garde-fous
@@ -411,45 +597,47 @@ def test_garde_fou_delai_depuis_la_derniere_ronde(tmp_path: Path):
         d = prepare(env, X)
         rep = tick(env, X, d)
         assert rep.declencheur is not None
-        assert (rep.refus, rep.reveil) == ((None, "completed") if ok else ("cooldown", None))
+        assert (rep.refus, rep.reveil) == ((None, "completed") if ok else ("delai", None))
         assert bool(reveil_events(env)) is ok
-        assert of(env, "veille")[-1]["payload"]["reveil"] == (rep.declencheur if ok else None)
+        p = of(env, "veille")[-1]["payload"]
+        assert (p["reveil"], p["refus"]) == ((rep.declencheur, None) if ok else (None, "delai"))
 
 
-def test_le_delai_compte_aussi_les_reveils(tmp_path: Path):
+def test_le_delai_compte_depuis_reveil_started_et_aussi_les_abandons(tmp_path: Path):
     env = make_env(tmp_path)
     d = prepare(env, X)
-    assert tick(env, X, d).reveil == "completed"  # terminé à X + 30
-    # Nouveau mouvement de +3 % par rapport à la veille de X, une heure plus tard : 3570 s après la dernière ronde.
-    set_btc(env, BTC_REF * 10_300 // 10_000 * 10_300 // 10_000)
-    rep = tick(env, X + 3600, d)
-    assert rep.declencheur is not None and rep.refus == "cooldown" and rep.reveil is None
-    assert len(of(env, "reveil_started")) == 1
+    j = Journal(env.paths.journal)
+    j.append("reveil_started", {"reveil": T0 + 150, "declencheur": {"type": "mouvement", "symbole": BTC, "variation_bp": 300, "fenetre_s": 3600}}, X - 100)
+    j.append("reveil_abandonne", {"reveil": T0 + 150}, T0 + 200)  # l'abandon est ancien, mais le démarrage date de 100 s
+    rep = tick(env, X, d)
+    assert rep.refus == "delai" and rep.reveil is None
 
 
-def test_garde_fou_plafond_par_jour(tmp_path: Path):
+def test_garde_fou_plafond_par_jour_compte_aussi_les_reveils_abandonnes(tmp_path: Path):
+    trig = {"type": "mouvement", "symbole": BTC, "variation_bp": 300, "fenetre_s": 3600}
     for cap, ok in [(1, False), (2, True)]:
-        env = make_env(tmp_path, f"cap{cap}")
-        set_veille(env, max_reveils_jour=cap)
-        d = prepare(env, X)
-        j = Journal(env.paths.journal)
-        j.append("reveil_started", {"reveil": T0 + 150, "declencheur": {"type": "stop", "portefeuille": HAIKU, "symbole": BTC}}, T0 + 160)
-        j.append("reveil_completed", {"reveil": T0 + 150}, T0 + 200)  # un réveil plus tôt dans le même jour UTC
-        rep = tick(env, X, d)
-        assert (rep.refus, rep.reveil) == ((None, "completed") if ok else ("plafond_jour", None))
-    # Un réveil de la veille (jour UTC précédent) ne compte pas.
+        for fin in ("reveil_completed", "reveil_abandonne"):
+            env = make_env(tmp_path, f"cap{cap}{fin}")
+            set_veille(env, max_reveils_jour=cap)
+            d = prepare(env, X)
+            j = Journal(env.paths.journal)
+            j.append("reveil_started", {"reveil": T0 + 150, "declencheur": trig}, T0 + 160)
+            j.append(fin, {"reveil": T0 + 150}, T0 + 200)  # un réveil plus tôt dans le même jour UTC
+            rep = tick(env, X, d)
+            assert (rep.refus, rep.reveil) == ((None, "completed") if ok else ("plafond", None)), (cap, fin)
+    # Un réveil du jour UTC précédent ne compte pas.
     env = make_env(tmp_path, "veille-jour")
     set_veille(env, max_reveils_jour=1)
     d = prepare(env, X)
     j = Journal(env.paths.journal)
-    j.append("reveil_started", {"reveil": T0 - 5000, "declencheur": {"type": "stop", "portefeuille": HAIKU, "symbole": BTC}}, T0 + 160)
-    j.append("reveil_completed", {"reveil": T0 - 5000}, T0 + 170)
+    j.append("reveil_started", {"reveil": T0 - 5000, "declencheur": trig}, T0 - 4990)
+    j.append("reveil_completed", {"reveil": T0 - 5000}, T0 - 4900)
     assert tick(env, X, d).reveil == "completed"
 
 
 def test_garde_fou_avant_le_cycle(tmp_path: Path):
     rdv = T0 + H4 + 300
-    assert prochain_rendez_vous(T0 + 4200, H4, 300) == rdv
+    assert prochain_rendez_vous(X, H4, 300) == rdv
     assert prochain_rendez_vous(T0 + 300, H4, 300) == rdv  # à HH:05 pile, le prochain est dans 4 h
     assert prochain_rendez_vous(T0, H4, 300) == T0 + 300
     for x, ok in [(rdv - 1800, True), (rdv - 1500, False)]:  # 1800 s avant passe, 1500 s avant refuse
@@ -458,7 +646,7 @@ def test_garde_fou_avant_le_cycle(tmp_path: Path):
         rep = tick(env, x, d)
         assert rep.declencheur is not None
         assert (rep.refus, rep.reveil) == ((None, "completed") if ok else ("avant_cycle", None))
-        assert of(env, "veille")[-1]["payload"]["reveil"] == (rep.declencheur if ok else None)
+        assert of(env, "veille")[-1]["payload"]["refus"] == (None if ok else "avant_cycle")
 
 
 def test_garde_fou_cycle_incomplet(tmp_path: Path):
@@ -471,15 +659,29 @@ def test_garde_fou_cycle_incomplet(tmp_path: Path):
     assert cycle(env, 1, on_portfolio_done=boom).status == "failed"  # cycle_started sans cycle_completed
     x = T0 + H4 + 4200
     set_btc(env, BTC_REF)
-    tick(env, x - 3600)
-    set_btc(env, BTC_REF * 10_300 // 10_000)
+    for t in (x - 3900, x - 3600):
+        tick(env, t)
+    set_btc(env, up(300))
+    tick(env, x - 300)
     rep = tick(env, x)
+    assert rep.declencheur is not None and rep.refus == "cycle_incomplet" and rep.reveil is None
+    assert of(env, "veille")[-1]["payload"]["refus"] == "cycle_incomplet"
+    assert not reveil_events(env)
+    env.kraken.override.clear()
+    assert cycle(env, 1).status == "completed"  # le cycle repris lève ce garde-fou
+
+
+def test_un_tick_multiple_de_4_h_ne_reveille_jamais_meme_sans_garde_avant_cycle(tmp_path: Path):
+    env = make_env(tmp_path)
+    set_veille(env, garde_avant_cycle_s=0)
+    x = T0 + H4  # HH:00 pile : l'identifiant du réveil se confondrait avec celui du cycle
+    d = prepare(env, x)
+    rep = tick(env, x, d)
     assert rep.declencheur is not None and rep.refus == "cycle" and rep.reveil is None
     assert not reveil_events(env)
-    # Le cycle repris et terminé lève ce garde-fou.
-    set_btc(env, BTC_REF)
-    env.kraken.override.clear()
-    assert cycle(env, 1).status == "completed"
+    assert of(env, "veille")[-1]["payload"]["refus"] == "cycle"
+    # Sans garde-fou « avant le cycle », le tick suivant (HH:05) n'est pas un multiple : le réveil passe.
+    assert prochain_rendez_vous(x + 300, H4, 300) == x + H4 + 300
 
 
 def test_pas_de_reveil_pendant_un_cycle_en_cours(tmp_path: Path):
@@ -491,19 +693,49 @@ def test_pas_de_reveil_pendant_un_cycle_en_cours(tmp_path: Path):
     assert rep.status == "busy" and env.paths.journal.read_bytes() == before
 
 
+# ---------------------------------------------------------------------------------------------- 5. le réveil est consigné d'abord
+
+
+def test_reveil_started_est_ecrit_avant_l_evenement_veille(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = prepare(env, X)
+    tick(env, X, d)
+    seq = {e["type"]: e["seq"] for e in env.events() if e["ts"] >= X and e["type"] in ("reveil_started", "veille")}
+    assert seq["reveil_started"] < seq["veille"]
+    first_net = min(e["seq"] for e in of(env, "quote_reveil"))
+    assert seq["veille"] < first_net
+
+
+def test_reveil_qui_echoue_est_repris_une_seule_alerte_par_code_et_par_reveil(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = prepare(env, X)
+
+    def boom(p: str) -> None:
+        raise RuntimeError("crash simulé")
+
+    for k in range(3):  # trois échecs de suite : X, X+300 (reprise), X+600 (reprise)
+        rep = tick(env, X + 300 * k, d, on_portfolio_done=boom)
+        assert rep.status == "reveil_failed"
+    ex = [a for a in pl(env, "alert") if a["code"] == "reveil_exception"]
+    assert len(ex) == 1 and ex[0]["message"].startswith(f"[réveil {X}] ")
+    assert [c for c in codes(env) if c[1] == "reveil_resumed"] == [("info", "reveil_resumed")]
+    assert reveil_events(env) == ["reveil_started"]
+    # Le réveil est dans le plafond et dans le délai dès reveil_started.
+    assert pl(env, "reveil_started") == [{"reveil": X, "declencheur": pl(env, "reveil_started")[0]["declencheur"]}]
+
+
+def test_veille_reveil_ne_contient_qu_un_reveil_demarre(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = prepare(env, X)
+    tick(env, X, d)
+    p = of(env, "veille")[-1]["payload"]
+    assert p["reveil"] == pl(env, "reveil_started")[0]["declencheur"] and p["refus"] is None
+
+
 # ---------------------------------------------------------------------------------------------- le réveil
 
 
-def aleatoire_tick() -> int:
-    """Premier tick X' >= X où le tirage de l'aléatoire donne au moins une action (cherché, pas supposé)."""
-    for k in range(40):
-        x = X + 300 * k
-        if x <= T0 + 12900 and random.Random(seed_for(x, 0)).randrange(3) >= 1:
-            return x
-    raise AssertionError("aucun tick favorable")
-
-
-def test_le_reveil_fait_decider_llm_et_aleatoire_pas_les_references_sans_equity(tmp_path: Path):
+def test_le_reveil_reveille_tous_les_llm_et_l_aleatoire_pas_les_references_sans_equity(tmp_path: Path):
     x = aleatoire_tick()
     n_alea = random.Random(seed_for(x, 0)).randrange(3)
     env = make_env(tmp_path)
@@ -514,40 +746,35 @@ def test_le_reveil_fait_decider_llm_et_aleatoire_pas_les_references_sans_equity(
     rep = tick(env, x, d)
     assert rep.reveil == "completed"
     types = [e["type"] for e in env.events()]
-    i0 = max(i for i, t in enumerate(types) if t == "reveil_started")
-    assert types[i0 + 1:].count("reveil_completed") == 1 and types.index("reveil_completed") > i0
-    after = [e for e in env.events()[i0:]]
-    # Quotes journalisées avant la décision, comme au cycle.
-    qs = [e for e in after if e["type"] == "quote"]
-    assert len(qs) == 6 and max(i for i, e in enumerate(after) if e["type"] == "quote") < min(
+    assert types.count("reveil_started") == types.count("reveil_completed") == 1
+    assert types.index("reveil_started") < types.index("reveil_completed")
+    after = env.events()[max(i for i, t in enumerate(types) if t == "reveil_started") :]
+    qs = [e for e in after if e["type"] == "quote_reveil"]
+    assert len(qs) == 6 and not [e for e in after if e["type"] == "quote"]
+    assert max(i for i, e in enumerate(after) if e["type"] == "quote_reveil") < min(
         i for i, e in enumerate(after) if e["type"] in ("decision_requested", "intent")
     )
-    assert {e["payload"]["symbol"]: e["payload"]["bid"] for e in qs}[BTC] == BTC_REF * 10_300 // 10_000
-    # LLM : Haiku décide, Sonnet aussi (appel factice), Opus sans clé ; l'identifiant du réveil est le champ `cycle`.
+    assert {e["payload"]["symbol"]: e["payload"]["bid"] for e in qs}[BTC] == up(300) * 9995 // 10000
+    # TOUS les LLM de la config décident, Fable compris, avec le contexte de réveil.
     got = {p["portfolio"] for p in pl(env, "decision_received") if p["cycle"] == x}
-    assert got == {HAIKU, SONNET}
-    assert {p["portfolio"]: p["reason"] for p in pl(env, "decision_skipped") if p["cycle"] == x} == {OPUS: "no_key"}
+    assert got == set(LLM_ALL)
+    for p in LLM_ALL:
+        assert d[p].snaps[-1]["contexte"]["type"] == "reveil" and d[p].snaps[-1]["cycle_ts"] == x
     # Aléatoire : ses intentions du tirage, via riskd ; références : rien.
     own = [p for p in pl(env, "intent") if p["cycle"] == x]
     assert len([p for p in own if p["portfolio"] == "temoin:aleatoire"]) == n_alea
-    assert {p["portfolio"] for p in own} <= {"temoin:aleatoire", HAIKU, SONNET}
-    verdict_ids = {p["intent_id"] for p in pl(env, "risk_verdict")}
-    assert {p["intent_id"] for p in own} <= verdict_ids
-    refs_after = {p: replay(env.events())[p] for p in REFS}
-    assert refs_after == refs_before
-    assert not [p for p in own if p["portfolio"] in REFS]
-    assert not [f for f in of(env, "fill")[fills_before:] if f["payload"]["portfolio"] in REFS]
-    # Pas d'equity au réveil.
-    assert len(of(env, "equity")) == equity_before
-    # Chaque décideur est appelé une fois par ronde, avec le contexte de réveil.
-    snap = d[HAIKU].snaps[-1]
-    assert snap["schema_version"] == SCHEMA_VERSION == "2" and snap["cycle_ts"] == x
+    assert {p["portfolio"] for p in own} <= {"temoin:aleatoire", *LLM_ALL}
+    assert {p["intent_id"] for p in own} <= {p["intent_id"] for p in pl(env, "risk_verdict")}
+    assert {p: replay(env.events())[p] for p in REFS} == refs_before
+    assert not [f for f in pl(env, "fill")[fills_before:] if f["portfolio"] in REFS]
+    assert len(of(env, "equity")) == equity_before  # pas d'equity au réveil
+    assert d[HAIKU].snaps[-1]["schema_version"] == SCHEMA_VERSION == "2"
     check_journal(env)
 
 
-def test_contexte_dans_l_instantane(tmp_path: Path):
+def test_contexte_ronde_et_budget_partage_entre_cycles_et_reveils(tmp_path: Path):
     env = make_env(tmp_path)
-    d = prepare(env, X)
+    d = prepare(env, X, deciders(buy_eth_at_reveil))
     tick(env, X, d)
     cycle(env, 1, d)
     snaps = d[HAIKU].snaps
@@ -556,22 +783,36 @@ def test_contexte_dans_l_instantane(tmp_path: Path):
     trig = {"type": "mouvement", "symbole": BTC, "variation_bp": 300, "fenetre_s": 3600}
     assert snaps[1]["contexte"] == {"type": "reveil", "declencheur": trig, "prochain_rendez_vous_ts": T0 + H4 + 300}
     assert snaps[2]["contexte"] == {"type": "rendez_vous", "prochain_rendez_vous_ts": T0 + 2 * H4 + 300}
-    assert {s["schema_version"] for s in snaps} == {"2"}
-    # Les décisions du réveil figurent dans recent_decisions du cycle suivant.
-    assert X in [r["cycle"] for r in snaps[2]["recent_decisions"]]
-    # Le prompt système parle des réveils.
-    from arene.deciders.llm import load_system_prompt
-
+    # Les décisions du réveil sont dans recent_decisions du cycle suivant, marquées « reveil ».
+    rd = snaps[2]["recent_decisions"]
+    assert [(r["cycle"], r["ronde"]) for r in rd] == [(T0, "rendez_vous"), (X, "reveil")]
+    assert d[HAIKU].spent == [0, 1500, 3000] and d[SONNET].spent == [0, 1500, 3000]  # budget du jour partagé
     assert "réveillé entre deux rendez-vous" in load_system_prompt()
 
 
-def test_budget_quotidien_partage_entre_cycles_et_reveils(tmp_path: Path):
+# ---------------------------------------------------------------------------------------------- 8. PRICE_SANITY au réveil
+
+
+def test_price_sanity_au_reveil_compare_au_tick_precedent_pas_a_la_cloture_de_4_h(tmp_path: Path):
     env = make_env(tmp_path)
-    d = prepare(env, X)  # le cycle 0 a coûté 1500 µ$ à Haiku
-    tick(env, X, d)
-    cycle(env, 1, d)
-    assert d[HAIKU].spent == [0, 1500, 3000]
-    assert d[SONNET].spent == [0, 1500, 3000]
+
+    def plan(i, snap):
+        return [action(BTC, size=10, stop=5, move=8)] if snap["contexte"]["type"] == "reveil" else None
+
+    d = prepare(env, X, deciders(plan), bp=500)  # BTC +5 % : à plus de 3 % de la clôture de 4 h
+    close = max((b for b in env.kraken.ohlc(BTC, "XBTEUR", H4, None)), key=lambda b: b.ts).close
+    assert abs(up(500) - close) * 10_000 > 300 * close  # la clôture 4 h aurait déclenché PRICE_SANITY
+    rep = tick(env, X, d)
+    assert rep.reveil == "completed"
+    intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
+    verdict = next(v for v in pl(env, "risk_verdict") if v["intent_id"] == intent["intent_id"])
+    assert verdict["approved"] and "PRICE_SANITY" not in verdict["reasons"]
+    assert BTC in replay(env.events())[HAIKU].positions
+    # Au cycle suivant, la comparaison reste faite à la clôture de 4 h : rien n'a changé.
+    check_journal(env)
+
+
+# ---------------------------------------------------------------------------------------------- 9. coupe-circuit
 
 
 def test_coupe_circuit_pendant_un_reveil_entrees_refusees(tmp_path: Path):
@@ -588,21 +829,75 @@ def test_coupe_circuit_pendant_un_reveil_entrees_refusees(tmp_path: Path):
     env.paths.kill.parent.mkdir(parents=True, exist_ok=True)
     env.paths.kill.touch()
     n_fills = len(of(env, "fill"))
-    rep = tick(env, x, d)
-    assert rep.reveil == "completed"
+    assert tick(env, x, d).reveil == "completed"
     assert [k["active"] for k in pl(env, "kill_switch")] == [True]
-    new = [f for f in pl(env, "fill")[n_fills:]]
+    new = pl(env, "fill")[n_fills:]
     assert new and all(f["side"] == "sell" for f in new)  # aucune entrée, de personne
     assert f"exit:{HAIKU}:LINK/EUR:{x}:kill_switch" in {f["order_id"] for f in new}
     skipped = {p["portfolio"]: p["reason"] for p in pl(env, "decision_skipped") if p["cycle"] == x}
-    assert skipped[HAIKU] == skipped[SONNET] == "kill_switch"
-    assert not [p for p in pl(env, "decision_received") if p["cycle"] == x and p["portfolio"] == HAIKU]
+    assert skipped[HAIKU] == skipped[SONNET] == skipped[FABLE] == "kill_switch"
     verdicts = {v["intent_id"]: v for v in pl(env, "risk_verdict")}
-    alea = [p for p in pl(env, "intent") if p["cycle"] == x and p["portfolio"] == "temoin:aleatoire"]
-    buys = [p for p in alea if p["side"] == "buy"]
+    buys = [p for p in pl(env, "intent") if p["cycle"] == x and p["side"] == "buy"]
     assert all(not verdicts[p["intent_id"]]["approved"] and "KILL_SWITCH" in verdicts[p["intent_id"]]["reasons"] for p in buys)
     assert not replay(env.events())[HAIKU].positions
     check_journal(env)
+
+
+def kill_during_decide(env: Env, kind: str):
+    def plan(i, snap):
+        env.paths.kill.parent.mkdir(parents=True, exist_ok=True)
+        env.paths.kill.touch()  # armé pendant l'appel LLM
+        return [action("ETH/EUR")]
+
+    return plan
+
+
+def test_kill_arme_pendant_l_appel_llm_bloque_l_achat_au_reveil(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = prepare(env, X, deciders())
+    d[HAIKU].plan = lambda i, s: (env.paths.kill.parent.mkdir(parents=True, exist_ok=True), env.paths.kill.touch(), [action("ETH/EUR")])[2]
+    assert tick(env, X, d).reveil == "completed"
+    intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
+    verdict = next(v for v in pl(env, "risk_verdict") if v["intent_id"] == intent["intent_id"])
+    assert not verdict["approved"] and "KILL_SWITCH" in verdict["reasons"]
+    assert not [f for f in pl(env, "fill") if f["portfolio"] == HAIKU and f["side"] == "buy"]
+
+
+def test_kill_arme_pendant_l_appel_llm_bloque_l_achat_au_cycle(tmp_path: Path):
+    env = make_env(tmp_path)
+    d = deciders()
+    d[HAIKU].plan = lambda i, s: (env.paths.kill.parent.mkdir(parents=True, exist_ok=True), env.paths.kill.touch(), [action("ETH/EUR")])[2]
+    assert cycle(env, 0, d).status == "completed"
+    intent = next(p for p in pl(env, "intent") if p["portfolio"] == HAIKU)
+    verdict = next(v for v in pl(env, "risk_verdict") if v["intent_id"] == intent["intent_id"])
+    assert not verdict["approved"] and "KILL_SWITCH" in verdict["reasons"]
+    assert not [f for f in pl(env, "fill") if f["portfolio"] == HAIKU and f["side"] == "buy"]
+
+
+def test_attentes_de_verrou_et_delais_systemd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    assert cyc.LOCK_WAIT_S == 600 and cyc.FLATTEN_LOCK_WAIT_S == 120
+    waits: list[float] = []
+
+    @contextmanager
+    def fake_lock(paths, wait_s=0.0):
+        waits.append(wait_s)
+        yield
+
+    monkeypatch.setattr(cyc, "cycle_lock", fake_lock)
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    cyc.flatten_now(env.paths, env.clients, T0 + 900)
+    cycle(env, 1)
+    assert waits == [600.0, 120.0, 600.0]  # cycle, mise à plat immédiate, cycle
+    unit = lambda n: (REPO / "ops" / "systemd" / n).read_text()
+    assert "TimeoutStartSec=1500" in unit("arene-cycle.service")
+    assert "TimeoutStartSec=600" in unit("arene-veille.service")
+    assert "OnCalendar=*-*-* *:00/5:30 UTC" in unit("arene-veille.timer")
+    site = unit("arene-site-build.service")
+    assert "Type=oneshot" in site and site.count("ExecStart=") == 1 and site.endswith("arene build-site\nTimeoutStartSec=600\nNice=10\n")
+
+
+# ---------------------------------------------------------------------------------------------- 6. reprise et abandon
 
 
 def crashed_reveil(env: Env, d: dict, x: int, after: str = HAIKU):
@@ -618,36 +913,30 @@ def crashed_reveil(env: Env, d: dict, x: int, after: str = HAIKU):
 
 def test_reprise_d_un_reveil_interrompu_sans_double_decision_ni_double_fill(tmp_path: Path):
     x = aleatoire_tick()
-
-    def plan(i, snap):
-        if snap["contexte"]["type"] == "reveil":
-            return [action("ETH/EUR")]
-        return None
-
     clean = make_env(tmp_path, "clean")
-    dc = prepare(clean, x, deciders(plan))
+    dc = prepare(clean, x, deciders(buy_eth_at_reveil))
     assert tick(clean, x, dc).reveil == "completed"
-
     for after in (HAIKU, "temoin:aleatoire"):
-        env = make_env(tmp_path, f"crash-{after.split(':')[0]}{after[-3:]}")
-        d = prepare(env, x, deciders(plan))
+        env = make_env(tmp_path, f"crash-{after[-3:]}")
+        d = prepare(env, x, deciders(buy_eth_at_reveil))
         crashed_reveil(env, d, x, after)
-        assert ("panique", "reveil_exception") in [(a["level"], a["code"]) for a in pl(env, "alert")]
+        assert ("panique", "reveil_exception") in codes(env)
         rep = tick(env, x + 300, d)
         assert rep.reveil == "resumed" and rep.status == "done"
         assert reveil_events(env) == ["reveil_started", "reveil_completed"]
         assert pl(env, "reveil_completed") == [{"reveil": x}]
-        assert ("info", "reveil_resumed") in [(a["level"], a["code"]) for a in pl(env, "alert")]
+        assert ("info", "reveil_resumed") in codes(env)
         assert of(env, "veille")[-1]["payload"]["reveil"] is None  # la reprise ne lance pas de nouveau réveil
         ids = [f["payload"]["order_id"] for f in of(env, "fill")]
         assert len(ids) == len(set(ids)), "double fill après la reprise"
         assert sorted(ids) == sorted(f["payload"]["order_id"] for f in of(clean, "fill"))
         assert replay(env.events()) == replay(clean.events())
-        for p in (HAIKU, SONNET):  # une seule décision par portefeuille et par réveil
+        for p in LLM_ALL:  # une seule décision par portefeuille et par réveil
             assert len([r for r in pl(env, "decision_received") if r["cycle"] == x and r["portfolio"] == p]) == 1
         if after == HAIKU:  # sa décision était journalisée avant le crash : jamais redemandée à la reprise
             assert d[HAIKU].calls == 2  # cycle 0 + réveil
-        assert len([q for q in of(env, "quote") if q["ts"] >= x]) == 6  # quotes du réveil non journalisées deux fois
+        # 7. Les quotes du réveil sont relus à la reprise, pas journalisés une seconde fois.
+        assert len(of(env, "quote_reveil")) == 6
         check_journal(env)
 
 
@@ -661,12 +950,12 @@ def test_reveil_abandonne_apres_30_minutes_et_repris_avant(tmp_path: Path):
     assert rep.reveil == "abandonne" and rep.status == "done"
     assert reveil_events(env) == ["reveil_started", "reveil_abandonne"]
     assert pl(env, "reveil_abandonne") == [{"reveil": x}]
-    assert ("action", "reveil_abandonne") in [(a["level"], a["code"]) for a in pl(env, "alert")]
+    assert ("action", "reveil_abandonne") in codes(env)
     assert len(of(env, "fill")) == n_fills
     tick(env, x + 2400, d)
     assert reveil_events(env) == ["reveil_started", "reveil_abandonne"]  # pas d'abandon répété
+    assert len([c for c in codes(env) if c[1] == "reveil_abandonne"]) == 1
     check_journal(env)
-
     env2 = make_env(tmp_path, "juste")
     d2 = prepare(env2, x)
     crashed_reveil(env2, d2, x)
@@ -674,23 +963,64 @@ def test_reveil_abandonne_apres_30_minutes_et_repris_avant(tmp_path: Path):
     assert reveil_events(env2) == ["reveil_started", "reveil_completed"]
 
 
-def test_un_abandon_compte_pour_le_delai_et_le_plafond(tmp_path: Path):
+def test_un_reveil_est_abandonne_et_non_repris_si_un_cycle_a_ete_termine_depuis(tmp_path: Path):
     x = aleatoire_tick()
     env = make_env(tmp_path)
     d = prepare(env, x)
     crashed_reveil(env, d, x)
-    tick(env, x + 2100, d)  # abandon, journalisé à l'heure du mur x + 2130
-    set_btc(env, BTC_REF * 10_300 // 10_000 * 10_300 // 10_000)
-    rep = tick(env, x + 3600, d)  # mouvement de +3 % depuis la veille de x, mais l'abandon est trop récent
-    assert rep.declencheur is not None and rep.refus == "cooldown"
+    Journal(env.paths.journal).append("cycle_completed", {"cycle": T0 + H4}, x + 100)
+    rep = tick(env, x + 300, d)  # dans les 30 min, mais un cycle a été terminé après reveil_started
+    assert rep.reveil == "abandonne" and reveil_events(env) == ["reveil_started", "reveil_abandonne"]
+    assert ("info", "reveil_resumed") not in codes(env)
+
+
+@pytest.mark.parametrize("cut", ["stop_set", "fill"])
+def test_abandon_repare_la_ronde_interrompue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cut: str):
+    env = make_env(tmp_path)
+    d = prepare(env, X, deciders(buy_eth_at_reveil))
+    real, hit = Journal.append, []
+
+    def flaky(self, type, payload, ts):
+        if type == cut and ts == X and not hit:
+            hit.append(1)
+            raise RuntimeError("crash entre deux écritures")
+        return real(self, type, payload, ts)
+
+    monkeypatch.setattr(Journal, "append", flaky)
+    assert tick(env, X, d).status == "reveil_failed"
+    monkeypatch.undo()
+    intent = next(p for p in pl(env, "intent") if p["cycle"] == X and p["portfolio"] == HAIKU)
+    oid = intent["intent_id"]
+    states = lambda: [s["state"] for s in pl(env, "order_state") if s["order_id"] == oid]
+    if cut == "stop_set":  # fill écrit, stop_set manquant
+        assert "ETH/EUR" in replay(env.events())[HAIKU].positions
+        assert replay(env.events())[HAIKU].positions["ETH/EUR"].stop_ueur is None
+        assert states() == ["SUBMITTING", "ACKED"]
+    else:  # ordre ACKED sans fill
+        assert "ETH/EUR" not in replay(env.events())[HAIKU].positions
+        assert states() == ["SUBMITTING", "ACKED"]
+    rep = tick(env, X + 2100, d)
+    assert rep.reveil == "abandonne"
+    st = replay(env.events())[HAIKU]
+    if cut == "stop_set":
+        pos = st.positions["ETH/EUR"]
+        assert pos.stop_ueur is not None and pos.stop_ueur > 0  # la position a son stop
+        assert pl(env, "stop_set")[-1]["symbol"] == "ETH/EUR"
+        assert states() == ["SUBMITTING", "ACKED", "FILLED"]
+    else:
+        assert "ETH/EUR" not in st.positions
+        assert states() == ["SUBMITTING", "ACKED", "UNKNOWN", "CANCELED"]
+    ids = [f["order_id"] for f in pl(env, "fill")]
+    assert len(ids) == len(set(ids))
     assert reveil_events(env) == ["reveil_started", "reveil_abandonne"]
+    check_journal(env)
 
 
 # ---------------------------------------------------------------------------------------------- cycle après réveils
 
 
 def run_scenario(env: Env) -> dict:
-    d = prepare(env, X, deciders(lambda i, s: [action("ETH/EUR")] if s["contexte"]["type"] == "reveil" else None))
+    d = prepare(env, X, deciders(buy_eth_at_reveil))
     tick(env, X, d)
     env.kraken.override.clear()
     cycle(env, 1, d)
@@ -702,21 +1032,19 @@ def test_un_cycle_apres_des_reveils_reste_deterministe_et_ne_touche_pas_les_refe
     run_scenario(a)
     run_scenario(b)
     assert verify(a.paths.journal).head_hash == verify(b.paths.journal).head_hash
-    # Sans veille ni réveil : les références (aucun réveil pour elles) finissent dans le même état.
-    cycle(c, 0)
+    cycle(c, 0)  # sans veille ni réveil
     cycle(c, 1)
     sa, sc = replay(a.events()), replay(c.events())
     assert {p: sa[p] for p in REFS} == {p: sc[p] for p in REFS}
-    # Le cycle 1 a bien tourné normalement : equity pour les 8 portefeuilles, une fois chacun.
     eq1 = [e["payload"]["portfolio"] for e in a.of_type("equity") if e["payload"]["cycle"] == T0 + H4]
     assert sorted(eq1) == sorted(sc)
-    assert len([e for e in a.of_type("cycle_completed")]) == 2
+    assert len(a.of_type("cycle_completed")) == 2
     check_journal(a)
 
 
 def test_replay_et_verify_apres_une_journee_de_veille_et_de_reveils(tmp_path: Path):
     env = make_env(tmp_path)
-    d = prepare(env, X, deciders(lambda i, s: [action("ETH/EUR")] if s["contexte"]["type"] == "reveil" else None))
+    d = prepare(env, X, deciders(buy_eth_at_reveil))
     tick(env, X, d)
     env.kraken.override.clear()
     for k in range(1, 12):
@@ -724,11 +1052,91 @@ def test_replay_et_verify_apres_une_journee_de_veille_et_de_reveils(tmp_path: Pa
     cycle(env, 1, d)
     for k in range(1, 6):
         tick(env, T0 + H4 + 600 + 300 * k, d)
-    assert len(of(env, "veille")) == 1 + 1 + 11 + 5
+    assert len(of(env, "veille")) == 3 + 1 + 11 + 5
     check_journal(env)
 
 
-# ---------------------------------------------------------------------------------------------- config, CLI
+# ---------------------------------------------------------------------------------------------- 11. exploitation
+
+
+def test_veille_data_une_alerte_au_debut_de_la_panne_une_info_au_retablissement(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    size = env.paths.journal.stat().st_size
+    env.kraken.fail_ticker = True
+    for k in range(2):
+        assert tick(env, T0 + 600 + 300 * k).status == "failed"
+    assert env.paths.journal.stat().st_size == size and not [c for c in codes(env) if c[1] == "veille_data"]
+    tick(env, T0 + 1200)  # troisième échec consécutif : début de la panne
+    assert [c for c in codes(env) if c[1] == "veille_data"] == [("action", "veille_data")]
+    for k in range(10):  # rien entre le début et le rétablissement, même des heures plus tard
+        tick(env, T0 + 1500 + 1200 * k)
+    assert [c for c in codes(env) if c[1] == "veille_data"] == [("action", "veille_data")]
+    assert (env.paths.var / "veille_echecs").read_text() == "13"
+    env.kraken.fail_ticker = False
+    assert tick(env, T0 + 20_000).status == "done"
+    assert [c for c in codes(env) if c[1] == "veille_data"] == [("action", "veille_data"), ("info", "veille_data")]
+    assert not (env.paths.var / "veille_echecs").exists()
+    env.kraken.fail_ticker = True  # nouvelle panne : le compteur repart de zéro
+    tick(env, T0 + 20_300)
+    tick(env, T0 + 20_600)
+    assert len([c for c in codes(env) if c[1] == "veille_data"]) == 2
+    tick(env, T0 + 20_900)
+    assert len([c for c in codes(env) if c[1] == "veille_data"]) == 3
+    check_journal(env)
+
+
+def test_journal_casse_rien_ecrit_code_1_une_alerte_panique_par_heure(tmp_path: Path):
+    env = make_env(tmp_path, secrets={"ntfy_url": "https://ntfy.example/arene"})
+    cycle(env, 0)
+    p = env.paths.journal
+    lines = p.read_bytes().split(b"\n")
+    lines[3] = lines[3].replace(b'"type"', b'"tYpe"', 1)
+    p.write_bytes(b"\n".join(lines))
+    before = p.read_bytes()
+    env.requests.clear()
+    rep = tick(env, T0 + 600)
+    assert rep.status == "refused" and not rep.ok and p.read_bytes() == before
+    sent = lambda: [(r.method, str(r.url), r.headers.get("priority")) for r in env.requests]
+    assert sent() == [("POST", "https://ntfy.example/arene", "5")]
+    tick(env, T0 + 900)
+    tick(env, T0 + 600 + 3599)
+    assert len(sent()) == 1 and p.read_bytes() == before
+    tick(env, T0 + 600 + 3600)
+    assert len(sent()) == 2 and p.read_bytes() == before
+
+
+def test_le_cycle_alerte_une_fois_par_absence_de_la_veille(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    cycle(env, 1)
+    assert "veille_absente" not in [c[1] for c in codes(env)]  # jamais de veille : le timer n'est pas censé tourner
+    tick(env, T0 + H4 + 600)
+    cycle(env, 2)  # dernier tick à 4 h de là
+    assert [c for c in codes(env) if c[1] == "veille_absente"] == [("action", "veille_absente")]
+    cycle(env, 3)  # toujours absente : pas de seconde alerte
+    assert len([c for c in codes(env) if c[1] == "veille_absente"]) == 1
+    tick(env, T0 + 3 * H4 + 600)  # la veille revient puis s'arrête de nouveau
+    cycle(env, 4)
+    assert len([c for c in codes(env) if c[1] == "veille_absente"]) == 2
+    # Veille récente (moins de 30 min) : pas d'alerte.
+    tick(env, T0 + 4 * H4 + 900)
+    n = len(codes(env))
+    env.clock.now = env.now_of(5)
+    tick(env, env.now_of(5) - 330)  # HH:00:00 + ... tick du créneau précédent le cycle
+    cycle(env, 5)
+    assert len([c for c in codes(env) if c[1] == "veille_absente"]) == 2 and len(codes(env)) >= n
+
+
+def test_smoke_snapshot_utilise_le_meme_prochain_rendez_vous_que_le_cycle(tmp_path: Path):
+    env = make_env(tmp_path)
+    cycle(env, 0)
+    snap = cyc.smoke_snapshot(env.paths, env.clients, HAIKU, T0 + H4 + 600)
+    assert snap["contexte"] == cyc.rendez_vous_contexte(T0 + H4, load_config(env.paths.config))
+    assert snap["contexte"] == {"type": "rendez_vous", "prochain_rendez_vous_ts": T0 + 2 * H4 + 300}
+
+
+# ---------------------------------------------------------------------------------------------- config
 
 
 def test_config_veille_valeurs_par_defaut_et_validation(tmp_path: Path):
@@ -736,7 +1144,6 @@ def test_config_veille_valeurs_par_defaut_et_validation(tmp_path: Path):
     v = cfg.veille
     assert (v.tick_s, v.seuil_mouvement_bp, v.fenetre_mouvement_s) == (300, 300, 3600)
     assert (v.cooldown_s, v.max_reveils_jour, v.garde_avant_cycle_s) == (3600, 6, 1800)
-    assert cyc.LOCK_WAIT_S == 600
     text = (REPO / "config" / "arene.toml").read_text()
     sans = re.sub(r"\[veille\].*?(?=\[\[instruments\]\])", "", text, flags=re.DOTALL)
     assert "[veille]" not in sans
@@ -753,14 +1160,32 @@ def test_config_veille_valeurs_par_defaut_et_validation(tmp_path: Path):
             load_config(p)
 
 
+# ---------------------------------------------------------------------------------------------- 10. CLI et site
+
+
 def cli_args(env: Env) -> list[str]:
     return ["--var", str(env.paths.var), "--secrets", str(env.paths.secrets), "--config", str(env.paths.config),
             "--policy", str(env.paths.policy)]  # fmt: skip
 
 
+def fake_systemctl(monkeypatch: pytest.MonkeyPatch, calls: list, error: Exception | None = None) -> None:
+    """Remplace subprocess.run pour `systemctl` seulement (git rev-parse du cycle garde le vrai)."""
+    real = subprocess.run
+
+    def run(cmd, **kw):
+        if cmd[0] != "systemctl":
+            return real(cmd, **kw)
+        calls.append(cmd)
+        if error is not None:
+            raise error
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+
 def test_commande_arene_veille_codes_de_sortie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    built: list[int] = []
-    monkeypatch.setattr(cli, "_build_site", lambda paths, clients, now, **kw: built.append(now) or 0)
+    calls: list[list[str]] = []
+    fake_systemctl(monkeypatch, calls)
     env = make_env(tmp_path)
     cycle(env, 0)
 
@@ -773,20 +1198,38 @@ def test_commande_arene_veille_codes_de_sortie(tmp_path: Path, monkeypatch: pyte
     with cycle_lock(env.paths):
         assert run(T0 + 930) == 0  # occupé : code 0
     env.kraken.fail_ticker = True
-    assert run(T0 + 1230) == 1  # quotes en échec : code 1
-    env.kraken.fail_ticker = False
-    assert built == []  # aucun réveil : le site n'est pas reconstruit
+    assert run(T0 + 1230) == 1  # aucun quote valide : code 1
+    assert calls == []  # aucun réveil : pas de reconstruction du site
 
 
-def test_commande_arene_veille_reconstruit_le_site_apres_un_reveil(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    built: list[int] = []
-    monkeypatch.setattr(cli, "_build_site", lambda paths, clients, now, **kw: built.append(now) or 0)
+def test_apres_un_reveil_le_site_est_reconstruit_par_systemd_pas_dans_le_processus(tmp_path: Path, monkeypatch):
+    calls: list[list[str]] = []
+    fake_systemctl(monkeypatch, calls)
+    monkeypatch.setattr(cli, "_build_site", lambda *a, **k: pytest.fail("le site ne se construit plus dans la veille"))
     monkeypatch.setattr(cyc, "default_deciders", lambda cfg, paths: deciders())
-    for name, extra, expected in [("avec", [], [X + 30]), ("sans", ["--no-site"], [])]:
-        built.clear()
+    for name, extra, expected in [
+        ("avec", [], [["systemctl", "--user", "start", "--no-block", "arene-site-build.service"]]),
+        ("sans", ["--no-site"], []),
+    ]:
+        calls.clear()
         env = make_env(tmp_path, name)
         prepare(env, X)
         env.clock.now = X + 30
         assert cli.main([*cli_args(env), "veille", *extra], clients=env.clients, now=lambda: X + 30) == 0
         assert pl(env, "reveil_completed") == [{"reveil": X}]
-        assert built == expected
+        assert calls == expected
+
+
+def test_echec_du_lancement_du_site_ignore_et_pas_dans_le_journal(tmp_path: Path, monkeypatch, caplog):
+    fake_systemctl(monkeypatch, [], FileNotFoundError("systemctl"))
+    monkeypatch.setattr(cyc, "default_deciders", lambda cfg, paths: deciders())
+    env = make_env(tmp_path)
+    prepare(env, X)
+    env.clock.now = X + 30
+    n_alerts = len(codes(env))
+    with caplog.at_level("WARNING", logger="arene.cli"):
+        assert cli.main([*cli_args(env), "veille"], clients=env.clients, now=lambda: X + 30) == 0
+    assert "reconstruction du site non lancée" in caplog.text
+    assert len(codes(env)) == n_alerts  # rien dans le journal
+    fake_systemctl(monkeypatch, [], subprocess.CalledProcessError(1, "systemctl"))
+    cli._start_site_build()  # ne lève pas

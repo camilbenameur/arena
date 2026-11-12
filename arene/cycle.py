@@ -87,6 +87,8 @@ LLM_TIMEOUT_S = 150.0
 UNKNOWN_MAX_CYCLES = 2
 SPREAD_WINDOW = 20
 LOCK_WAIT_S = 600.0  # un cycle attend la fin d'un réveil ou d'un autre cycle (docs/VEILLE.md §3)
+VEILLE_ABSENTE_S = 1800
+FLATTEN_LOCK_WAIT_S = 120.0  # `arene kill --now` : ne bloque pas plus de 2 min
 
 TEMOIN_MODULES = {
     "temoin:panier": panier,
@@ -219,6 +221,11 @@ def default_deciders(cfg: Config, paths: Paths) -> dict[str, LLMDecider]:
     return out
 
 
+def rendez_vous_contexte(t: int, cfg: Config) -> dict[str, Any]:
+    """`contexte` d'un cycle : le prochain rendez-vous est l'exécution du cycle suivant (HH:05 UTC)."""
+    return {"type": "rendez_vous", "prochain_rendez_vous_ts": t + cfg.interval_s + cfg.cycle_delay_s}
+
+
 def policy_summary(p: Policy) -> str:
     """Règles de risque en clair, données au modèle dans l'instantané."""
 
@@ -265,6 +272,8 @@ class _Runner:
         # Réglages que la ronde de réveil (arene/veille.py) surcharge ; au cycle ils restent aux valeurs d'origine.
         self.prefetched_quotes: dict[str, Quote] | None = None  # quotes du tick, sinon ticker Kraken
         self.fetch_binance = True
+        self.quote_type = "quote"  # le réveil journalise ses quotes sous `quote_reveil` (médiane des spreads intacte)
+        self.quote_symbols: set[str] | None = None  # symboles dont le quote est attendu (None : tous)
 
     # -------------------------------------------------------------- écriture
 
@@ -323,6 +332,7 @@ class _Runner:
             return CycleReport("stale", t)
 
         self._config_and_portfolios()
+        self._veille_absente()
         self.instruments = {i.symbol: i for i in load_instruments(cfg, self.clients.kraken)}
         self.symbols = tuple(self.instruments)
         self.executor = SimExecutor(
@@ -387,6 +397,16 @@ class _Runner:
                 )  # fmt: skip
         self.since_ts = self.log.events[0]["ts"]
 
+    def _veille_absente(self) -> None:
+        """Alerte (une fois par absence) si la veille s'est arrêtée : dernier événement `veille` vieux de plus de 30 min,
+        alors qu'il y en a déjà eu un (le timer est censé tourner)."""
+        veilles = [e["ts"] for e in self._events_of("veille")]
+        if not veilles or self.now - max(veilles) <= VEILLE_ABSENTE_S:
+            return
+        if any(e["payload"]["code"] == "veille_absente" and e["ts"] > max(veilles) for e in self._events_of("alert")):
+            return
+        self.alert("action", "veille_absente", f"aucun tick de veille depuis {(self.now - max(veilles)) // 60} min")
+
     def _market(self, resume: bool, started_seq: int | None) -> None:
         """Barres et quotes. À la reprise, les quotes déjà journalisées sont réutilisées (cache disque conservé)."""
         t, interval = self.t, self.cfg.interval_s
@@ -396,10 +416,11 @@ class _Runner:
         quotes: dict[str, Quote] = {}
         if resume and started_seq is not None:
             for e in self.log.events:
-                if e["type"] == "quote" and e["seq"] > started_seq:
+                if e["type"] == self.quote_type and e["seq"] > started_seq:
                     q = Quote(**{k: e["payload"][k] for k in ("symbol", "ts", "bid", "ask")})
                     quotes[q.symbol] = q
-        self.quotes_already_journaled = len(quotes) == len(self.symbols)
+        expected = set(self.symbols) if self.quote_symbols is None else self.quote_symbols
+        self.quotes_already_journaled = bool(expected) and expected <= set(quotes)
         if not self.quotes_already_journaled:
             quotes = {}
             for inst in self.instruments.values():
@@ -411,7 +432,8 @@ class _Runner:
                 self.store.update(inst.symbol, interval, fetch)
             for inst in self.instruments.values():
                 if self.prefetched_quotes is not None:
-                    quotes[inst.symbol] = self.prefetched_quotes[inst.symbol]
+                    if inst.symbol in self.prefetched_quotes:
+                        quotes[inst.symbol] = self.prefetched_quotes[inst.symbol]
                 else:
                     quotes[inst.symbol] = self.clients.kraken.ticker(inst.symbol, inst.kraken_pair)
             if self.fetch_binance:
@@ -443,7 +465,8 @@ class _Runner:
     def _journal_market(self) -> None:
         if not self.quotes_already_journaled:
             for sym in self.symbols:
-                self.wn("quote", self.quotes[sym])
+                if sym in self.quotes:
+                    self.wn(self.quote_type, self.quotes[sym])
         last_bar: dict[str, int] = {}
         for e in self._events_of("bar"):
             p = e["payload"]
@@ -493,7 +516,7 @@ class _Runner:
 
     def _contexte(self) -> dict[str, Any]:
         """Champ `contexte` de l'instantané : ici le rendez-vous de 4 h."""
-        return {"type": "rendez_vous", "prochain_rendez_vous_ts": self.t + self.cfg.interval_s + self.cfg.cycle_delay_s}
+        return rendez_vous_contexte(self.t, self.cfg)
 
     def _freeze(self, portfolio: str, reason: str, detail: str) -> None:
         st = self.states()[portfolio]
@@ -628,6 +651,7 @@ class _Runner:
             out_list.append(
                 {
                     "cycle": pl["cycle"],
+                    "ronde": "rendez_vous" if pl["cycle"] % self.cfg.interval_s == 0 else "reveil",
                     "actions": [f"{a['side']} {a['symbol']} {a['size_pct']}%" for a in parsed.get("actions", [])],
                     "outcomes": by_cycle.get(pl["cycle"], []),
                     "parse_error": pl.get("parse_error"),
@@ -818,6 +842,8 @@ class _Runner:
             st = self.states().get(p)
             if st is None or intent.symbol not in self.quotes:
                 continue
+            if not self.entries_blocked and killswitch.active_sources(self.paths):
+                self.kill = self.entries_blocked = True  # armé pendant l'appel LLM : l'achat qui suit doit être refusé
             verdict = None
             for e in self._events_of("risk_verdict"):
                 if e["payload"]["intent_id"] == intent.intent_id:
@@ -912,7 +938,7 @@ def flatten_now(paths: Paths, clients: Clients, now_ts: int, *, source: str = "c
     journal = Journal(paths.journal)
     notifier = Notifier(journal, paths.secrets, clients.http)
     try:
-        with cycle_lock(paths, LOCK_WAIT_S):
+        with cycle_lock(paths, FLATTEN_LOCK_WAIT_S):
             if not verify(paths.journal).ok:
                 raise JournalBroken("vérification du journal en échec")
             cfg = load_config(paths.config)
@@ -969,4 +995,4 @@ def smoke_snapshot(paths: Paths, clients: Clients, portfolio: str, now_ts: int) 
     el = EventLog(Journal(paths.journal))
     el.refresh()
     st = replay(el.events).get(portfolio) or PortfolioState(portfolio, cfg.capital_ueur)
-    return build_snapshot(t, bars, st, marks, [], policy_summary(policy))
+    return build_snapshot(t, bars, st, marks, [], policy_summary(policy), contexte=rendez_vous_contexte(t, cfg))

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -65,9 +66,25 @@ def cmd_cycle(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: in
     return 0 if rep.ok else 1
 
 
+SITE_BUILD_UNIT = "arene-site-build.service"
+
+
+def _start_site_build() -> None:
+    """Demande à systemd de reconstruire le site (hors de ce processus, sans attendre). Un échec est ignoré."""
+    try:
+        subprocess.run(
+            ["systemctl", "--user", "start", "--no-block", SITE_BUILD_UNIT],
+            check=True, capture_output=True, timeout=15,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError) as exc:
+        logging.getLogger("arene.cli").warning("reconstruction du site non lancée : %s: %s", type(exc).__name__, exc)
+
+
 def cmd_veille(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
     rep = vei.run_veille(paths, clients, now)
     extra = f"  stops={len(rep.stops)}" if rep.stops else ""
+    if rep.rejets:
+        extra += f"  quotes écartés={','.join(f'{s}:{m}' for s, m in sorted(rep.rejets.items()))}"
     if rep.declencheur:
         extra += f"  declencheur={rep.declencheur['type']}" + (f" (refusé : {rep.refus})" if rep.refus else "")
     if rep.reveil:
@@ -76,7 +93,7 @@ def cmd_veille(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
     if rep.error:
         print(f"erreur : {rep.error}", file=sys.stderr)
     if rep.reveil in ("completed", "resumed") and not a.no_site:
-        _build_site(paths, clients, now, quiet_missing=True)
+        _start_site_build()
     return 0 if rep.ok else 1
 
 
@@ -238,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("cycle", help="exécute (ou reprend) le cycle courant")
     c.add_argument("--no-site", action="store_true", help="ne reconstruit pas le site après le cycle")
     w = sub.add_parser("veille", help="un tick de veille (stops en direct, réveil éventuel), sans LLM sauf réveil")
-    w.add_argument("--no-site", action="store_true", help="ne reconstruit pas le site après un réveil")
+    w.add_argument("--no-site", action="store_true", help="ne demande pas la reconstruction du site après un réveil")
     k = sub.add_parser("kill", help="arme le coupe-circuit")
     k.add_argument("--now", action="store_true", help="met à plat tout de suite (LLM et aléatoire)")
     sub.add_parser("unkill", help="lève le coupe-circuit")

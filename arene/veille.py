@@ -3,22 +3,22 @@
 `run_veille(paths, clients, now_ts, deciders=None)` est lancé toutes les 5 min par `arene-veille.timer`, sans LLM :
 1. verrou du cycle SANS attente (cycle ou réveil en cours : sortie sans rien écrire) ; journal cassé : rien écrit ;
 2. tick = `now_ts // tick_s * tick_s` ; un événement `veille` déjà journalisé pour ce tick : sortie sans rien écrire ;
-3. quotes Kraken (échec : rien écrit, alerte `veille_data` après 3 échecs consécutifs, au plus une par heure) ;
-4. stops en direct (`SimExecutor.process_live_stops`), au bid avec glissement et frais, idempotents par `order_id` ;
-5. déclencheurs (mouvement, stop LLM) et garde-fous, puis événement `veille` (horodaté au tick) ;
-6. réveil : une ronde de décision (LLM et aléatoire) rejouée par `_Runner` (sous-classe `_ReveilRunner`), sous le
-   même verrou. Un `reveil_started` sans `reveil_completed` est repris par un tick suivant dans les 30 min, sinon
-   abandonné (`reveil_abandonne`).
+3. quotes Kraken, contrôlés symbole par symbole (invalide, spread, saut) ; un symbole invalide est exclu du tick ;
+4. stops en direct, confirmés sur deux ticks, au bid avec glissement et frais, idempotents par `order_id` ;
+5. déclencheur de mouvement (confirmé sur deux ticks) et garde-fous ; si un réveil part, `reveil_started` est écrit
+   AVANT l'événement `veille` et avant tout appel réseau du réveil ;
+6. événement `veille` (horodaté au tick), puis le réveil : une ronde de décision (LLM et aléatoire) rejouée par
+   `_Runner` (sous-classe `_ReveilRunner`), sous le même verrou. Un réveil interrompu est repris par un tick suivant
+   dans les 30 min (si aucun cycle n'a été terminé depuis), sinon réparé puis abandonné (`reveil_abandonne`).
 
 Le réveil n'écrit jamais d'événement `equity` ; son identifiant (`reveil` = tick) remplit le champ `cycle` des
-événements de décision, comme l'identifiant d'un cycle.
+événements de décision, et ses quotes sont journalisés sous `quote_reveil`.
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from fractions import Fraction
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from arene.config import Config, ConfigError, load_config, load_instruments
@@ -34,7 +34,7 @@ from arene.cycle import (
     cycle_lock,
 )
 from arene.data import DataError
-from arene.journal import Journal, verify
+from arene.journal import Journal, intent_from_payload, verify
 from arene.ledger import equity_ueur, replay
 from arene.ops.heartbeat import Heartbeat
 from arene.ops.notify import Notifier
@@ -48,7 +48,14 @@ log = logging.getLogger("arene.veille")
 BP = 10_000
 REVEIL_ABANDON_S = 1800  # un réveil interrompu est repris pendant 30 min, puis abandonné
 ECHECS_AVANT_ALERTE = 3
-ALERTE_DATA_PERIODE_S = 3600
+SPREAD_FENETRE = 20  # quotes valides pris pour la médiane des spreads
+SPREAD_MIN_HISTORIQUE = 5
+SPREAD_MULTIPLE = 5
+SAUT_MAX_PCT = 15  # un milieu qui s'écarte de 15 % ou plus du dernier quote valide est écarté
+SAUT_HORIZON_S = 1800
+CONFIRMATION_S = 600  # le tick précédent (stops, mouvement) doit dater de 10 min au plus
+REFERENCE_TOLERANCE_S = 900  # référence du mouvement : quote valide à tick - fenêtre ou avant, de 15 min au plus
+ALERTE_JOURNAL_CASSE_S = 3600
 
 
 # ---------------------------------------------------------------------------------------- rapport
@@ -60,6 +67,7 @@ class VeilleReport:
     tick: int | None = None
     n_events: int = 0  # événements ajoutés au journal par ce lancement
     stops: list[str] = field(default_factory=list)  # order_id des stops de ce tick
+    rejets: dict[str, str] = field(default_factory=dict)  # symbole -> motif du quote écarté
     declencheur: dict[str, Any] | None = None  # déclencheur évalué (même s'il a été refusé)
     refus: str | None = None  # garde-fou qui a refusé le réveil
     reveil: str | None = None  # None | completed | resumed | abandonne
@@ -73,38 +81,100 @@ class VeilleReport:
 
 # ---------------------------------------------------------------------------------------- fonctions pures
 
+Hist = dict[str, list[tuple[int, int, int]]]  # symbole -> [(tick, bid, ask)] des quotes valides, croissant
+
 
 def prochain_rendez_vous(ts: int, interval_s: int, cycle_delay_s: int) -> int:
     """Premier instant d'exécution d'un cycle (HH:05 UTC) strictement après `ts`."""
     return (ts - cycle_delay_s) // interval_s * interval_s + interval_s + cycle_delay_s
 
 
+def _mid(bid: int, ask: int) -> int:
+    return (bid + ask) // 2
+
+
+def quote_valide(bid: Any, ask: Any) -> bool:
+    return all(isinstance(x, int) and not isinstance(x, bool) for x in (bid, ask)) and 0 < bid <= ask
+
+
+def classer_quote(bid: Any, ask: Any, hist: list[tuple[int, int, int]], tick: int) -> str | None:
+    """Motif de rejet d'un quote (`invalide`, `spread`, `saut`), ou None s'il est valide.
+
+    `hist` : quotes valides déjà journalisés dans les événements `veille` pour ce symbole.
+    """
+    if not quote_valide(bid, ask):
+        return "invalide"
+    spreads = sorted(a - b for _, b, a in hist[-SPREAD_FENETRE:])
+    if len(spreads) >= SPREAD_MIN_HISTORIQUE and ask - bid > SPREAD_MULTIPLE * spreads[len(spreads) // 2]:
+        return "spread"
+    if hist and tick - hist[-1][0] < SAUT_HORIZON_S:
+        prev = _mid(hist[-1][1], hist[-1][2])
+        if prev > 0 and abs(_mid(bid, ask) - prev) * 100 >= SAUT_MAX_PCT * prev:
+            return "saut"
+    return None
+
+
+def reference_a(hist: list[tuple[int, int, int]], target: int) -> tuple[int, int, int] | None:
+    """Quote valide le plus proche de `target` ou avant, à moins de 15 min."""
+    best = None
+    for h in hist:
+        if h[0] <= target and target - h[0] <= REFERENCE_TOLERANCE_S:
+            best = h
+    return best
+
+
+def precedent(hist: list[tuple[int, int, int]], tick: int) -> tuple[int, int, int] | None:
+    """Quote valide du tick précédent de ce symbole, à moins de 10 min."""
+    prev = [h for h in hist if h[0] < tick]
+    return prev[-1] if prev and tick - prev[-1][0] <= CONFIRMATION_S else None
+
+
+def _depasse(mid: int, ref_mid: int, seuil_bp: int) -> bool:
+    return ref_mid > 0 and abs(mid - ref_mid) * BP >= seuil_bp * ref_mid
+
+
 def mouvement(
-    cur: dict[str, tuple[int, int]], ref: dict[str, tuple[int, int]], seuil_bp: int, fenetre_s: int
+    quotes: dict[str, tuple[int, int]], hist: Hist, tick: int, seuil_bp: int, fenetre_s: int
 ) -> dict[str, Any] | None:
-    """Instrument dont le milieu a bougé d'au moins `seuil_bp` depuis `ref` (le plus grand |variation| l'emporte)."""
-    best: tuple[Fraction, str, int, int] | None = None
-    for sym in sorted(cur):
-        if sym not in ref:
+    """Instrument dont le milieu a bougé d'au moins `seuil_bp` sur la fenêtre, au tick courant ET au tick précédent
+    (même sens, chacun contre sa propre référence). Le plus grand |variation| l'emporte. Mesuré au milieu du quote."""
+    best: tuple[int, int, str, int] | None = None  # (|d|·BP/ref arrondi bas en 1e-8, d, symbole, ref)
+    for sym in sorted(quotes):
+        h = hist.get(sym, [])
+        ref = reference_a(h, tick - fenetre_s)
+        prev = precedent(h, tick)
+        prev_ref = reference_a(h, prev[0] - fenetre_s) if prev else None
+        if ref is None or prev is None or prev_ref is None:
             continue
-        mid, rmid = (cur[sym][0] + cur[sym][1]) // 2, (ref[sym][0] + ref[sym][1]) // 2
-        if rmid <= 0:
+        mid, rmid = _mid(*quotes[sym]), _mid(ref[1], ref[2])
+        pmid, prmid = _mid(prev[1], prev[2]), _mid(prev_ref[1], prev_ref[2])
+        d, pd = mid - rmid, pmid - prmid
+        if not (_depasse(mid, rmid, seuil_bp) and _depasse(pmid, prmid, seuil_bp)) or (d > 0) != (pd > 0):
             continue
-        d = mid - rmid
-        if abs(d) * BP < seuil_bp * rmid:  # |mid/rmid - 1| >= seuil, en entiers : 2,99 % non, 3 % oui
-            continue
-        score = Fraction(abs(d), rmid)
+        score = abs(d) * 10**8 // rmid
         if best is None or score > best[0]:
-            best = (score, sym, d, rmid)
+            best = (score, d, sym, rmid)
     if best is None:
         return None
-    _, sym, d, rmid = best
+    _, d, sym, rmid = best
     bp = (abs(d) * BP * 2 + rmid) // (2 * rmid)
     return {"type": "mouvement", "symbole": sym, "variation_bp": bp if d > 0 else -bp, "fenetre_s": fenetre_s}
 
 
-def _quote_valide(q: Quote) -> bool:
-    return all(isinstance(x, int) and not isinstance(x, bool) for x in (q.bid, q.ask)) and 0 < q.bid <= q.ask
+def _alerte_reveil(
+    elog: EventLog, notifier: Notifier, now: int, reveil: int, level: str, code: str, message: str
+) -> bool:
+    """Alerte tracée « [réveil N] » : une seule par réveil et par code (journal relu)."""
+    tag = f"[réveil {reveil}] "
+    elog.refresh()
+    if any(
+        e["type"] == "alert" and e["payload"]["code"] == code and e["payload"]["message"].startswith(tag)
+        for e in elog.events
+    ):
+        return False
+    notifier.alert(level, code, tag + message, now)
+    elog.refresh()
+    return True
 
 
 # ---------------------------------------------------------------------------------------- réveil
@@ -128,8 +198,14 @@ class _ReveilRunner(_Runner):
         self.cfg, self.policy, self.instruments = cfg, policy, instruments
         self.t = reveil
         self.declencheur = declencheur
-        self.prefetched_quotes = quotes  # quotes du tick, journalisées en `quote` avant la décision
+        self.prefetched_quotes = quotes  # quotes valides du tick, journalisés en `quote_reveil` avant la décision
+        self.quote_symbols = set(quotes)
+        self.quote_type = "quote_reveil"
         self.fetch_binance = False  # E0065 ne tourne pas au réveil
+
+    def alert(self, level: str, code: str, message: str) -> None:
+        if _alerte_reveil(self.log, self.notifier, self.now, self.t, level, code, message):
+            self.alerts.append((level, code))
 
     # -- périmètre : portefeuilles LLM et aléatoire seulement
     def _round_portfolios(self) -> tuple[str, ...]:
@@ -145,8 +221,42 @@ class _ReveilRunner(_Runner):
             "prochain_rendez_vous_ts": prochain_rendez_vous(self.t, self.cfg.interval_s, self.cfg.cycle_delay_s),
         }
 
-    def run_reveil(self) -> bool:
-        """Exécute ou reprend le réveil `self.t`. Renvoie True si c'est une reprise."""
+    def _view(self) -> None:
+        """Comme au cycle, avec deux écarts : un symbole sans quote valide est valorisé à son dernier quote valide
+        (jamais négociable), et PRICE_SANITY compare au milieu du quote du tick précédent de la veille."""
+        super()._view()
+        veilles = sorted(
+            (e["payload"] for e in self._events_of("veille") if e["payload"]["tick"] < self.t),
+            key=lambda pl: pl["tick"],
+        )
+        last_closes = dict(self.market.last_closes)
+        for sym in self.symbols:
+            for pl in reversed(veilles):
+                if sym in pl["quotes"]:
+                    last_closes[sym] = _mid(*pl["quotes"][sym])
+                    break
+        marks, bids = dict(self.marks), dict(self.bids)
+        for sym in self.symbols:
+            if sym in self.quotes:
+                continue
+            q = self._dernier_quote_valide(sym)
+            if q is not None:
+                marks[sym], bids[sym] = _mid(q[0], q[1]), q[0]
+        self.marks, self.bids = marks, bids
+        self.market = replace(self.market, last_closes=last_closes, marks=marks)
+
+    def _dernier_quote_valide(self, sym: str) -> tuple[int, int] | None:
+        for e in reversed(self._events_of("veille")):
+            if sym in e["payload"]["quotes"]:
+                b, a = e["payload"]["quotes"][sym]
+                return b, a
+        for e in reversed(self._events_of("quote")):
+            if e["payload"]["symbol"] == sym:
+                return e["payload"]["bid"], e["payload"]["ask"]
+        return None
+
+    def run_reveil(self, resume: bool) -> None:
+        """Exécute ou reprend le réveil `self.t` (`reveil_started` est déjà journalisé)."""
         t = self.t
         self.log.refresh()
         self._config_and_portfolios()
@@ -159,12 +269,9 @@ class _ReveilRunner(_Runner):
         self.prev_cycle = completed[-1] if completed else None
         self.cycle_index = len(completed)
         started = [e for e in self._events_of("reveil_started") if e["payload"]["reveil"] == t]
-        resume = bool(started)
-        self._market(resume, started[-1]["seq"] if started else None)
+        self._market(True, started[-1]["seq"])
         if resume:
-            self.alert("info", "reveil_resumed", f"reprise du réveil {t} interrompu")
-        else:
-            self.wn("reveil_started", {"reveil": t, "declencheur": self.declencheur})
+            self.alert("info", "reveil_resumed", "réveil interrompu repris")
         self._journal_market()
         self._view()
         self._resolve_unknowns()
@@ -172,7 +279,6 @@ class _ReveilRunner(_Runner):
         self._kill_and_dormancy()
         self._decide_and_execute()
         self.wn("reveil_completed", {"reveil": t})
-        return resume
 
 
 # ---------------------------------------------------------------------------------------- tick
@@ -205,25 +311,24 @@ class _Veille:
     def _of(self, *types: str) -> list[dict[str, Any]]:
         return [e for e in self.log.events if e["type"] in types]
 
-    @property
-    def _echecs_path(self):
-        return self.paths.var / "veille_echecs"
-
-    def _echecs(self, delta: int | None) -> int:
-        """Compteur d'échecs consécutifs de lecture des quotes (fichier d'état, hors journal) ; `None` le remet à 0."""
-        p = self._echecs_path
+    def _echecs(self, new: int | None = None) -> int:
+        """Compteur d'échecs consécutifs de lecture des quotes (`var/veille_echecs`, hors journal). Renvoie la valeur
+        lue ; `new` l'écrit (0 supprime le fichier)."""
+        p = self.paths.var / "veille_echecs"
         try:
             n = int(p.read_text().strip() or 0)
         except (OSError, ValueError):
             n = 0
-        new = 0 if delta is None else n + delta
-        if new != n or (delta is None and p.exists()):
-            try:
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(str(new))
-            except OSError:
-                pass
-        return new
+        try:
+            if new is not None and new != n:
+                if new == 0:
+                    p.unlink(missing_ok=True)
+                else:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(str(new))
+        except OSError:
+            pass
+        return n
 
     # -- tick
     def run(self) -> VeilleReport:
@@ -239,141 +344,193 @@ class _Veille:
         self.log.refresh()
         n_before = len(self.log.events)
         tick = self.now // v.tick_s * v.tick_s
-        cycles_done = sorted(e["payload"]["cycle"] for e in self._of("cycle_completed"))
-        if not cycles_done:
+        if not self._of("cycle_completed"):
             return VeilleReport("inactive", tick)  # aucun cycle encore : le cycle ouvre le journal, pas la veille
         veilles = {e["payload"]["tick"]: e["payload"] for e in self._of("veille")}
         if tick in veilles:
             return VeilleReport("already_done", tick)
+        hist: Hist = {}
+        for t_, pl in sorted(veilles.items()):
+            for sym, (b, a) in pl["quotes"].items():
+                hist.setdefault(sym, []).append((t_, b, a))
 
+        # 1. quotes, contrôlés symbole par symbole
+        rejets: dict[str, str] = {}
+        quotes: dict[str, Quote] = {}
         try:
             instruments = {i.symbol: i for i in load_instruments(cfg, self.clients.kraken)}
-            quotes = {s: self.clients.kraken.ticker(s, i.kraken_pair) for s, i in instruments.items()}
-            bad = [s for s, q in quotes.items() if not _quote_valide(q)]
-            if bad:
-                raise DataError(f"quote invalide : {', '.join(bad)}")
-        except Exception as exc:  # noqa: BLE001 - lecture des quotes : rien n'est écrit, on compte les échecs
+            for s, inst in instruments.items():
+                try:
+                    q = self.clients.kraken.ticker(s, inst.kraken_pair)
+                    motif = classer_quote(q.bid, q.ask, hist.get(s, []), tick)
+                except Exception as exc:  # noqa: BLE001 - un symbole illisible est écarté, pas tout le tick
+                    motif = f"erreur : {type(exc).__name__}"
+                if motif is None:
+                    quotes[s] = q
+                else:
+                    rejets[s] = motif
+            if not quotes:
+                raise DataError("aucun quote valide : " + ", ".join(f"{s} {m}" for s, m in sorted(rejets.items())))
+        except Exception as exc:  # noqa: BLE001 - rien n'est écrit ; une alerte au début de la panne
             msg = f"{type(exc).__name__}: {str(exc)[:200]}"
-            if self._echecs(+1) >= ECHECS_AVANT_ALERTE:
-                recent = [
-                    e for e in self._of("alert")
-                    if e["payload"]["code"] == "veille_data" and self.now - e["ts"] < ALERTE_DATA_PERIODE_S
-                ]  # fmt: skip
-                if not recent:
-                    self._alert("action", "veille_data", f"veille : quotes Kraken indisponibles ({msg})")
+            n = self._echecs() + 1
+            self._echecs(n)
+            if n == ECHECS_AVANT_ALERTE:
+                self._alert("action", "veille_data", f"veille : quotes Kraken inutilisables depuis {n} ticks ({msg})")
             return VeilleReport("failed", tick, error=msg, alerts=self.alerts)
-        self._echecs(None)
+        if self._echecs(0) >= ECHECS_AVANT_ALERTE:
+            self._alert("info", "veille_data", "veille : quotes Kraken rétablis")
         qd = {s: (q.bid, q.ask) for s, q in quotes.items()}
 
-        # 1. stops en direct
+        # 2. stops en direct, confirmés par le tick valide précédent (à moins de 10 min)
+        prev_bids = {s: p[1] for s in quotes if (p := precedent(hist.get(s, []), tick)) is not None}
         executor = SimExecutor(
             self.journal, instruments, cfg.taker_fee_bp, cfg.slippage_bp, cfg.venue_mode, self.fault_injector
         )
-        executor.process_live_stops(quotes, tick)
+        executor.process_live_stops(quotes, tick, prev_bids)
         self.log.refresh()
         suffix = f":veille:{tick}"
-        stop_fills = [e["payload"] for e in self._of("fill") if e["payload"]["order_id"].endswith(suffix)]
-        rep = VeilleReport("done", tick, stops=[f["order_id"] for f in stop_fills], alerts=self.alerts)
+        stop_ids = [e["payload"]["order_id"] for e in self._of("fill") if e["payload"]["order_id"].endswith(suffix)]
+        rep = VeilleReport("done", tick, stops=stop_ids, rejets=rejets, alerts=self.alerts)
 
-        # 2. réveil interrompu : reprise ou abandon
-        llm = {m.portfolio for m in cfg.models}
+        # 3. réveil interrompu : reprise, ou réparation puis abandon
         closed = {e["payload"]["reveil"] for e in self._of("reveil_completed", "reveil_abandonne")}
-        pending = sorted({e["payload"]["reveil"]: e["payload"] for e in self._of("reveil_started")}.items())
-        pending = [(r, pl) for r, pl in pending if r not in closed]
+        started = {e["payload"]["reveil"]: e for e in self._of("reveil_started")}
+        pending = [(r, e) for r, e in sorted(started.items()) if r not in closed]
+        last_cycle_seq = max((e["seq"] for e in self._of("cycle_completed")), default=-1)
         resume: tuple[int, dict[str, Any]] | None = None
-        for i, (r, pl) in enumerate(pending):
-            if i == len(pending) - 1 and tick - r <= REVEIL_ABANDON_S:
-                resume = (r, pl["declencheur"])
-            else:
-                self.log.add("reveil_abandonne", {"reveil": r}, self.now)
-                self._alert("action", "reveil_abandonne", f"réveil {r} abandonné (non terminé après 30 min)")
-                rep.reveil = "abandonne"
+        for i, (r, e) in enumerate(pending):
+            if i == len(pending) - 1 and tick - r <= REVEIL_ABANDON_S and last_cycle_seq < e["seq"]:
+                resume = (r, e["payload"]["declencheur"])
+                continue
+            self._abandonner(executor, r)
+            rep.reveil = "abandonne"
 
-        # 3. déclencheurs et garde-fous (pas de nouveau réveil pendant une reprise)
+        # 4. déclencheur et garde-fous (pas de nouveau réveil pendant une reprise)
         launch: dict[str, Any] | None = None
         if resume is None:
-            trigger = None
-            ref = veilles.get(tick - v.fenetre_mouvement_s)
-            if ref is not None:
-                trigger = mouvement(qd, {s: tuple(b) for s, b in ref["quotes"].items()}, v.seuil_mouvement_bp, v.fenetre_mouvement_s)
-            if trigger is None:
-                for f in stop_fills:
-                    if f["portfolio"] in llm:
-                        trigger = {"type": "stop", "portefeuille": f["portfolio"], "symbole": f["symbol"]}
-                        break
+            trigger = mouvement(qd, hist, tick, v.seuil_mouvement_bp, v.fenetre_mouvement_s)
             rep.declencheur = trigger
             if trigger is not None:
                 rep.refus = self._garde_fous(tick)
                 if rep.refus is None:
                     launch = trigger
+                    # Le réveil est consigné d'abord : avant l'événement `veille` et avant tout appel réseau du réveil.
+                    self.log.add("reveil_started", {"reveil": tick, "declencheur": trigger}, self.now)
 
-        # 4. événement veille, après les stops
+        # 5. événement veille, après les stops
         states = replay(self.log.events)
-        marks = {s: (b + a) // 2 for s, (b, a) in qd.items()}
+        marks = {s: _mid(b, a) for s, (b, a) in qd.items()}
         bids = {s: b for s, (b, _a) in qd.items()}
+        for s in instruments:  # symbole écarté : valorisé à son dernier quote valide
+            if s not in qd:
+                last = hist[s][-1][1:] if hist.get(s) else self._dernier_quote_cycle(s)
+                if last is not None:
+                    marks[s], bids[s] = _mid(*last), last[0]
         self.log.add(
             "veille",
             {
                 "tick": tick,
                 "quotes": {s: [b, a] for s, (b, a) in sorted(qd.items())},
+                "rejets": dict(sorted(rejets.items())),
                 "equity": {p: equity_ueur(st, marks, bids) for p, st in sorted(states.items())},
                 "stops": rep.stops,
                 "reveil": launch,
+                "refus": rep.refus,
             },
             tick,
         )
 
-        # 5. réveil
+        # 6. réveil
         todo = resume if resume is not None else (tick, launch) if launch is not None else None
         if todo is not None:
             r, trigger = todo
+            rv = None
             try:
                 rv = _ReveilRunner(
-                    self.paths, self.clients, self.now, self.journal, self.notifier, Heartbeat(self.paths.secrets, self.notifier),
+                    self.paths, self.clients, self.now, self.journal, self.notifier,
+                    Heartbeat(self.paths.secrets, self.notifier),
                     self.deciders, self.fault_injector, self.on_portfolio_done,
                     cfg=cfg, policy=policy, instruments=instruments, reveil=r, declencheur=trigger, quotes=quotes,
                 )  # fmt: skip
-                try:
-                    resumed = rv.run_reveil()
-                finally:
-                    self.alerts.extend(rv.alerts)
-                rep.reveil = "resumed" if resumed else "completed"
+                rv.run_reveil(resume is not None)
+                rep.reveil = "resumed" if resume is not None else "completed"
             except (CycleAbort, DataError) as exc:
                 level, code, msg = (
                     (exc.level, exc.code, exc.message) if isinstance(exc, CycleAbort) else ("action", "data_error", str(exc))
                 )
-                self.notifier.alert(level, code, msg, self.now)
-                self.alerts.append((level, code))
+                if _alerte_reveil(self.log, self.notifier, self.now, r, level, code, msg):
+                    self.alerts.append((level, code))
                 rep.status, rep.error = "reveil_failed", msg
             except Exception as exc:
                 log.exception("réveil interrompu par une exception non prévue")
                 msg = f"{type(exc).__name__}: {str(exc)[:300]}"
-                self.notifier.alert("panique", "reveil_exception", f"réveil {r} interrompu : {msg}", self.now)
-                self.alerts.append(("panique", "reveil_exception"))
+                if _alerte_reveil(self.log, self.notifier, self.now, r, "panique", "reveil_exception", msg):
+                    self.alerts.append(("panique", "reveil_exception"))
                 rep.status, rep.error = "reveil_failed", msg
+            finally:
+                if rv is not None:
+                    self.alerts.extend(a for a in rv.alerts if a not in self.alerts)
         self.log.refresh()
         rep.n_events = len(self.log.events) - n_before
         return rep
 
+    def _dernier_quote_cycle(self, sym: str) -> tuple[int, int] | None:
+        for e in reversed(self._of("quote")):
+            if e["payload"]["symbol"] == sym:
+                return e["payload"]["bid"], e["payload"]["ask"]
+        return None
+
+    def _abandonner(self, executor: SimExecutor, r: int) -> None:
+        """Répare la ronde interrompue (fill sans stop_set, ordre SUBMITTING/ACKED), puis journalise l'abandon."""
+        for e in self._of("intent"):
+            if e["payload"]["cycle"] == r:
+                executor.settle_interrupted(intent_from_payload(e["payload"]), self.now)
+        self.log.refresh()
+        self.log.add("reveil_abandonne", {"reveil": r}, self.now)
+        _alerte_reveil(
+            self.log, self.notifier, self.now, r, "action", "reveil_abandonne", "réveil abandonné (non terminé)"
+        )
+        self.alerts.append(("action", "reveil_abandonne"))
+
     def _garde_fous(self, tick: int) -> str | None:
-        """Code du premier garde-fou qui refuse un réveil à ce tick, ou None."""
+        """Motif du premier garde-fou qui refuse un réveil à ce tick, ou None."""
         cfg, v = self.cfg, self.cfg.veille
         done = [e["payload"]["cycle"] for e in self._of("cycle_completed")]
-        incomplets = [e for e in self._of("cycle_started") if e["payload"]["cycle"] > max(done, default=-1)]
-        if incomplets or tick % cfg.interval_s == 0:
-            return "cycle"  # cycle en cours ou incomplet ; ou tick qui se confondrait avec l'identifiant d'un cycle
-        rondes = [e["ts"] for e in self._of("cycle_completed", "reveil_completed", "reveil_abandonne")]
+        if any(e["payload"]["cycle"] > max(done, default=-1) for e in self._of("cycle_started")):
+            return "cycle_incomplet"
+        if tick % cfg.interval_s == 0:
+            return "cycle"  # l'identifiant du réveil se confondrait avec celui d'un cycle
+        rondes = [e["ts"] for e in self._of("cycle_completed", "reveil_started", "reveil_completed", "reveil_abandonne")]
         if rondes and tick - max(rondes) < v.cooldown_s:
-            return "cooldown"
+            return "delai"
         today = [e for e in self._of("reveil_started") if e["payload"]["reveil"] // DAY_S == tick // DAY_S]
         if len(today) >= v.max_reveils_jour:
-            return "plafond_jour"
+            return "plafond"
         if prochain_rendez_vous(tick, cfg.interval_s, cfg.cycle_delay_s) - tick < v.garde_avant_cycle_s:
             return "avant_cycle"
         return None
 
 
 # ---------------------------------------------------------------------------------------- point d'entrée
+
+
+def _alerte_journal_casse(paths: Paths, notifier: Notifier, now: int, error: str) -> None:
+    """Une alerte `panique` par heure au plus (état dans `var/veille_journal_casse`, jamais dans le journal)."""
+    p = paths.var / "veille_journal_casse"
+    try:
+        last = int(p.read_text().strip())
+    except (OSError, ValueError):
+        last = None
+    if last is not None and 0 <= now - last < ALERTE_JOURNAL_CASSE_S:
+        return
+    notifier.journal_enabled = False  # on n'écrit jamais dans un journal cassé
+    notifier.send("panique", "journal_casse", f"journal cassé, veille arrêtée : {error}")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(str(now))
+    except OSError:
+        pass
 
 
 def run_veille(
@@ -398,6 +555,7 @@ def run_veille(
     except CycleBusy:
         return VeilleReport("busy")
     except JournalBroken as exc:
+        _alerte_journal_casse(paths, notifier, now_ts, str(exc))
         return VeilleReport("refused", error=str(exc))
     except Exception as exc:
         log.exception("veille interrompue par une exception non prévue")

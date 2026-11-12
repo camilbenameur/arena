@@ -44,30 +44,33 @@ Tout se lance depuis `~/dev/arene-trading` avec `uv run arene <commande>`. État
 ## Veille et réveils
 Spécification : `docs/VEILLE.md`. Le rendez-vous de 4 h ne change pas ; `arene-veille.timer` ajoute un tick toutes les 5 min (HH:MM:30 UTC), sans LLM sauf réveil.
 
-**Ce que fait un tick** (`arene veille`) : prend le verrou du cycle sans attendre (cycle ou réveil en cours : il sort sans rien écrire, code 0), lit les quotes Kraken, vend au bid (glissement et frais compris) toute position dont le bid est sous le stop, écrit un événement `veille` (quotes, equity au bid, stops du tick, déclencheur du réveil), puis lance un réveil si un déclencheur passe tous les garde-fous. Un réveil est une ronde de décision pour les LLM et `temoin:aleatoire` seulement ; il écrit `reveil_started`, les événements de décision (champ `cycle` = l'identifiant du réveil, un multiple de 300 s qui n'est pas un rendez-vous), puis `reveil_completed`, et jamais d'`equity`. Le site est reconstruit après un réveil terminé.
+**Ce que fait un tick** (`arene veille`) : prend le verrou du cycle sans attendre (cycle ou réveil en cours : il sort sans rien écrire, code 0), lit les quotes Kraken et écarte ceux qui sont douteux (symbole par symbole), vend au bid (glissement et frais compris) toute position dont le bid est sous le stop deux ticks de suite, écrit un événement `veille` (quotes, `rejets`, equity au bid, stops du tick, réveil, `refus`), puis lance un réveil si un mouvement d'au moins 3 % sur 1 h, confirmé sur deux ticks, passe tous les garde-fous. Un réveil est une ronde de décision pour tous les LLM et `temoin:aleatoire` ; il écrit `reveil_started` (avant l'événement `veille`), les événements de décision (champ `cycle` = l'identifiant du réveil, un multiple de 300 s qui n'est pas un rendez-vous), des `quote_reveil`, puis `reveil_completed`, et jamais d'`equity`. Après un réveil terminé, `arene veille` demande à systemd de reconstruire le site (`arene-site-build.service`) ; `--no-site` l'évite.
 
 **Lire**
-- `journalctl --user -u arene-veille.service -n 40` : une ligne par tick (`veille <heure> : done  événements=1 ...`, avec `stops=`, `declencheur=` et `reveil=` quand ils existent). `systemctl --user list-timers arene-veille.timer`.
-- Dans le journal : `grep -E '"type":"(reveil_started|reveil_completed|reveil_abandonne)"' var/journal/events.jsonl | tail`. Un `reveil_started` sans `reveil_completed` est un réveil en cours ou interrompu : le tick suivant le reprend (pendant 30 min), puis il est abandonné.
-- Un déclencheur refusé par un garde-fou ne laisse aucune trace dans le journal (seul le champ `reveil` de l'événement `veille` reste `null`) ; il apparaît dans la sortie du tick : `declencheur=mouvement (refusé : cooldown | plafond_jour | avant_cycle | cycle)`.
+- `journalctl --user -u arene-veille.service -n 40` : une ligne par tick (`veille <heure> : done  événements=1 ...`, avec `stops=`, `quotes écartés=`, `declencheur=` et `reveil=` quand ils existent). `systemctl --user list-timers arene-veille.timer`. Le site : `journalctl --user -u arene-site-build.service -n 20`.
+- Dans le journal : `grep -E '"type":"(reveil_started|reveil_completed|reveil_abandonne)"' var/journal/events.jsonl | tail`. Un `reveil_started` sans `reveil_completed` est un réveil en cours ou interrompu : le tick suivant le reprend (30 min, si aucun cycle n'a été terminé depuis), sinon il est réparé puis abandonné.
+- Un déclencheur refusé laisse sa trace dans le champ `refus` de l'événement `veille` (`delai`, `plafond`, `avant_cycle`, `cycle_incomplet`, `cycle`) et dans la sortie du tick : `declencheur=mouvement (refusé : delai)`.
 - `arene status` ne montre pas la veille ; `arene verify` la vérifie comme le reste (environ 290 événements `veille` par jour).
+- Fichiers d'état hors journal : `var/veille_echecs` (nombre de ticks consécutifs sans aucun quote valide ; supprimé au premier tick réussi ; ne pas l'éditer, on peut le supprimer) et `var/veille_journal_casse` (heure de la dernière alerte `journal_casse` de la veille, pour n'en envoyer qu'une par heure).
 
 **Arrêter**
 - Plus de réveils, stops en direct conservés : mettre `max_reveils_jour = 0` dans `[veille]` de `config/arene.toml` (effet au tick suivant ; `config_loaded` est journalisé).
-- Plus de veille du tout : `systemctl --user disable --now arene-veille.timer`. Le filet des stops sur barres de 4 h au cycle reste actif, comme avant.
-- `arene kill` / `arene kill --now` agissent sur les réveils comme sur les cycles : un réveil sous coupe-circuit met à plat les LLM et l'aléatoire et refuse toute entrée. La veille elle-même ne met jamais à plat.
+- Plus de veille du tout : `systemctl --user disable --now arene-veille.timer`. Le filet des stops sur barres de 4 h au cycle reste actif, comme avant. Le cycle enverra l'alerte `veille_absente` une fois, puisque la veille a déjà tourné.
+- `arene kill` / `arene kill --now` agissent sur les réveils comme sur les cycles : un réveil sous coupe-circuit met à plat les LLM et l'aléatoire et refuse toute entrée ; un KILL armé pendant un appel LLM bloque l'achat qui suit. La veille elle-même ne met jamais à plat.
 - Réglages (`[veille]`) : `seuil_mouvement_bp` (300 = 3 %), `fenetre_mouvement_s` (3600), `cooldown_s` (3600), `max_reveils_jour` (6), `garde_avant_cycle_s` (1800), `tick_s` (300, doit diviser `interval_s`). Toute modification change le hash de la config.
 
 **Nouvelles alertes**
 | code | niveau | action |
 |---|---|---|
-| `veille_data` | action | Quotes Kraken illisibles pendant 3 ticks consécutifs (une alerte par heure au plus ; rien n'est écrit par les ticks en échec, code de sortie 1). Les stops en direct ne tournent pas : le filet des barres de 4 h reste actif. Se corrige avec Kraken ; vérifier sinon la connectivité. |
-| `reveil_resumed` | info | Un réveil interrompu a été repris par le tick suivant (sans double décision ni double fill). Rien à faire. |
-| `reveil_abandonne` | action | Un réveil resté incomplet plus de 30 min a été abandonné (`reveil_abandonne` dans le journal). Voir `reveil_exception` ou `data_stale` juste avant ; les décisions déjà reçues restent journalisées. Il compte dans le plafond du jour et dans le délai. |
-| `reveil_exception` | panique | Réveil interrompu par une exception : `journalctl --user -u arene-veille.service`, puis `arene verify`. Le tick suivant le reprend tout seul (jusqu'à 30 min). |
-| `data_stale`, `data_error`, `llm_api_error`, `llm_budget`, `model_mismatch`, `kill_switch`, `dormance_*` | — | Mêmes codes et mêmes actions qu'au cycle ; ils peuvent aussi venir d'un réveil. Le budget quotidien (`daily_budget_usd`) est partagé entre cycles et réveils. |
+| `veille_data` | action puis info | Action : aucun symbole n'a de quote valide depuis 3 ticks consécutifs (une seule alerte au début de la panne ; les ticks en échec n'écrivent rien, code de sortie 1). Les stops en direct ne tournent pas : le filet des barres de 4 h reste actif. Info « rétabli » au premier tick réussi. |
+| `veille_absente` | action | Posée par le cycle : plus aucun événement `veille` depuis plus de 30 min. `systemctl --user status arene-veille.timer`, `journalctl --user -u arene-veille.service`. Une alerte par absence. |
+| `journal_casse` (veille) | panique | La veille refuse de tourner sur un journal cassé (une alerte par heure au plus, ntfy seulement). Voir « Journal cassé ». |
+| `reveil_resumed` | info | Un réveil interrompu a été repris par un tick suivant (sans double décision ni double fill). Rien à faire. |
+| `reveil_abandonne` | action | Un réveil incomplet a été réparé puis abandonné (plus de 30 min, ou un cycle terminé entre-temps). Voir `reveil_exception` ou `data_stale` juste avant ; les décisions déjà reçues restent journalisées. Il compte dans le plafond du jour et dans le délai. |
+| `reveil_exception` | panique | Réveil interrompu par une exception : `journalctl --user -u arene-veille.service`, puis `arene verify`. Les ticks suivants le reprennent (jusqu'à 30 min). Une seule alerte par réveil et par code. |
+| `data_stale`, `data_error`, `llm_api_error`, `llm_budget`, `model_mismatch`, `kill_switch`, `dormance_*` | — | Mêmes codes et mêmes actions qu'au cycle ; ils peuvent aussi venir d'un réveil (message préfixé `[réveil N]`, une seule alerte par réveil et par code). Le budget quotidien (`daily_budget_usd`) est partagé entre cycles et réveils. |
 
-Un cycle attend le verrou jusqu'à 600 s (`LOCK_WAIT_S`) : si un réveil le tient, le cycle de HH:05 démarre quand le réveil se termine.
+Un cycle attend le verrou jusqu'à 600 s (`LOCK_WAIT_S`) : si un réveil le tient, le cycle de HH:05 démarre quand le réveil se termine (`arene-cycle.service` : `TimeoutStartSec=1500`).
 
 ## Journal cassé (`arene verify` échoue)
 1. **Ne rien supprimer, ne rien éditer.** Copier le fichier : `cp var/journal/events.jsonl /chemin/sauvegarde/`.
