@@ -139,6 +139,7 @@ class PerpSimulator:
             yield
             return
         if self._lock_depth == 0:
+            self.journal.path.parent.mkdir(parents=True, exist_ok=True)
             self._lock_fd = os.open(f"{self.journal.path}.sim.lock", os.O_CREAT | os.O_RDWR, 0o644)
             fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
         self._lock_depth += 1
@@ -168,6 +169,12 @@ class PerpSimulator:
         rec = self.journal.append(type_, payload, ts)
         self._book.apply(rec)
         return payload
+
+    def append_event(self, type_: str, payload: dict[str, Any], ts: int) -> dict[str, Any]:
+        """Appends an event the ledger does not own (rounds, verdicts, alerts...) through the simulator, so
+        its in-memory book stays in step with the journal head (no full re-read at the next call)."""
+        with self._locked():
+            return self._append(type_, payload, ts)
 
     def states(self) -> dict[str, MarginAccount]:
         with self._locked():
@@ -534,12 +541,19 @@ class PerpSimulator:
     # ------------------------------------------------------------------ forced exits and measures
 
     def close_expired(
-        self, ts: int, quotes: Mapping[str, tuple[int, int]], fx: tuple[int, int]
+        self,
+        ts: int,
+        quotes: Mapping[str, tuple[int, int]],
+        fx: tuple[int, int],
+        portfolios: set[str] | None = None,
     ) -> list[dict]:
-        """Closes, at market, every position held for `max_holding_s` or more (reason max_holding)."""
+        """Closes, at market, every position held for `max_holding_s` or more (reason max_holding), for the
+        given portfolios (all when None)."""
         out = []
         with self._locked():
             for name, acc in sorted(self._book.states.items()):
+                if portfolios is not None and name not in portfolios:
+                    continue
                 for inst, pos in sorted(acc.positions.items()):
                     if ts - pos.opened_ts < self.params.max_holding_s or inst not in quotes:
                         continue

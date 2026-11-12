@@ -25,7 +25,16 @@ HOUR_S = 3600
 MINUTE_S = 60
 NANO_PER_MICRO = 1_000  # nano-USD per µUSD
 LEAGUE = "perp"
-FILL_REASONS = ("intent", "stop", "take_profit", "margin_closeout", "max_holding", "halt", "kill_switch")
+FILL_REASONS = (
+    "intent",
+    "stop",
+    "take_profit",
+    "margin_closeout",
+    "max_holding",
+    "halt",
+    "kill_switch",
+    "no_stop",  # a deciding portfolio's position found without a stop is closed at once
+)
 
 
 class PerpLedgerError(ValueError):

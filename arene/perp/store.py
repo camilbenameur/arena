@@ -103,6 +103,8 @@ class Series[R: _Record]:
             for n, line in enumerate(f, 1):
                 if not line.strip():
                     continue
+                if not line.endswith("\n"):
+                    break  # the last line is being appended by another process: not corruption, ignore it
                 try:
                     rec = self._decode(json.loads(line))
                 except (ValueError, TypeError, KeyError):

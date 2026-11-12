@@ -1,0 +1,532 @@
+"""Agent decider of the perp league (study §2): one `claude -p` call per round, with the read-only MCP tools.
+
+The CLI runs on the owner's subscription (`decider_backend = "abonnement"`), isolated: no built-in tool (`--tools ""`),
+only the `mcp__arene__*` tools of the round's server, no user settings, no session, `ANTHROPIC_API_KEY` removed.
+The output is the stream (`--output-format stream-json --verbose`): every tool call and its result are read
+from it, in order, so the caller can journal them; the final decision is the structured output validated by
+`--json-schema`, then validated again here and converted into `PerpIntent`s (percent -> bp integers).
+
+Isolation: a custom system prompt, no CLAUDE.md, no auto-memory, no skills or slash commands, an empty working
+directory outside any repository, `--max-budget-usd` as a hard ceiling.
+
+A retry only after a transport failure (no `result` event, no tool call): a run that produced a result, even
+an error (turn limit, schema retries exhausted, quota), is never retried, and the cost and tokens of every
+attempt are summed. A round with no structured output is "no decision". On a timeout, the partial stream is
+still parsed so the tool calls already made are journaled.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import functools
+import hashlib
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, field_validator
+
+from arene.perp.riskd import PerpIntent
+
+PROMPT_PATH = Path(__file__).parent / "prompt" / "v3.md"
+MCP_SERVER = "arene"
+TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
+MAX_TOOL_CALLS = 4
+MAX_TURNS = 9
+TIMEOUT_S = 240.0
+TIMEOUT_RC = -9  # the runner's return code when the CLI was killed on timeout
+MAX_BUDGET_USD = "1.00"  # hard ceiling of one call (equivalent cost on the subscription)
+JUSTIFICATION_MAX = 1200
+INVALIDATION_MAX = 200
+# Claude Code's built-in plugins, turned off (the preflight of step 5-bis checks none is loaded)
+BUILTIN_PLUGINS = (
+    "cc-plugin-agents-md@builtin",
+    "cc-plugin-privacy@builtin",
+    "cc-plugin-plugin-authoring@builtin",
+)
+ENV_KEEP = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "TZ", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR")
+INSTRUMENTS = ("PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD", "PF_XRPUSD", "PF_LINKUSD", "PF_LTCUSD")
+# an empty directory outside any git repository or CLAUDE.md ancestor
+DEFAULT_WORKDIR = Path("/var/tmp/arene-perp-claude-empty")
+# bounds shared by the CLI schema and the local validation (percent)
+BOUNDS = {
+    "size_pct": (0, 100),
+    "stop_pct": (0, 100),
+    "take_profit_pct": (0, 1000),
+    "expected_move_pct": (0, 100),
+    "confidence_pct": (0, 100),
+}
+
+
+def _num(name: str) -> dict[str, Any]:
+    lo, hi = BOUNDS[name]
+    return {"type": ["number", "null"], "minimum": lo, "maximum": hi}
+
+
+OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["actions", "justification"],
+    "properties": {
+        "actions": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["instrument", "action"],
+                "properties": {
+                    "instrument": {"type": "string", "enum": list(INSTRUMENTS)},
+                    "action": {"type": "string", "enum": ["open_long", "open_short", "reduce", "close"]},
+                    "size_pct": _num("size_pct"),
+                    "stop_pct": _num("stop_pct"),
+                    "take_profit_pct": _num("take_profit_pct"),
+                    "horizon_h": {"type": ["integer", "null"], "minimum": 1, "maximum": 168},
+                    "expected_move_pct": _num("expected_move_pct"),
+                    "confidence_pct": _num("confidence_pct"),
+                    "invalidation": {"type": ["string", "null"], "maxLength": INVALIDATION_MAX},
+                },
+            },
+        },
+        "justification": {"type": "string", "maxLength": JUSTIFICATION_MAX},
+    },
+}
+
+
+def load_prompt() -> str:
+    return PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def prompt_sha256() -> str:
+    return hashlib.sha256(PROMPT_PATH.read_bytes()).hexdigest()
+
+
+# ---------------------------------------------------------------------- decision validation
+
+
+def _clean(v: Any, n: int) -> Any:
+    return v[:n].encode("utf-8", "replace").decode("utf-8") if isinstance(v, str) else v
+
+
+class ActionV3(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    instrument: Literal[INSTRUMENTS]  # type: ignore[valid-type]
+    action: Literal["open_long", "open_short", "reduce", "close"]
+    size_pct: Decimal | None = None
+    stop_pct: Decimal | None = None
+    take_profit_pct: Decimal | None = None
+    horizon_h: StrictInt | None = Field(default=None, ge=1, le=168)
+    expected_move_pct: Decimal | None = None
+    confidence_pct: Decimal | None = None
+    invalidation: str | None = None
+
+    @field_validator("invalidation", mode="before")
+    @classmethod
+    def _cut(cls, v: Any) -> Any:
+        return _clean(v, INVALIDATION_MAX)
+
+    @field_validator(*BOUNDS, mode="before")
+    @classmethod
+    def _no_bool(cls, v: Any) -> Any:
+        if isinstance(v, bool):
+            raise ValueError("a boolean is not a number")  # noqa: TRY004 (pydantic needs ValueError)
+        return v
+
+    @field_validator(*BOUNDS)
+    @classmethod
+    def _bounds(cls, v: Decimal | None, info: Any) -> Decimal | None:
+        lo, hi = BOUNDS[info.field_name]
+        if v is not None and (not v.is_finite() or v < lo or v > hi):
+            raise ValueError(f"{info.field_name} hors bornes [{lo}, {hi}] : {v}")
+        return v
+
+
+def _bp(v: Decimal | None, rounding: str = ROUND_HALF_UP) -> int | None:
+    return None if v is None else int((v * 100).to_integral_value(rounding=rounding))
+
+
+def _dstr(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    s = format(v.normalize(), "f")
+    return s
+
+
+def parse_decision(
+    data: Any, portfolio: str, round_id: int, now_ts: int
+) -> tuple[dict[str, Any] | None, str | None, list[PerpIntent]]:
+    """(journalable parsed decision | None, error | None, intents). Never raises.
+
+    Each action is validated on its own: an invalid action is dropped and its error kept in the parsed
+    decision (`action_errors`), so one bad entry never discards a close in the same decision. The decision
+    itself is invalid only when it is not an object with at most two actions."""
+    try:
+        if isinstance(data, str):
+            data = json.loads(data, parse_float=Decimal)
+        if not isinstance(data, dict) or set(data) - {"actions", "justification"}:
+            raise ValueError("an object {actions, justification} is expected")
+        raw_actions = data.get("actions")
+        if not isinstance(raw_actions, list) or len(raw_actions) > 2:
+            raise ValueError("actions: a list of 0 to 2 elements is expected")
+        justification = _clean(data.get("justification", ""), JUSTIFICATION_MAX)
+        if not isinstance(justification, str):
+            raise TypeError("justification: a string is expected")
+    except (ValueError, TypeError) as exc:
+        return None, f"invalid decision: {str(exc)[:300]}", []
+    intents, parsed_actions, errors = [], [], []
+    for k, raw in enumerate(raw_actions):
+        try:
+            a = ActionV3.model_validate(raw)
+        except ValidationError as exc:
+            errors.append({"k": k, "error": str(exc)[:300]})
+            continue
+        content = {
+            "instrument": a.instrument,
+            "action": a.action,
+            "size_bp": _bp(a.size_pct, ROUND_DOWN),
+            "stop_bp": _bp(a.stop_pct),
+            "take_profit_bp": _bp(a.take_profit_pct),
+            "horizon_h": a.horizon_h,
+            "expected_move_bp": _bp(a.expected_move_pct),
+            "confidence_pct": int(a.confidence_pct.to_integral_value(rounding=ROUND_HALF_UP))
+            if a.confidence_pct is not None
+            else None,
+        }
+        iid = hashlib.sha256(
+            json.dumps(
+                {"p": portfolio, "r": round_id, "k": k, "c": content, "i": a.invalidation}, sort_keys=True
+            ).encode()
+        ).hexdigest()
+        intents.append(PerpIntent(intent_id=iid, portfolio=portfolio, ts=now_ts, **content))
+        parsed_actions.append(
+            {k2: _dstr(v) if isinstance(v, Decimal) else v for k2, v in a.model_dump().items()}
+        )
+    parsed = {"actions": parsed_actions, "justification": justification, "action_errors": errors}
+    return parsed, None, intents
+
+
+def canonical_json(obj: Any) -> str:
+    """JSON text with sorted keys where a Decimal is written as the bare number the model sent (never as a
+    string, never through a float)."""
+    if isinstance(obj, Decimal):
+        return str(obj) if obj.is_finite() else json.dumps(str(obj))  # "20.50", "1E+30": as sent
+    if isinstance(obj, dict):
+        items = sorted(obj.items(), key=lambda kv: str(kv[0]))
+        return (
+            "{"
+            + ",".join(f"{json.dumps(str(k), ensure_ascii=False)}:{canonical_json(v)}" for k, v in items)
+            + "}"
+        )
+    if isinstance(obj, list | tuple):
+        return "[" + ",".join(canonical_json(v) for v in obj) + "]"
+    return json.dumps(obj, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------- the CLI stream
+
+
+@dataclass
+class ToolCall:
+    n: int
+    tool: str
+    arguments: str  # JSON text (never parsed into floats)
+    response: str
+    is_error: bool
+
+
+@dataclass
+class AgentResult:
+    decision: Any = None  # the structured output (JSON-compatible), or None
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    mcp_status: str | None = None
+    model_returned: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_uusd: int = 0
+    num_turns: int = 0
+    latency_ms: int = 0
+    error: str | None = None
+    stderr_tail: str = ""
+    assistant_seen: bool = False  # the model answered at least once (the quota was used)
+    result_seen: bool = False  # a `result` event was read (the run reached its end, even with an error)
+    attempts: int = 0
+    rc: int | None = None
+    first_error: str | None = None  # the error of a first attempt that was retried
+    stream_sha256: str | None = None
+    tools_offered: list[str] = field(default_factory=list)  # from the init event
+
+
+def _blocks(ev: Mapping[str, Any]) -> list[dict[str, Any]]:
+    msg = ev.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def parse_stream(lines: Iterable[str]) -> AgentResult:
+    """Reads `claude -p --output-format stream-json --verbose` line by line."""
+    res = AgentResult()
+    pending: dict[str, tuple[str, str]] = {}  # tool_use_id -> (tool name, arguments JSON)
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line, parse_float=Decimal)
+        except (ValueError, ArithmeticError):
+            continue
+        if not isinstance(ev, dict):
+            continue
+        t = ev.get("type")
+        if t == "system" and ev.get("subtype") == "init":
+            servers = {s.get("name"): s.get("status") for s in ev.get("mcp_servers") or []}
+            res.mcp_status = servers.get(MCP_SERVER, "absent")
+            res.tools_offered = [str(x) for x in ev.get("tools") or []]
+        elif t == "assistant":
+            res.assistant_seen = True
+            for block in _blocks(ev):
+                if block.get("type") == "tool_use" and str(block.get("name", "")).startswith(TOOL_PREFIX):
+                    args = canonical_json(block.get("input") or {})
+                    pending[block["id"]] = (block["name"][len(TOOL_PREFIX) :], args)
+        elif t == "user":
+            for block in _blocks(ev):
+                if block.get("type") != "tool_result" or block.get("tool_use_id") not in pending:
+                    continue
+                name, args = pending.pop(block["tool_use_id"])
+                content = block.get("content")
+                if isinstance(content, list):
+                    text = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+                else:
+                    text = str(content or "")
+                res.tool_calls.append(
+                    ToolCall(len(res.tool_calls) + 1, name, args, text, bool(block.get("is_error")))
+                )
+        elif t == "result":
+            res.result_seen = True
+            res.num_turns = int(ev.get("num_turns") or 0)
+            usage = ev.get("usage") or {}
+            res.input_tokens = int(usage.get("input_tokens") or 0)
+            res.output_tokens = int(usage.get("output_tokens") or 0)
+            res.cache_read_tokens = int(usage.get("cache_read_input_tokens") or 0)
+            res.cache_write_tokens = int(usage.get("cache_creation_input_tokens") or 0)
+            try:
+                res.cost_uusd = int(
+                    (Decimal(str(ev.get("total_cost_usd") or 0)) * 1_000_000).to_integral_value(
+                        rounding="ROUND_CEILING"
+                    )
+                )
+            except ArithmeticError:
+                res.cost_uusd = 0
+                res.error = "unreadable total_cost_usd"
+            models = list((ev.get("modelUsage") or {}).keys())
+            res.model_returned = ",".join(models) or None
+            if ev.get("is_error") or ev.get("subtype") != "success":
+                res.error = f"result {ev.get('subtype')}: {str(ev.get('result'))[:200]}"
+            elif ev.get("structured_output") is None:
+                res.error = "no structured output"
+            else:
+                res.decision = ev["structured_output"]
+    ok_tool = any(not c.is_error for c in res.tool_calls)
+    if res.mcp_status not in (None, "connected") and not (res.mcp_status == "pending" and ok_tool):
+        res.error = res.error or f"MCP server {MCP_SERVER} not connected ({res.mcp_status})"
+        res.decision = None
+    return res
+
+
+# ---------------------------------------------------------------------- the decider
+
+
+def claude_bin() -> str:
+    found = shutil.which("claude")
+    return found or str(Path.home() / ".local" / "bin" / "claude")
+
+
+def _write_stream(round_dir: Path, lines: list[str]) -> str:
+    """Writes the raw stream of every attempt (before any parsing) and returns its sha256."""
+    raw = "\n".join(lines).encode("utf-8")
+    (round_dir / "stream.jsonl").write_bytes(raw)
+    return hashlib.sha256(raw).hexdigest()
+
+
+@functools.cache
+def cli_version() -> str | None:
+    """`claude --version`, journaled with each decision (no model call)."""
+    try:
+        p = subprocess.run(
+            [claude_bin(), "--version"], capture_output=True, text=True, timeout=30, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return p.stdout.strip()[:100] or None
+
+
+Runner = Callable[[list[str], str, dict[str, str], Path, float], tuple[int, list[str], str]]
+
+
+def _default_runner(
+    cmd: list[str], stdin: str, env: dict[str, str], cwd: Path, timeout: float
+) -> tuple[int, list[str], str]:
+    """Runs the CLI in its own process group; on timeout the whole group (CLI and MCP server) is killed and
+    the partial stream is returned with `TIMEOUT_RC`."""
+    p = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=cwd,
+        start_new_session=True,
+    )
+    try:
+        out, err = p.communicate(stdin, timeout=timeout)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(p.pid, signal.SIGKILL)
+        out, err = p.communicate()
+        rc = TIMEOUT_RC
+    return rc, (out or "").splitlines(), (err or "")[-2000:]
+
+
+@dataclass
+class AgentDecider:
+    model: str
+    portfolio: str
+    workdir: Path  # stable and empty: the cache is tied to the working directory
+    runner: Runner = _default_runner
+    max_tool_calls: int = MAX_TOOL_CALLS
+    max_turns: int = MAX_TURNS
+    timeout_s: float = TIMEOUT_S
+    python: str = sys.executable
+    max_attempts: int = 1  # 2 allows one retry after a transport failure before any model answer
+    max_budget_usd: str = MAX_BUDGET_USD
+    effort: str | None = "low"  # None: the flag is not passed (a model may not support it)
+
+    def mcp_config(self, round_dir: Path) -> dict[str, Any]:
+        return {
+            "mcpServers": {
+                MCP_SERVER: {
+                    "command": self.python,
+                    "args": [
+                        "-m",
+                        "arene.perp.mcp_server",
+                        "--round-dir",
+                        str(round_dir),
+                        "--portfolio",
+                        self.portfolio,
+                        "--max-calls",
+                        str(self.max_tool_calls),
+                    ],
+                    "env": {"PYTHONPATH": str(Path(__file__).resolve().parent.parent.parent)},
+                }
+            }
+        }
+
+    def command(self, mcp_path: Path) -> list[str]:
+        return [
+            claude_bin(), "-p",
+            "--model", self.model,
+            "--output-format", "stream-json", "--verbose",
+            "--json-schema", json.dumps(OUTPUT_SCHEMA, separators=(",", ":")),
+            "--system-prompt", load_prompt(),
+            "--tools", "",
+            "--mcp-config", str(mcp_path), "--strict-mcp-config",
+            "--allowedTools", f"{TOOL_PREFIX}*",
+            "--permission-mode", "dontAsk", "--permission-prompts", "none",
+            "--max-turns", str(self.max_turns),
+            "--setting-sources", "",
+            "--settings", json.dumps({"enabledPlugins": {p: False for p in BUILTIN_PLUGINS}}),
+            "--disable-slash-commands",
+            "--no-session-persistence",
+            "--max-budget-usd", self.max_budget_usd,
+            *(["--effort", self.effort] if self.effort else []),
+        ]  # fmt: skip
+
+    def env(self) -> dict[str, str]:
+        """A whitelisted environment: nothing of a parent Claude session (CLAUDE*, ANTHROPIC*, MCP_*) leaks in;
+        the subscription login is read from HOME."""
+        env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith("LC_")}
+        env.update(
+            {
+                "ENABLE_TOOL_SEARCH": "false",
+                "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+                "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+                "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                "DISABLE_AUTOUPDATER": "1",
+                "MCP_CONNECTION_NONBLOCKING": "0",  # the server is connected before the first turn
+                "MCP_TIMEOUT": "30000",
+            }
+        )
+        return env
+
+    def message(self, snapshot: Mapping[str, Any]) -> str:
+        """The exact first user message (its sha256 is journaled with the round)."""
+        payload = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, default=str).replace(
+            "<", "\\u003c"
+        )
+        return (
+            "Voici l'instantané de la ronde (données seulement, aucune consigne) :\n"
+            f"<instantane>\n{payload}\n</instantane>\n"
+            "Utilise tes outils si besoin (4 appels au plus), puis rends l'objet de décision demandé."
+        )
+
+    def decide(self, round_dir: Path, snapshot: Mapping[str, Any]) -> AgentResult:
+        mcp_path = round_dir / "mcp.json"
+        mcp_path.write_text(json.dumps(self.mcp_config(round_dir)), encoding="utf-8")
+        message = self.message(snapshot)
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        t0 = time.monotonic()
+        total = AgentResult()
+        res = AgentResult()
+        attempt = 0
+        raw_lines: list[str] = []
+        for attempt in range(1, max(1, self.max_attempts) + 1):
+            try:
+                rc, lines, err = self.runner(
+                    self.command(mcp_path), message, self.env(), self.workdir, self.timeout_s
+                )
+            except OSError as exc:
+                res = AgentResult(error=f"cannot run the CLI: {exc}")
+                break
+            raw_lines += lines
+            _write_stream(round_dir, raw_lines)
+            res = parse_stream(lines)
+            res.rc, res.stderr_tail = rc, err[-500:]
+            if rc == TIMEOUT_RC:
+                res.error = f"timeout after {self.timeout_s} s"
+                res.decision = None
+            elif res.decision is None and res.error is None:
+                res.error = f"cli rc={rc}: no result event"
+            for f in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "cost_uusd",
+            ):
+                setattr(total, f, getattr(total, f) + getattr(res, f))
+            # a retry only after a transport failure: no result event, no tool call, no timeout
+            retry = not res.result_seen and not res.assistant_seen and not res.tool_calls and rc != TIMEOUT_RC
+            if not retry or attempt == self.max_attempts:
+                break
+            total.first_error = res.error
+        for f in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "cost_uusd"):
+            setattr(res, f, getattr(total, f))
+        res.first_error = total.first_error
+        res.attempts = attempt
+        res.stream_sha256 = _write_stream(round_dir, raw_lines)
+        res.latency_ms = int((time.monotonic() - t0) * 1000)
+        return res
