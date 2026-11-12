@@ -8,7 +8,8 @@ pointing to a closed local port, so no request reaches Anthropic, and the CLI's 
 (the MCP server connected, the tools offered are the six `mcp__arene__*` tools plus `StructuredOutput` and
 nothing else, no skill, no slash command, no plugin, the permission mode, the model).
 
-`call` makes ONE call (no retry, budget ceiling 0.10 USD, no `--effort`) on a trial league in
+`call` makes ONE call (no retry; by default a 0.10 USD ceiling and no `--effort`; step 6 passes
+`--step 6 --effort low --budget 1.00`, the spot league's effort) on a trial league in
 `VAR_PERP/essais/<ts>/` (its own journal, a fresh portfolio, the real collected market data read only). It
 refuses to run within 20 minutes before or 30 minutes after a spot cycle (HH:05 UTC every 4 h), and holds the
 spot cycle lock during the call, so no spot cycle or wake-up can run at the same time (a veille tick that
@@ -46,6 +47,7 @@ SPOT_CYCLE_HOURS = range(0, 24, 4)
 SPOT_CYCLE_MINUTE = 5
 BEFORE_S, AFTER_S = 20 * 60, 30 * 60
 BUDGET_USD = "0.10"
+LOCK_WAIT_S = 90.0  # a veille tick holds the spot lock a few seconds; a cycle or a wake-up longer: refused
 
 
 def spot_cycle_too_close(now_ts: int) -> str | None:
@@ -119,15 +121,22 @@ class Trial:
         )
         self.sim.open_portfolio(self.portfolio, "llm", now_ts)
 
-    def decider(self, model: str, runner: Any = _default_runner, timeout_s: float = 240.0) -> AgentDecider:
+    def decider(
+        self,
+        model: str,
+        runner: Any = _default_runner,
+        timeout_s: float = 240.0,
+        budget_usd: str = BUDGET_USD,
+        effort: str | None = None,
+    ) -> AgentDecider:
         return AgentDecider(
             model,
             self.portfolio,
             DEFAULT_WORKDIR,
             runner=runner,
             max_attempts=1,
-            max_budget_usd=BUDGET_USD,
-            effort=None,
+            max_budget_usd=budget_usd,
+            effort=effort,
             timeout_s=timeout_s,
         )
 
@@ -147,7 +156,7 @@ def preflight(args: argparse.Namespace) -> int:
         return _default_runner(cmd, stdin, {**env, "ANTHROPIC_BASE_URL": "http://127.0.0.1:9"}, cwd, timeout)
 
     decider = trial.decider(args.model, runner=offline, timeout_s=45)
-    snap = snapshot(data, "essai", None)
+    snap = snapshot(data, "rendezvous", None)
     res = decider.decide(out_dir, snap)
     init = first_init(out_dir / "stream.jsonl")
     problems = check_init(init, args.model)
@@ -177,14 +186,14 @@ def call(args: argparse.Namespace) -> int:
         return 2
     spot = Paths.from_env(var=args.spot_var)
     try:
-        with cycle_lock(spot, 0.0):
-            root = args.data_var / "essais" / f"5bis-{now}"
+        with cycle_lock(spot, LOCK_WAIT_S):
+            root = args.data_var / "essais" / f"{args.step.replace('-', '')}-{now}-{args.model}"
             trial = Trial(root, args.data_var, args.model, now)
             t0 = time.monotonic()
             res = run_agent_round(
-                var=root, sim=trial.sim, store=trial.store, decider=trial.decider(args.model), view=trial.view,
+                var=root, sim=trial.sim, store=trial.store, decider=trial.decider(args.model, budget_usd=args.budget, effort=args.effort or None), view=trial.view,
                 specs=trial.specs, policy=trial.policy, config_sha256=trial.cfg.sha256, round_id=now, now_ts=now,
-                kind="essai", trigger=None, entries_blocked=False,
+                kind="rendezvous", trigger=None, entries_blocked=False,
             )  # fmt: skip
             seconds = round(time.monotonic() - t0, 1)
     except CycleBusy:
@@ -206,7 +215,8 @@ def call(args: argparse.Namespace) -> int:
         problems.append("no cost or no tokens reported")
     line = {
         "ts": now,
-        "step": "5-bis",
+        "step": args.step,
+        "effort": args.effort or None,
         "model_requested": args.model,
         "model_returned": dec["model_returned"],
         "cost_uusd": dec["cost_uusd"],
@@ -237,6 +247,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--spot-var", type=Path, required=True, help="the spot var (its cycle lock)")
     ap.add_argument("--model", default="claude-haiku-5-5")
+    ap.add_argument("--step", default="5-bis", help="the label logged with the call (5-bis, 6)")
+    ap.add_argument(
+        "--effort", default="", help="'' (no flag, the 5-bis default) or low, as in the spot league"
+    )
+    ap.add_argument("--budget", default=BUDGET_USD, help="--max-budget-usd of the call")
     args = ap.parse_args(argv)
     args.data_var = args.data_var.resolve()
     return preflight(args) if args.mode == "preflight" else call(args)
