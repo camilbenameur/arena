@@ -6,7 +6,7 @@ L'historique public ne garde donc que la dernière version (le journal haché, l
 
     .venv/bin/python ops/publier.py --depot OWNER/arene --racine /arene/ [--sec]
 
-`--sec` construit et vérifie sans rien pousser. Lancé par arene-publication.timer, après chaque cycle.
+`--sec` construit et vérifie sans rien pousser. Lancé par arene-publication.timer toutes les 30 min (HH:25 et HH:55 UTC).
 """
 
 from __future__ import annotations
