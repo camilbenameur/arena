@@ -52,7 +52,7 @@ SPECS = specs()
 class World:
     """A synthetic collector store plus a watcher on a temporary league directory."""
 
-    def __init__(self, tmp: Path, *, trend_days: int = 22) -> None:
+    def __init__(self, tmp: Path, *, trend_days: int = 22, llm=None, factory=None, offset: int = 0) -> None:
         self.var = tmp / "var-perp"
         self.spot = Paths(var=tmp / "spot-var", user_kill=tmp / "USER_KILL")
         self.store = PerpDataStore(data_root(self.var))
@@ -66,7 +66,16 @@ class World:
         self.snapshot(T0)
         for h in range(T0 - 7200, T0 + 1, 3600):
             self.funding(h)
-        self.w = PerpWatcher(self.var, CFG, POLICY, SPECS, spot_paths=self.spot)
+        self.w = PerpWatcher(
+            self.var,
+            CFG,
+            POLICY,
+            SPECS,
+            spot_paths=self.spot,
+            llm=llm,
+            decider_factory=factory,
+            round_offset_s=offset,
+        )
 
     def candle(self, s: str, ts: int, px: int, low: int | None = None, high: int | None = None) -> None:
         lo, hi = low if low is not None else px, high if high is not None else px

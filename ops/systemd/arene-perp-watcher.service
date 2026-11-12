@@ -9,5 +9,6 @@ ExecStart=%h/dev/arene-trading/.venv/bin/python -m arene.perp.watcher tick
 # Exit 3 = the tick finished with problems (listed in the perp_tick event): not a unit failure.
 # A crash (exit 1) fails the unit: `systemctl --user --failed` shows it.
 SuccessExitStatus=3
-TimeoutStartSec=600
+# A tick with an LLM round runs up to 4 calls in parallel (240 s each, then killed).
+TimeoutStartSec=900
 Nice=10
