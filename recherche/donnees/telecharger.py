@@ -22,7 +22,7 @@ from recherche.config import DERNIER_MOIS, CoupureError
 BASE = "https://data.binance.vision/data"
 LISTE = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 PAUSE_S = 1.0  # une requête par seconde
-SOURCES = ("perp_funding", "perp_klines_1h", "spot_klines_1d")
+SOURCES = ("perp_funding", "perp_klines_1h", "spot_klines_1d", "spot_klines_1h")
 
 
 class TelechargementError(Exception):
@@ -50,6 +50,8 @@ def _chemin(source: str, symbole: str) -> str:
         return f"futures/um/monthly/klines/{symbole}/1h"
     if source == "spot_klines_1d":
         return f"spot/monthly/klines/{symbole}/1d"
+    if source == "spot_klines_1h":
+        return f"spot/monthly/klines/{symbole}/1h"
     raise ValueError(f"source inconnue : {source!r} (attendu : {SOURCES})")
 
 
@@ -59,6 +61,7 @@ def nom_fichier(source: str, symbole: str, annee: int, mois: int) -> str:
         "perp_funding": f"{symbole}-fundingRate-{mm}.zip",
         "perp_klines_1h": f"{symbole}-1h-{mm}.zip",
         "spot_klines_1d": f"{symbole}-1d-{mm}.zip",
+        "spot_klines_1h": f"{symbole}-1h-{mm}.zip",
     }[source]
 
 

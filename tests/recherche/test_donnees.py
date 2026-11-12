@@ -138,7 +138,7 @@ class Serveur:
 # ------------------------------------------------------------------------------------ pare-feu / url
 
 @pytest.mark.parametrize("annee,mois", [(2026, 7), (2026, 12), (2027, 1), (2030, 3)])
-@pytest.mark.parametrize("source", ["perp_funding", "perp_klines_1h", "spot_klines_1d"])
+@pytest.mark.parametrize("source", ["perp_funding", "perp_klines_1h", "spot_klines_1d", "spot_klines_1h"])
 def test_mois_apres_coupure_leve_sans_reseau(tmp_path, source, annee, mois):
     class Interdit(httpx.BaseTransport):
         def handle_request(self, request):
@@ -160,6 +160,8 @@ def test_urls():
         "https://data.binance.vision/data/futures/um/monthly/klines/ETHUSDT/1h/ETHUSDT-1h-2026-06.zip")
     assert u("spot_klines_1d", "ADAUSDT", 2020, 1) == (
         "https://data.binance.vision/data/spot/monthly/klines/ADAUSDT/1d/ADAUSDT-1d-2020-01.zip")
+    assert u("spot_klines_1h", "EOSUSDT", 2021, 3) == (
+        "https://data.binance.vision/data/spot/monthly/klines/EOSUSDT/1h/EOSUSDT-1h-2021-03.zip")
     with pytest.raises(ValueError):
         u("autre", "BTCUSDT", 2020, 1)
 
@@ -308,7 +310,8 @@ def test_admissibilite():
 
 def racine_factice(tmp_path, *, fin_1d="2026-06-30", barres_1h=None, saute_1h=(), saute_1d=(),
                    funding=None, perp_debut="2026-06-29T00:00:00", perp_n=48, perp_saute=(),
-                   avec_perp=True, controle=True) -> Path:
+                   avec_perp=True, controle=True, ctl_saute_1h=(), ctl_perp=True, ctl_1h=True,
+                   ctl_1h_debut="2026-06-29T00:00:00", ctl_1h_n=48, ctl_funding=None) -> Path:
     """Racine minimale : un symbole AAAUSDT, 10 jours 1 j, 1 h sur la période demandée."""
     r = tmp_path / "donnees"
     (r / "labo").mkdir(parents=True)
@@ -332,6 +335,20 @@ def racine_factice(tmp_path, *, fin_1d="2026-06-30", barres_1h=None, saute_1h=()
         d.mkdir(parents=True)
         (d / "CTLUSDT-1d-2026-06.zip").write_bytes(
             zip_de("x.zip", lignes_barres("2026-06-20T00:00:00", 10, 86400, micro=True)))
+        if ctl_1h:
+            d = r / "brut" / "spot_klines_1h" / "CTLUSDT"
+            d.mkdir(parents=True)
+            (d / "CTLUSDT-1h-2026-06.zip").write_bytes(
+                zip_de("x.zip", lignes_barres(ctl_1h_debut, ctl_1h_n, 3600, saute=ctl_saute_1h)))
+        if ctl_perp:
+            d = r / "brut" / "perp_klines_1h" / "CTLUSDT"
+            d.mkdir(parents=True)
+            (d / "CTLUSDT-1h-2026-06.zip").write_bytes(
+                zip_de("x.zip", lignes_barres("2026-06-29T00:00:00", 48, 3600, entete=True)))
+            d = r / "brut" / "perp_funding" / "CTLUSDT"
+            d.mkdir(parents=True)
+            f = ctl_funding or [ms("2026-06-29T00:00:00") + k * 8 * 3600_000 for k in range(6)]
+            (d / "CTLUSDT-fundingRate-2026-06.zip").write_bytes(zip_de("x.zip", lignes_funding(f)))
     return r
 
 
@@ -367,6 +384,55 @@ def test_chargeur_nominal_et_connue_a(tmp_path):
     c = d.controle_1d["CTLUSDT"]
     assert len(c) == 10 and c.index[0] == pd.Timestamp("2026-06-20")  # microsecondes normalisées
     assert d.manifeste_sha256
+    h1 = d.controle_1h["CTLUSDT"]
+    assert len(h1) == 48 and int(h1["connue_a"].iloc[-1]) == COUPURE_TS and not h1["rempli"].any()
+    assert len(d.controle_perp_1h["CTLUSDT"]) == 48
+    cf = d.controle_funding["CTLUSDT"]
+    assert len(cf) == 6 and int(cf["connue_a"].iloc[0]) == ms("2026-06-29T00:00:00") // 1000 + 1
+
+
+def test_controle_sans_perp_ni_1h_donne_none(tmp_path):
+    d = charge(tmp_path, racine_factice(tmp_path, ctl_perp=False, ctl_1h=False))
+    assert d.controle_perp_1h == {"CTLUSDT": None} and d.controle_funding == {"CTLUSDT": None}
+    assert d.controle_1h == {"CTLUSDT": None} and len(d.controle_1d["CTLUSDT"]) == 10
+
+
+def test_controle_delisté_s_arrete_sans_erreur(tmp_path):
+    # barres 1 h de contrôle arrêtées le 2026-03-02 : pas d'erreur, la table finit là
+    d = charge(tmp_path, racine_factice(tmp_path, ctl_1h_debut="2026-03-01T00:00:00", ctl_1h_n=48))
+    assert d.controle_1h["CTLUSDT"].index[-1] == pd.Timestamp("2026-03-02 23:00")
+
+
+def test_controle_1h_perp_funding_apres_coupure_leve(tmp_path):
+    with pytest.raises(CoupureError, match="contrôle 1h"):
+        charge(tmp_path, racine_factice(tmp_path, ctl_1h_debut="2026-06-30T12:00:00", ctl_1h_n=13))
+    with pytest.raises(CoupureError, match="funding"):
+        charge(tmp_path / "f", racine_factice(
+            tmp_path / "f", ctl_funding=[ms("2026-06-30T16:00:00"), ms("2026-07-01T00:00:00")]))
+    d = charge(tmp_path / "ok", racine_factice(tmp_path / "ok", ctl_funding=[ms("2026-06-30T16:00:00")]))
+    assert int(d.controle_funding["CTLUSDT"]["connue_a"].iloc[-1]) == ms("2026-06-30T16:00:00") // 1000 + 1
+
+
+def test_controle_1h_memes_tolerances(tmp_path):
+    # 1/48 > 0,1 % dans la fenêtre : erratum 3, la série commence après le trou (rien n'est rempli)
+    d0 = charge(tmp_path, racine_factice(tmp_path, ctl_saute_1h={10}))
+    h = d0.controle_1h["CTLUSDT"]
+    assert len(h) == 37 and not h["rempli"].any() and "CTLUSDT contrôle 1h" in d0.debuts_coupes
+    # le même trou avant la fenêtre d'évaluation (2019) est rempli sans seuil
+    d = charge(tmp_path / "e", racine_factice(tmp_path / "e", ctl_1h_debut="2019-03-01T00:00:00",
+                                               ctl_saute_1h={10}))
+    assert int(d.controle_1h["CTLUSDT"]["rempli"].sum()) == 1
+
+
+def test_manifeste_couvre_les_sources_de_controle(tmp_path):
+    r = racine_factice(tmp_path)
+    doc = construire_manifeste(r, ctl_json(tmp_path))
+    for prefixe in ("brut/spot_klines_1h/CTLUSDT/", "brut/perp_klines_1h/CTLUSDT/", "brut/perp_funding/CTLUSDT/"):
+        assert any(k.startswith(prefixe) for k in doc["fichiers"]), prefixe
+    z = r / "brut" / "spot_klines_1h" / "CTLUSDT" / "CTLUSDT-1h-2026-06.zip"
+    z.write_bytes(z.read_bytes() + b"x")
+    with pytest.raises(ManifesteError, match="différent"):
+        verifier_manifeste(r, tmp_path / "univers_controle.json")
 
 
 def test_perp_absent_donne_none(tmp_path):
@@ -498,12 +564,24 @@ def test_construire_donnees_complet_et_reprenable(tmp_path, monkeypatch):
             n = 31 if mois == "2020-01" else 29
             srv.ajouter(f"spot/monthly/klines/{sym}/1d/{sym}-1d-{mois}.zip",
                         zip_de("x.zip", lignes_barres(f"{mois}-01T00:00:00", n, 86400, qv=10.0 + i)))
+    for sym in ("K2USDT", "K1USDT"):  # contrôle : spot 1 h pour les deux, perp seulement pour K2
+        srv.ajouter(f"spot/monthly/klines/{sym}/1h/{sym}-1h-2026-06.zip",
+                    zip_de("x.zip", lignes_barres("2026-06-01T00:00:00", 3, 3600)))
+        srv.ajouter(f"spot/monthly/klines/{sym}/1h/{sym}-1h-2026-07.zip", zip_de("x.zip", lignes_barres("2026-07-01T00:00:00", 3, 3600)))
+    srv.ajouter("futures/um/monthly/klines/K2USDT/1h/K2USDT-1h-2026-06.zip",
+                zip_de("x.zip", lignes_barres("2026-06-01T00:00:00", 3, 3600)))
+    srv.ajouter("futures/um/monthly/fundingRate/K2USDT/K2USDT-fundingRate-2026-06.zip",
+                zip_de("x.zip", lignes_funding([ms("2026-06-01T00:00:00")])))
     racine = tmp_path / "racine"
     ctl = tmp_path / "univers_controle.json"
     with srv.client() as c:
         doc = construire_donnees(racine, labo_src=tmp_path / "labo_src", univers_controle_path=ctl, client=c)
         assert json.loads(ctl.read_text())["symboles"] == ["K2USDT", "K1USDT"]
         assert not any("2026-07" in u for u in srv.requetes)
+        brut = racine / "brut"
+        assert len(list((brut / "spot_klines_1h").rglob("*.zip"))) == 2
+        assert len(list((brut / "perp_klines_1h" / "K2USDT").glob("*.zip"))) == 1
+        assert not (brut / "perp_klines_1h" / "K1USDT").exists()  # pas de perp : normal
         n_zips = srv.n_zips
         verifier_manifeste(racine, ctl)
         assert (racine / "MANIFESTE.json").exists() and doc["univers_controle_sha256"]
@@ -540,3 +618,20 @@ def test_trous_de_l_echauffement_remplis_sans_seuil_ceux_de_la_fenetre_refuses()
     assert int(out["rempli"].sum()) == 3 and len(out) == 60
     with pytest.raises(DonneesError, match="trou"):
         _regulariser(serie("2019-12-01", 60, {40}), 86400, "w", crit, None)  # trou en 2020 : refusé
+
+
+def test_erratum3_debut_admissible_apres_le_dernier_trou_hors_tolerance():
+    import numpy as np
+    import pandas as pd
+
+    from recherche.donnees.chargeur import _debut_admissible
+    idx = pd.date_range("2020-01-01", periods=20_000, freq="h")
+    a = np.zeros(len(idx), bool)
+    a[1000:1072] = True   # 72 h
+    a[5000:5048] = True   # 48 h
+    a[9000:9003] = True   # 3 h : dans la tolérance, ne coupe pas
+    d = _debut_admissible(pd.Series(a, index=idx), 0.001, 6)
+    assert d == idx[5048]
+    assert _debut_admissible(pd.Series(np.zeros(10, bool), index=idx[:10]), 0.001, 6) == idx[0]
+    tout = np.zeros(100, bool); tout[-10:] = True
+    assert _debut_admissible(pd.Series(tout, index=idx[:100]), 0.001, 6) is None

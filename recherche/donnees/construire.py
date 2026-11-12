@@ -21,7 +21,7 @@ def construire_donnees(racine: Path | str = RACINE_DEFAUT, *, labo_src: Path | s
     """Copie du labo, choix de l'univers de contrôle, téléchargements (mois <= 2026-06), manifeste.
 
     Reprenable : tout fichier déjà présent et vérifié est sauté sans réseau ; la progression va sur stderr.
-    Renvoie le manifeste. Durée : plusieurs heures à 1 requête/s (environ 4 000 archives).
+    Renvoie le manifeste. Durée : plusieurs heures à 1 requête/s (environ 8 000 archives avec l'univers de contrôle).
     """
     racine = Path(racine)
     racine.mkdir(parents=True, exist_ok=True)
@@ -37,6 +37,10 @@ def construire_donnees(racine: Path | str = RACINE_DEFAUT, *, labo_src: Path | s
         log("[3/4] plan des téléchargements (listings publics)")
         demandes = [(src, s) for s in crit.univers for src in ("perp_funding", "perp_klines_1h")]
         demandes += [("spot_klines_1d", s) for s in controle]
+        # Univers de contrôle (C16) : mêmes sources que l'univers principal ; un symbole sans perp n'a
+        # simplement aucun mois listé (normal).
+        demandes += [(src, s) for s in controle
+                     for src in ("spot_klines_1h", "perp_klines_1h", "perp_funding")]
         for src, s in demandes:
             plan += [(src, s, a, m) for a, m in lister_mois(src, s, client)]
         log(f"[4/4] {len(plan)} archives à vérifier/télécharger")
