@@ -29,7 +29,8 @@ INTERDITS = [
     (re.compile(r"CLAUDE\.md|\.claude/|Co-Authored-By|Generated with", re.IGNORECASE), "trace d'outillage"),
     (re.compile(r"abonnement Claude|Claude Code|claude -p"), "mode d’appel des modèles"),
     (re.compile(r"RUNBOOK|docs/[A-Z]"), "document interne"),
-    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"), "adresse e-mail"),
+    # Une lettre avant @ et un domaine alphabétique : « BTC@65000.5 » dans une justification n'est pas une adresse.
+    (re.compile(r"[A-Za-z][\w.+-]*@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}\b"), "adresse e-mail"),
     (re.compile(r"\b100\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"), "adresse ou nom de machine"),
 ]
 TEXTES = {".html", ".json", ".js", ".css", ".txt"}
