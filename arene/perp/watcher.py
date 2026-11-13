@@ -84,7 +84,19 @@ WAKE_PENDING_S = HOUR_S
 WAKE_COOLDOWN_S = HOUR_S
 WAKE_MAX_PER_DAY = 6  # per UTC day, as docs/VEILLE.md
 WAKE_GUARD_BEFORE_ROUND_S = 1800
+# no wake-up from 5 min before to 30 min after a spot cycle (HH:05 at 00, 04, ... UTC): the two leagues do not call
+# the models at the same time; the crossing stays pending (an hour) and is served after the window
+SPOT_CYCLE_S = 4 * HOUR_S
+SPOT_CYCLE_OFFSET_S = 300
+SPOT_GUARD_BEFORE_S = 300
+SPOT_GUARD_AFTER_S = 1800
 ROUND_LATE_S = 1800  # a rendez-vous is run (or resumed) by a tick at most 30 min after its time
+
+
+def near_spot_cycle(ts: int) -> bool:
+    """True from SPOT_GUARD_BEFORE_S before to SPOT_GUARD_AFTER_S after a spot cycle."""
+    since = (ts - SPOT_CYCLE_OFFSET_S) % SPOT_CYCLE_S  # seconds since the last spot cycle
+    return since < SPOT_GUARD_AFTER_S or SPOT_CYCLE_S - since <= SPOT_GUARD_BEFORE_S
 
 
 @dataclass
@@ -598,6 +610,7 @@ class PerpWatcher:
             now_ts - last_round < WAKE_COOLDOWN_S
             or len(today) >= WAKE_MAX_PER_DAY
             or rdv + ROUND_S - now_ts < WAKE_GUARD_BEFORE_ROUND_S
+            or near_spot_cycle(now_ts)
         ):
             return
         best = max(candidates, key=lambda p: abs(p["payload"]["move_bp"]))

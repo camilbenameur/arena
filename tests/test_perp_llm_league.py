@@ -36,14 +36,14 @@ def test_the_config_file_is_valid_and_strict(tmp_path):
     assert [m.model for m in LEAGUE.models] == [
         "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2",
     ]  # fmt: skip
-    assert LEAGUE.enabled and not LEAGUE.wakeups and LEAGUE.max_parallel == 4
+    assert LEAGUE.enabled and LEAGUE.wakeups and LEAGUE.max_parallel == 4
     assert [m.daily_budget_uusd for m in LEAGUE.models] == [100_000, 900_000, 1_800_000, 3_500_000]
     bad = tmp_path / "bad.toml"
     raw = Path("config/perp-llm.toml").read_text()
     for old, new in (
         ('"0.10"', "0.10"),
         ("max_parallel = 4", "max_parallel = 9"),
-        ("wakeups = false", "x = 1"),
+        ("wakeups = true", "x = 1"),
     ):
         bad.write_text(raw.replace(old, new, 1))
         with pytest.raises((LlmConfigError, ValueError)):
@@ -74,7 +74,8 @@ def test_the_four_models_play_the_rendezvous_together(tmp_path):
 
 def test_wakeups_are_rendezvous_only_until_enabled(tmp_path):
     calls: list[str] = []
-    w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
+    off = dataclasses.replace(LEAGUE, wakeups=False)
+    w = World(tmp_path, llm=off, factory=factory(tmp_path, calls))
     w.w.tick(T0 + 120)
     n = len(calls)
     verdicts = [

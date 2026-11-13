@@ -1,8 +1,9 @@
 # Perp league, step 7: the LLM portfolios (docs/ETUDE-AGENTS-TRADERS.md §11, decisions D7, D8 and step 7 unblocked
 # by the owner on 12/11/2026). Hashed (sha256 of the bytes) and journaled with every agent round.
 enabled = true
-# Rendez-vous only for the first two weeks (study, step 7): no LLM wake-up. Set to true afterwards.
-wakeups = false
+# LLM wake-ups on from 13/11/2026 (the owner's decision, earlier than the two weeks of the study, step 7), within
+# the watcher's limits: 3 % in 1 h, cooldown 1 h, 6 per UTC day, none 30 min before a rendez-vous or near a spot cycle.
+wakeups = true
 max_parallel = 4          # at most 4 `claude` processes at the same time (study §2.4)
 timeout_s = 240           # per call (study §2.4)
 max_budget_usd = "1.00"   # hard ceiling of one call (--max-budget-usd); a round costs 0.002 to 0.13 $ (step 6)

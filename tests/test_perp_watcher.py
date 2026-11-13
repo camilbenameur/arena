@@ -343,3 +343,14 @@ def test_a_held_minute_without_data_is_waited_for(tmp_path):
     w.w.tick(T0 + 420)
     assert w.events("perp_tick")[-1]["payload"]["last_minute"] == before
     assert not w.events("minute_incomplete")
+
+
+def test_no_wakeup_near_a_spot_cycle():
+    from arene.perp.watcher import near_spot_cycle
+
+    day = 1_794_441_600  # 00:00 UTC
+    assert near_spot_cycle(day + 4 * 3600)  # 04:00, 5 min before the 04:05 cycle
+    assert near_spot_cycle(day + 4 * 3600 + 300 + 1799)  # 04:34:59
+    assert not near_spot_cycle(day + 4 * 3600 + 300 + 1800)  # 04:35
+    assert not near_spot_cycle(day + 3 * 3600 + 3599)  # 03:59:59
+    assert not near_spot_cycle(day + 2 * 3600)  # a perp rendez-vous is far from the spot cycles
