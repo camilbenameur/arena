@@ -176,3 +176,48 @@ def test_statut_d_execution_montre_meme_avec_fills(tmp_path):
 
     a = {"instrument": "BTC", "execution": "closed_without_stop", "fills": [{"qty": 10, "prix_uusd": 1_000_000, "frais_ueur": 1}]}
     assert "position refermée" in _execution(a)
+
+
+# --- Alertes et ordres d'entrée des agents (docs/SPEC-PERP-ALERTES-ORDRES.md) ---
+
+
+def _fable(site):
+    d = P.compute(Path(site).parent / "var-perp" / "journal" / "events.jsonl", NOW)
+    return next(p for p in d["portfolios"] if p["id"] == F.LLMS[3])
+
+
+def test_ordre_d_entree_declenche_garde_son_verdict_et_son_fill(site):
+    fable = _fable(site)
+    ordre = [d for d in fable["decisions"] if d["kind"] == "ordre"]
+    assert len(ordre) == 1
+    a = ordre[0]["actions"][0]
+    assert a["action"] == "open_long" and a["instrument"] == "SOL"
+    assert a["verdict"] == {"approuve": True, "motifs": []} and a["execution"] == "filled" and len(a["fills"]) == 1
+    assert a["invalidation"] == F.INVAL_ORDRE and a["stop_pct"] == 4
+    # La décision précédente (fermer ETH) garde son seul verdict et son seul fill.
+    ferme = next(d for d in fable["decisions"] if d["kind"] == "rendezvous" and d["actions"] and d["actions"][0]["action"] == "close")
+    assert len(ferme["actions"]) == 1 and len(ferme["actions"][0]["fills"]) == 1
+    assert fable["n_ordres"] == 3  # short ETH, fermeture, ordre SOL
+
+
+def test_en_attente_et_historique(site):
+    at = _fable(site)["attente"]
+    assert [(x["instrument"], x["condition"], x["note"]) for x in at["alertes"]] == [("ETH", "below", "support hebdomadaire")]
+    assert at["ordres"] == []
+    issues = {(x["type"], x["instrument"]): (x["issue"], x.get("issue_detail")) for x in at["historique"]}
+    assert issues[("alerte", "BTC")] == ("declenche", None)
+    assert issues[("ordre", "SOL")] == ("declenche", "exécuté")
+    assert issues[("alerte", "LTC")] == ("fin", "expiré")
+
+
+def test_page_montre_reveil_prive_pose_et_attente(site):
+    t = texte(lire(site, "derives/llm-perp-claude-fable-5-2.html"))
+    assert "En attente" in t and "support hebdomadaire" in t
+    assert "son alerte · BTC au-dessus de 89 540,50 $" in t
+    assert "ordre d’entrée · SOL sous" in t
+    assert "A laissé pour la suite" in t and F.NOTE_ALERTE in t and F.INVAL_ORDRE in t
+    assert "refusé à la création : niveau à plus de 25 % du prix" in t
+    assert "away from the mark" not in t  # le texte technique du refus ne sort pas
+    # Les autres IA n'ont rien laissé : section « Rien en attente ».
+    assert "Rien en attente" in texte(lire(site, "derives/llm-perp-claude-haiku-5-5.html"))
+    assert "Entre deux rendez-vous" in texte(lire(site, "methode.html"))

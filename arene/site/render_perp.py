@@ -72,9 +72,19 @@ def levier(x: float | None) -> str:
     return f"{x:.2f}".replace(".", ",") + f"{NBSP}×"
 
 
+def niveau(cond: str | None, prix: int | None) -> str:
+    """« au-dessus de 98 000,00 $ », « sous 3 200,00 $ »."""
+    mot = {"above": "au-dessus de", "below": "sous"}.get(cond or "", "à")
+    return f"{mot} {usd_prix(prix)}"
+
+
 def declencheur(d: dict[str, Any] | None) -> str:
     if not d:
         return "réveil"
+    if d.get("type") == "alerte":
+        return f"son alerte · {d.get('instrument') or '?'} {niveau(d.get('condition'), d.get('prix_uusd'))}"
+    if d.get("type") == "ordre":
+        return f"ordre d’entrée · {d.get('instrument') or '?'} {niveau(d.get('condition'), d.get('prix_uusd'))}"
     mv = d.get("move_bp")
     if mv is None:
         return f"réveil · {d.get('instrument') or '?'}"
@@ -82,7 +92,7 @@ def declencheur(d: dict[str, Any] | None) -> str:
 
 
 def _pastille_ronde(d: dict[str, Any]) -> str:
-    if d.get("kind") != "wakeup":
+    if d.get("kind") not in ("wakeup", "alert", "ordre"):
         return ""
     return f'<span class="pastille reveil">{e(declencheur(d.get("declencheur")))}</span> '
 
@@ -100,6 +110,48 @@ def _resume(actions: list[dict[str, Any]]) -> str:
         return "Aucun ordre"
     txt = ", ".join(mots)
     return txt[:1].upper() + txt[1:]
+
+
+def element(x: dict[str, Any]) -> str:
+    """Une alerte ou un ordre d'entrée en une ligne HTML (textes du modèle échappés)."""
+    lieu = f"{e(x['instrument'])} {niveau(x.get('condition'), x.get('prix_uusd'))}"
+    if x["type"] == "alerte":
+        txt = f"<strong>Alerte</strong> {lieu}"
+        if x.get("note"):
+            txt += f' <span class="muted">« {e(x["note"])} »</span>'
+        return txt
+    parts = [f"<strong>Ordre {e(x.get('sens') or '?')}</strong> {lieu}"]
+    if x.get("taille_pct") is not None:
+        parts.append(f"{pc(x['taille_pct'])} du portefeuille")
+    if x.get("stop_pct") is not None:
+        parts.append(f"stop {pc(x['stop_pct'])}")
+    if x.get("objectif_pct") is not None:
+        parts.append(f"objectif {pc(x['objectif_pct'])}")
+    txt = " · ".join(parts)
+    if x.get("invalidation"):
+        txt += f'<span class="invalidation">Invalide si{NNBSP}: {e(x["invalidation"])}</span>'
+    return txt
+
+
+def _pose_resume(d: dict[str, Any]) -> str:
+    """« 1 alerte et 1 ordre posés » ; vide si rien."""
+    els = (d.get("pose") or {}).get("elements") or []
+    na = sum(1 for x in els if x["type"] == "alerte")
+    no = len(els) - na
+    mots = [m for m in (pluriel(na, "alerte posée", "alertes posées") if na else "", pluriel(no, "ordre d’entrée posé", "ordres d’entrée posés") if no else "") if m]
+    return " et ".join(mots)
+
+
+def _pose(d: dict[str, Any]) -> str:
+    pose = d.get("pose") or {}
+    els, refus = pose.get("elements") or [], pose.get("refus") or []
+    if not els and not refus:
+        return ""
+    items = "".join(f"<li>{element(x)}</li>" for x in els)
+    if refus:
+        motifs = sorted({r["motif"] for r in refus})
+        items += f'<li class="muted">{pluriel(len(refus), "refusé", "refusés")} à la création : {e(", ".join(motifs))}</li>'
+    return f'<div class="pose"><span class="etiquette">A laissé pour la suite</span><ul class="liste-simple">{items}</ul></div>'
 
 
 def _positions_cell(p: dict[str, Any]) -> str:
@@ -225,7 +277,7 @@ def _dernieres(perp: dict[str, Any]) -> str:
             f'{lien}<span class="quand">{quand(d["ts"], annee=False)}</span>{_pastille_ronde(d)}'
             f'<span class="resume-ordres">{e(_resume_ligne(d))}</span>'
         )
-        corps = _justif(d)
+        corps = _justif(d) + _pose(d)
         items.append(
             f'<li class="ligne"><details><summary>{resume}</summary>{corps}</details></li>' if corps else f'<li class="ligne sans-detail">{resume}</li>'
         )
@@ -242,7 +294,10 @@ def _resume_ligne(d: dict[str, Any]) -> str:
         return f"Ronde sautée : {d['saut']}"
     if d["statut"] == "echec":
         return f"Pas de décision ({d['erreur']})"
-    return _resume(d["actions"])
+    pose = _pose_resume(d)
+    if not d["actions"] and pose:
+        return f"Aucun ordre, {pose}"
+    return _resume(d["actions"]) + (f", {pose}" if pose else "")
 
 
 def index_page(data: dict[str, Any]) -> str:
@@ -427,13 +482,45 @@ def _decision(d: dict[str, Any]) -> str:
         elif d["statut"] == "en_cours":
             txt = '<span class="muted">en cours</span>'
         else:
-            txt = '<span class="muted">Aucun ordre</span>'
+            txt = f'<span class="muted">{e(_resume_ligne(d))}</span>'
         resume = f'<span class="quand">{quand(d["ts"])}</span>{ronde}{txt}{_meta(d)}'
-        corps = _justif(d)
+        corps = _justif(d) + _pose(d)
         return f'<li class="ligne"><details><summary>{resume}</summary>{corps}</details></li>' if corps else f'<li class="ligne">{resume}</li>'
-    tete = f'{ronde}<span class="resume-ordres">{e(_resume(d["actions"]))}</span>'
-    corps = f'<div class="decision-pile">{_justif(d)}{_actions(d)}</div>'
+    tete = f'{ronde}<span class="resume-ordres">{e(_resume_ligne(d))}</span>'
+    corps = f'<div class="decision-pile">{_justif(d)}{_actions(d)}{_pose(d)}</div>'
     return f'<li class="decision"><article><header><h3>{quand(d["ts"])}</h3>{tete}{_meta(d)}</header>{corps}</article></li>'
+
+
+def _attente(p: dict[str, Any]) -> str:
+    """Alertes et ordres d'entrée en attente, puis ce qu'il est advenu des précédents (replié)."""
+    at = p.get("attente")
+    if not at:
+        return ""
+    en_cours = at["alertes"] + at["ordres"]
+    if en_cours:
+        corps = '<ul class="decisions attente">' + "".join(
+            f'<li class="ligne"><span class="el">{element(x)}</span><span class="muted">jusqu’au {quand(x["expire_ts"], annee=False) if x.get("expire_ts") else "—"}</span></li>'
+            for x in en_cours
+        ) + "</ul>"
+    else:
+        corps = '<p class="vide vide-court">Rien en attente.</p>'
+    histo = ""
+    if at["historique"]:
+        def issue(x: dict[str, Any]) -> str:
+            if x["issue"] == "declenche":
+                mot = "déclenchée" if x["type"] == "alerte" else "déclenché"
+                det = f" · {x['issue_detail']}" if x.get("issue_detail") else ""
+                return f'<span class="issue"><span class="pastille ok">{mot}</span><span class="muted">{e(det)}</span></span>'
+            return f'<span class="issue"><span class="pastille neutre">{e(x.get("issue_detail") or "terminé")}</span></span>'
+
+        rows = "".join(
+            f'<li class="ligne"><span class="el">{element(x)}</span>{issue(x)}<span class="muted">{quand(x["ts"], annee=False)}</span></li>' for x in at["historique"]
+        )
+        histo = f'<details class="lecture precedents"><summary>Les précédents</summary><ul class="decisions attente">{rows}</ul></details>'
+    return (
+        '<section aria-labelledby="titre-attente"><h2 id="titre-attente">En attente <span class="h-note">alertes et ordres d’entrée qu’elle a laissés</span></h2>'
+        f"{corps}{histo}</section>"
+    )
 
 
 def _operations(p: dict[str, Any]) -> str:
@@ -509,6 +596,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 <dl class="stats">{"".join(stats)}</dl>
 <section aria-labelledby="titre-courbe"><h2 id="titre-courbe">Rendement net <span class="h-note">frais et funding compris</span></h2>{_chart_block(chart, focus=p["id"], focus_name=p["name"])}</section>
 <section aria-labelledby="titre-positions"><h2 id="titre-positions">Positions <span class="h-note">fictives, prix en dollars</span></h2>{_positions(p)}</section>
+{_attente(p) if llm else ""}
 {decisions}
 {operations}
 """
@@ -550,6 +638,12 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 <p>Un instantané du compte et des 6 marchés, puis 4 appels au plus parmi 6 outils en lecture seule, figés au début de la ronde (ni web, ni donnée postérieure) :</p>
 <ul class="liste-simple">{outils}</ul>
 <p>Chaque décision donne une justification et, pour chaque ordre, une condition d’invalidation. Le garde-fou la juge, puis l’exécution est simulée.</p>
+<h3>Entre deux rendez-vous</h3>
+<ul class="liste-simple">
+<li><strong>Réveil de marché</strong> : un mouvement de 3{NBSP}% en 1{NBSP}h sur un contrat réveille les 4{NBSP}IA.</li>
+<li><strong>Alerte</strong> : à chaque décision, une IA peut laisser 3 alertes de prix au plus. Une alerte franchie ne réveille qu’elle.</li>
+<li><strong>Ordre d’entrée</strong> : 3 au plus, à un niveau de prix. Franchi, il passe le garde-fou puis s’exécute, sans rappeler l’IA. Chaque décision remplace ce qui était en attente.</li>
+</ul>
 <p><span class="pastille {"ok" if ok else "perte-bg"}">Journal de la ligue : {"chaîne intacte" if ok else "ÉCHEC"}</span> {pluriel(j["n_records"], "événement")}.</p>
 </section>
 """

@@ -338,3 +338,12 @@ details.lecture > summary .h2-inline { font-family: var(--serif); font-size: 1.3
 .actions td:nth-child(2) { min-width: 18rem; }
 .dernieres .sans-detail { padding-left: calc(1em + 14px); }
 .exec-note { display: block; font-size: .82rem; margin-top: 2px; }
+.pose { font-size: .9rem; }
+.pose .etiquette { display: block; margin-bottom: 4px; }
+.pose ul { margin: 0; }
+.pose li + li { margin-top: 4px; }
+.attente .ligne { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.attente .el { flex: 1 1 22rem; }
+.attente .issue { display: inline-flex; gap: 6px; align-items: baseline; }
+.attente + details { margin-top: 12px; }
+.lecture.precedents { max-width: none; }

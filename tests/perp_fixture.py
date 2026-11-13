@@ -33,6 +33,12 @@ TEMOINS = ["benchmark-perp:basket-1x", "benchmark-perp:trend", "benchmark-perp:r
 FABLE_RAISON = "ETH perd 3 % sur 24 h, funding positif : les longs paient. RSI 4 h sous 45. Je vends 25 % à découvert."
 INVALIDATION = "clôture 4 h au-dessus de 3 300 $"
 SECRET = "/tmp/arena/var-perp/rounds/x"
+NOTE_ALERTE = "cassure du plus haut de la veille"
+INVAL_ORDRE = "SOL clôture 4 h sous 120 $"
+ALERTE_BTC = "a1" * 32
+ORDRE_SOL = "e1" * 32
+ALERTE_LTC = "a2" * 32
+ALERTE_ETH = "a3" * 32
 
 
 def prix(inst: str, ts: int) -> int:
@@ -97,6 +103,10 @@ def build(path: Path) -> Path:
         if ts in rdvs or ts == wake:
             rnd += 1
             _ronde(g, ts, rnd, wake=ts == wake)
+        if ts == rdvs[1] + 1_800:  # l'ordre d'entrée de Fable est franchi entre deux rondes
+            _ordre_declenche(g, ts)
+        if ts == rdvs[1] + 3_600:  # son alerte BTC aussi : ronde privée « alert »
+            _alerte_et_ronde_privee(g, ts)
         if ts == rdvs[1] + 3_000:  # la veille touche le stop de Sonnet
             acc = g.book.states["llm-perp:claude-sonnet-5-5"]
             if "BTC-PERP" in acc.positions:
@@ -155,6 +165,41 @@ def _executer(g: Gen, pf: str, inst: str, action: str, ts: int, k: int, approuve
     g.add("perp_execution", {"intent_id": iid, "portfolio": pf, "instrument": PF_KRAKEN[inst], "status": "filled", "error": None}, ts)
 
 
+def _ordre_declenche(g: Gen, ts: int) -> None:
+    """Spec alertes-ordres §2.6 : franchissement, verdict, fill, stop et exécution, tous avec intent_id = id de l'ordre."""
+    fable = LLMS[3]
+    px = prix("SOL-PERP", ts)
+    g.add("agent_entry_triggered", {"portfolio": fable, "id": ORDRE_SOL, "instrument": "PF_SOLUSD", "side": "long", "condition": "below",
+                                    "price_uusd": px, "minute": ts - 120, "mark_high_uusd": px + 10, "mark_low_uusd": px - 10}, ts)  # fmt: skip
+    qty = qty_pour(100_000_000, "SOL-PERP", ts)
+    g.add("perp_verdict", {"intent_id": ORDRE_SOL, "portfolio": fable, "instrument": "PF_SOLUSD", "action": "open_long", "approved": True,
+                           "reasons": [], "qty": qty, "policy_sha256": "9" * 64, "error": None}, ts)  # fmt: skip
+    g.fill(fable, "SOL-PERP", qty, ts, "intent", ORDRE_SOL)
+    g.cond(fable, "SOL-PERP", "stop", px * 96 // 100, ts)
+    g.cond(fable, "SOL-PERP", "take_profit", px * 108 // 100, ts)
+    g.add("perp_execution", {"intent_id": ORDRE_SOL, "portfolio": fable, "instrument": "PF_SOLUSD", "status": "filled", "error": None}, ts)
+    g.add("agent_order_ended", {"portfolio": fable, "id": ALERTE_LTC, "kind": "alert", "reason": "expired"}, ts)
+
+
+def _alerte_et_ronde_privee(g: Gen, ts: int) -> None:
+    fable = LLMS[3]
+    px = prix("BTC-PERP", ts)
+    g.add("agent_alert_triggered", {"portfolio": fable, "id": ALERTE_BTC, "instrument": "PF_XBTUSD", "condition": "above",
+                                    "price_uusd": px, "minute": ts - 60, "mark_high_uusd": px, "mark_low_uusd": px - 5}, ts)  # fmt: skip
+    r = ts + 300
+    trig = {"alert_id": ALERTE_BTC, "instrument": "PF_XBTUSD", "condition": "above", "price_usd": "89540.5", "note": NOTE_ALERTE}
+    g.add("perp_round", {"round": r, "kind": "alert", "portfolios": [fable], "trigger": trig, "ts": r}, r)
+    g.add("round_data", {"portfolio": fable, "round": r, "kind": "alert", "trigger": json.dumps(trig), "sha256": "a" * 64,
+                         "message_sha256": "b" * 64, "path": SECRET}, r + 10)  # fmt: skip
+    g.add("agent_decision", {"portfolio": fable, "round": r, "kind": "alert", "model_requested": "claude-fable-5-2",
+                             "parsed": {"actions": [], "justification": "La cassure ne tient pas sur le volume. J'attends.", "action_errors": []},
+                             "parse_error": None, "cost_uusd": 40_000}, r + 40)  # fmt: skip
+    g.add("agent_orders_set", {"portfolio": fable, "round": r, "created_ts": r + 40, "rejected": [], "entry_orders": [],
+                               "alerts": [{"id": ALERTE_ETH, "instrument": "PF_ETHUSD", "condition": "below",
+                                           "price_uusd": 3_050_000_000, "note": "support hebdomadaire", "expires_ts": r + 86_400 * 30}]}, r + 40)  # fmt: skip
+    g.add("perp_round_done", {"round": r}, r + 60)
+
+
 def _ronde(g: Gen, ts: int, rnd: int, *, wake: bool) -> None:
     kind = "wakeup" if wake else "rendezvous"
     trig = {"instrument": "PF_SOLUSD", "move_bp": -342, "window_s": 3600, "pending_ts": ts - 300} if wake else None
@@ -188,6 +233,22 @@ def _ronde(g: Gen, ts: int, rnd: int, *, wake: bool) -> None:
         _decision(g, fable, ts, t, kind, [_action("ETH-PERP", "close", "100")], "L'objectif est loin, le funding s'inverse : je ferme.", [])
         acc = g.book.states[fable]
         _executer(g, fable, "ETH-PERP", "close", t, 0, True, qty=-acc.positions["ETH-PERP"].qty)
+        exp = t + 4 * 3_600
+        g.add("agent_orders_set", {
+            "portfolio": fable, "round": ts, "created_ts": t,
+            "alerts": [
+                {"id": ALERTE_BTC, "instrument": "PF_XBTUSD", "condition": "above", "price_uusd": prix("BTC-PERP", t) * 101 // 100,
+                 "note": NOTE_ALERTE, "expires_ts": exp},
+                {"id": ALERTE_LTC, "instrument": "PF_LTCUSD", "condition": "below", "price_uusd": prix("LTC-PERP", t) * 90 // 100,
+                 "note": None, "expires_ts": t + 3_600},
+            ],
+            "entry_orders": [
+                {"id": ORDRE_SOL, "instrument": "PF_SOLUSD", "side": "long", "condition": "below", "price_uusd": prix("SOL-PERP", t) * 99 // 100,
+                 "size_bp": 1_000, "stop_bp": 400, "take_profit_bp": 800, "horizon_h": 24, "expected_move_bp": 500,
+                 "confidence_pct": 55, "invalidation": INVAL_ORDRE, "expires_ts": exp},
+            ],
+            "rejected": [{"kind": "entry", "k": 1, "error": f"level more than 25 % away from the mark {SECRET}"}],
+        }, t)  # fmt: skip
         g.add("perp_llm_skipped", {"portfolio": haiku, "round": ts, "reason": "daily_budget"}, t)
     elif rnd == 3:
         g.add("round_data", {"portfolio": haiku, "round": ts, "kind": kind, "trigger": "null", "sha256": "a" * 64, "message_sha256": "b" * 64,

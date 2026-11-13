@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterable, Mapping
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 from arene.journal import Journal, verify
+from arene.perp import agent_orders as AO
 from arene.perp.ledger import MarginAccount, PerpLedgerError, price_pnl_uusd, replay, to_eur
 
 ROUND_S = 4 * 3600
@@ -28,6 +30,7 @@ DECISIONS_MAX = 120
 OPERATIONS_MAX = 60
 JUSTIFICATION_MAX = 1_200
 INVALIDATION_MAX = 200
+NOTE_MAX = 160
 
 PANIER = "benchmark-perp:basket-1x"
 TENDANCE = "benchmark-perp:trend"
@@ -70,7 +73,12 @@ EXECUTIONS = {
     "refused": "refusé à l’exécution",
     "error": "échec de l’exécution",
     "not_executed_view_stale": "non exécuté : données de marché périmées",
+    "not_executed_stale_trigger": "non exécuté : franchissement vu trop tard (plus de 15 min)",
+    "not_executed_refused_on_resume": "non exécuté : refusé à la reprise",
 }
+
+FINS = {"expired": "expiré", "replaced": "remplacé", "portfolio_halted": "annulé (portefeuille arrêté)"}
+HISTORIQUE_MAX = 12
 
 SAUTS = {
     "halted": "portefeuille arrêté",
@@ -181,8 +189,30 @@ def _texte(v: Any, n: int) -> str | None:
     return v if len(v) <= n else v[: n - 1].rstrip() + "…"
 
 
-def _declencheur(raw: Any) -> dict[str, Any] | None:
-    """Le déclencheur d'un réveil : seulement le contrat et la variation (le reste n'est pas publié)."""
+def _prix_uusd(v: Any) -> int | None:
+    """« 98000.5 » (dollars en texte) -> µUSD entiers."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        d = Decimal(str(v))
+    except InvalidOperation:
+        return None
+    return int(d.scaleb(6)) if d.is_finite() and d > 0 else None
+
+
+def _rejet_public(error: Any) -> str:
+    """Catégorie fixe d'un élément refusé à la création (le texte brut n'est pas publié)."""
+    s = str(error or "").lower()
+    if "25 %" in s or "away from the mark" in s:
+        return "niveau à plus de 25 % du prix"
+    if "already crossed" in s:
+        return "niveau déjà franchi"
+    return "élément invalide"
+
+
+def _declencheur(raw: Any, kind: str = "wakeup") -> dict[str, Any] | None:
+    """Le déclencheur d'une ronde hors rendez-vous. Réveil de marché : contrat et variation. Alerte de l'IA :
+    contrat, sens, niveau et sa note. Le reste (id, fenêtre interne) n'est pas publié."""
     d = raw
     if isinstance(raw, str):
         try:
@@ -191,8 +221,16 @@ def _declencheur(raw: Any) -> dict[str, Any] | None:
             return None
     if not isinstance(d, Mapping):
         return None
+    if kind == "alert":
+        cond = d.get("condition")
+        return {
+            "type": "alerte", "instrument": court(d.get("instrument")),
+            "condition": cond if cond in ("above", "below") else None, "prix_uusd": _prix_uusd(d.get("price_usd")),
+            "note": _texte(d.get("note"), NOTE_MAX),
+        }  # fmt: skip
     mv = d.get("move_bp")
     return {
+        "type": "marche",
         "instrument": court(d.get("instrument")),
         "move_bp": mv if isinstance(mv, int) else None,
         "window_s": d.get("window_s") if isinstance(d.get("window_s"), int) else 3600,
@@ -276,6 +314,64 @@ def _positions(acc: MarginAccount | None, marks: Mapping[str, int], fx: tuple[in
     return out
 
 
+def _bp_pct(v: Any) -> float | None:
+    return v / 100 if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _element(kind: str, d: Mapping[str, Any], created_ts: int | None = None) -> dict[str, Any]:
+    """Une alerte ou un ordre d'entrée posé par une IA, en champs publiables (ni id, ni texte technique)."""
+    cond = d.get("condition")
+    out: dict[str, Any] = {
+        "type": "alerte" if kind == "alert" else "ordre", "instrument": court(d.get("instrument")),
+        "condition": cond if cond in ("above", "below") else None,
+        "prix_uusd": d.get("price_uusd") if isinstance(d.get("price_uusd"), int) else None,
+        "expire_ts": d.get("expires_ts") if isinstance(d.get("expires_ts"), int) else None, "pose_ts": created_ts,
+    }  # fmt: skip
+    if kind == "alert":
+        out["note"] = _texte(d.get("note"), NOTE_MAX)
+    else:
+        side = d.get("side")
+        out.update({
+            "sens": side if side in ("long", "short") else None, "taille_pct": _bp_pct(d.get("size_bp")),
+            "stop_pct": _bp_pct(d.get("stop_bp")), "objectif_pct": _bp_pct(d.get("take_profit_bp")),
+            "horizon_h": d.get("horizon_h") if isinstance(d.get("horizon_h"), int) else None,
+            "attendu_pct": _bp_pct(d.get("expected_move_bp")),
+            "confiance_pct": d.get("confidence_pct") if isinstance(d.get("confidence_pct"), (int, float)) else None,
+            "invalidation": _texte(d.get("invalidation"), INVALIDATION_MAX),
+        })  # fmt: skip
+    return out
+
+
+def _attente(events: list[dict[str, Any]], pf: str) -> dict[str, Any]:
+    """Alertes et ordres d'entrée de `pf` : ce qui est en attente (dernier `agent_orders_set` moins ce qui est
+    déclenché ou terminé depuis, calcul du moteur) et ce qui est arrivé aux derniers éléments (hors remplacés :
+    chaque décision remplace l'ensemble, ce n'est pas un événement)."""
+    st = AO.pending_state(events, pf)
+    pending = [_element(el.kind, el.data, el.created_ts) for el in st.pending]
+    histo = []
+    for oid, el in st.catalog.items():
+        x = None
+        if oid in st.triggered:
+            x = {**_element(el.kind, el.data, el.created_ts), "ts": st.triggered[oid]["ts"], "issue": "declenche"}
+            if el.kind == "entry":
+                ex, v = st.executions.get(oid), st.verdicts.get(oid)
+                if v is not None and not v.get("approved"):
+                    x["issue_detail"] = "refusé par le garde-fou"
+                elif ex is not None:
+                    x["issue_detail"] = EXECUTIONS.get(str(ex.get("status")), "exécution inconnue")
+        elif oid in st.ended and st.ended[oid]["payload"].get("reason") != "replaced":
+            r = str(st.ended[oid]["payload"].get("reason"))
+            x = {**_element(el.kind, el.data, el.created_ts), "ts": st.ended[oid]["ts"], "issue": "fin", "issue_detail": FINS.get(r, "terminé")}
+        if x is not None:
+            histo.append(x)
+    histo.sort(key=lambda x: x["ts"], reverse=True)
+    return {
+        "alertes": [x for x in pending if x["type"] == "alerte"],
+        "ordres": [x for x in pending if x["type"] == "ordre"],
+        "historique": histo[:HISTORIQUE_MAX], "n_poses": len(st.catalog),
+    }
+
+
 def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]]:
     """Une entrée par ronde jouée (ou sautée) par le portefeuille LLM `pf`, de la plus récente à la plus ancienne.
 
@@ -284,13 +380,36 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
     rondes: dict[int, dict[str, Any]] = {}
     par_intent: dict[str, dict[str, Any]] = {}
     courante: dict[str, Any] | None = None
+    ordres: dict[str, Mapping[str, Any]] = {}  # id d'un ordre d'entrée -> l'ordre tel que posé
+    declenches: dict[str, dict[str, Any]] = {}  # id -> entrée « ordre déclenché » de la chronologie
+
+    def declenche(oid: str, ts: int, trig: Mapping[str, Any] | None) -> dict[str, Any]:
+        """Un ordre d'entrée déclenché entre deux rondes : sa propre entrée, à qui appartiennent verdict,
+        exécution et fills (`intent_id` = id de l'ordre), jamais à la dernière décision."""
+        if oid not in declenches:
+            o = ordres[oid]
+            el = _element("entry", o)
+            action = {
+                "instrument": el["instrument"], "action": "open_long" if el["sens"] == "long" else "open_short",
+                "taille_pct": el["taille_pct"], "stop_pct": el["stop_pct"], "objectif_pct": el["objectif_pct"],
+                "horizon_h": el["horizon_h"], "attendu_pct": el["attendu_pct"], "confiance_pct": el["confiance_pct"],
+                "invalidation": el["invalidation"], "ecartee": False, "verdict": None, "execution": None, "fills": [],
+            }  # fmt: skip
+            declenches[oid] = {
+                "round": ts, "ts": ts, "kind": "ordre", "statut": "declenche", "saut": None,
+                "declencheur": {"type": "ordre", "instrument": el["instrument"], "condition": el["condition"], "prix_uusd": el["prix_uusd"]},
+                "justification": None, "actions": [action], "outils": [], "erreur": None, "cout_uusd": None,
+                "latence_ms": None, "jetons": None, "pose": None,
+            }  # fmt: skip
+            par_intent[oid] = action
+        return declenches[oid]
 
     def ronde(r: int, ts: int) -> dict[str, Any]:
         if r not in rondes:
             rondes[r] = {
                 "round": r, "ts": ts, "kind": "rendezvous", "declencheur": None, "statut": "en_cours", "saut": None,
                 "justification": None, "actions": [], "outils": [], "erreur": None, "cout_uusd": None,
-                "latence_ms": None, "jetons": None,
+                "latence_ms": None, "jetons": None, "pose": None,
             }  # fmt: skip
         return rondes[r]
 
@@ -301,7 +420,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
         if t == "round_data":
             d = ronde(p["round"], e["ts"])
             d["kind"] = p.get("kind") or "rendezvous"
-            d["declencheur"] = _declencheur(p.get("trigger")) if d["kind"] == "wakeup" else None
+            d["declencheur"] = _declencheur(p.get("trigger"), d["kind"]) if d["kind"] in ("wakeup", "alert") else None
         elif t == "tool_call":
             d = ronde(p["round"], e["ts"])
             tool = str(p.get("tool") or "").removeprefix("mcp__arene__")
@@ -340,6 +459,22 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                     d["actions"].append({"instrument": "?", "action": None, "ecartee": True, "verdict": None, "execution": None, "fills": []})
             courante = d
             d["_libres"] = [a for a in d["actions"] if not a["ecartee"]]
+        elif t == "agent_orders_set":
+            d = ronde(p["round"], e["ts"])
+            al = [x for x in p.get("alerts") or [] if isinstance(x, Mapping)]
+            en = [x for x in p.get("entry_orders") or [] if isinstance(x, Mapping)]
+            for o in en:
+                ordres[str(o.get("id"))] = o
+            rej = [x for x in p.get("rejected") or [] if isinstance(x, Mapping)]
+            d["pose"] = {
+                "elements": [_element("alert", x) for x in al] + [_element("entry", x) for x in en],
+                "refus": [{"type": "alerte" if x.get("kind") == "alert" else "ordre", "motif": _rejet_public(x.get("error"))} for x in rej],
+            }  # fmt: skip
+        elif t == "agent_entry_triggered" and str(p.get("id")) in ordres:
+            declenche(str(p["id"]), e["ts"], p)
+        elif t == "perp_verdict" and str(p.get("intent_id")) in ordres:
+            a = declenche(str(p["intent_id"]), e["ts"], None)["actions"][0]
+            a["verdict"] = {"approuve": bool(p.get("approved")), "motifs": [str(c) for c in p.get("reasons") or []]}
         elif t == "perp_verdict" and courante is not None:
             libres = courante.get("_libres") or []
             a = next((x for x in libres if x["verdict"] is None and x["instrument"] == court(p.get("instrument")) and x["action"] == p.get("action")), None)
@@ -348,6 +483,8 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                 a["verdict"] = {"approuve": bool(p.get("approved")), "motifs": [str(c) for c in p.get("reasons") or []]}
                 par_intent[str(p.get("intent_id"))] = a
         elif t == "perp_execution":
+            if str(p.get("intent_id")) in ordres:
+                declenche(str(p["intent_id"]), e["ts"], None)
             a = par_intent.get(str(p.get("intent_id")))
             if a is None and courante is not None:
                 a = next((x for x in courante.get("_libres") or [] if x["execution"] is None and x["instrument"] == court(p.get("instrument"))), None)
@@ -362,7 +499,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                 a["fills"].append({"prix_uusd": p["price_uusd"], "qty": p["qty"], "frais_ueur": p.get("fee_ueur") or 0, "raison": p.get("reason")})
     for d in rondes.values():
         d.pop("_libres", None)
-    return sorted(rondes.values(), key=lambda d: d["round"], reverse=True)
+    return sorted([*rondes.values(), *declenches.values()], key=lambda d: (d["ts"] if d["kind"] == "ordre" else d["round"]), reverse=True)
 
 
 def _decisions_aleatoire(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -374,7 +511,7 @@ def _decisions_aleatoire(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if t == "perp_round":
             cur = rondes.setdefault(p["round"], {
                 "round": p["round"], "ts": e["ts"], "kind": p.get("kind") or "rendezvous",
-                "declencheur": _declencheur(p.get("trigger")) if p.get("kind") == "wakeup" else None,
+                "declencheur": _declencheur(p.get("trigger"), "wakeup") if p.get("kind") == "wakeup" else None,
                 "statut": "decidee", "actions": [],
             })  # fmt: skip
         elif t == "perp_verdict" and p.get("portfolio") == ALEATOIRE and cur is not None:
@@ -471,6 +608,11 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             p_out["n_decisions_total"] = len(ds)
             p_out["cout_uusd"] = sum(d["cout_uusd"] or 0 for d in ds)
             p_out["n_rondes"] = sum(1 for d in ds if d["statut"] == "decidee")
+            p_out["n_declenches"] = sum(1 for d in ds if d["kind"] == "ordre")
+            try:
+                p_out["attente"] = _attente(events, pf)
+            except (KeyError, TypeError, ValueError):  # un événement mal formé ne casse pas la page
+                p_out["attente"] = None
             p_out["n_ordres"] = sum(1 for d in ds for a in d["actions"] if a["fills"])
         elif pf == ALEATOIRE:
             p_out["decisions"] = _decisions_aleatoire(events)
