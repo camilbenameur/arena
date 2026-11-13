@@ -345,12 +345,29 @@ def test_a_held_minute_without_data_is_waited_for(tmp_path):
     assert not w.events("minute_incomplete")
 
 
-def test_no_wakeup_near_a_spot_cycle():
-    from arene.perp.watcher import near_spot_cycle
+def test_no_extra_round_just_before_a_spot_cycle():
+    from arene.perp.watcher import spot_cycle_soon
 
     day = 1_794_441_600  # 00:00 UTC
-    assert near_spot_cycle(day + 4 * 3600)  # 04:00, 5 min before the 04:05 cycle
-    assert near_spot_cycle(day + 4 * 3600 + 300 + 1799)  # 04:34:59
-    assert not near_spot_cycle(day + 4 * 3600 + 300 + 1800)  # 04:35
-    assert not near_spot_cycle(day + 3 * 3600 + 3599)  # 03:59:59
-    assert not near_spot_cycle(day + 2 * 3600)  # a perp rendez-vous is far from the spot cycles
+    assert spot_cycle_soon(day + 4 * 3600)  # 04:00, 5 min before the 04:05 cycle
+    assert spot_cycle_soon(day + 4 * 3600 + 299)  # 04:04:59
+    assert not spot_cycle_soon(day + 4 * 3600 + 300)  # 04:05: the cycle's lock says whether it still runs
+    assert not spot_cycle_soon(day + 3 * 3600 + 3599)  # 03:59:59
+    assert not spot_cycle_soon(day + 2 * 3600)  # a perp rendez-vous is far from the spot cycles
+
+
+def test_spot_busy_tests_the_lock_without_keeping_it(tmp_path):
+    import fcntl
+
+    from arene.perp.watcher import spot_busy
+
+    lock = tmp_path / "cycle.lock"
+    assert not spot_busy(lock) and not lock.exists()  # never created by the perp league
+    lock.touch()
+    assert not spot_busy(lock)
+    with open(lock, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        assert spot_busy(lock)
+        fcntl.flock(f, fcntl.LOCK_UN)
+    with open(lock, "a") as f:  # not kept: the spot league takes it at once
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)

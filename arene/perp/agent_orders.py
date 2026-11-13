@@ -230,3 +230,34 @@ def unserved_alerts(events: Sequence[Mapping[str, Any]], now_ts: int, max_age_s:
             }
         )
     return out
+
+
+WAKEUP_EARLY_S = 300  # a round of the owner starting at most one tick before the requested time serves it
+WAKEUP_LAPSE_S = 3600  # an asked wake-up not served within the hour lapses (never served late)
+
+
+def pending_wakeup(
+    events: Sequence[Mapping[str, Any]], portfolio: str, now_ts: int | None = None
+) -> dict[str, Any] | None:
+    """The wake-up the portfolio asked for (`agent_wakeup_set`), if no round of its own has served it yet:
+    {due_ts, round, seq}. Each valid decision replaces it (`due_ts` null: none); a round of the owner that
+    starts at most WAKEUP_EARLY_S before `due_ts` serves it (a rendez-vous within the tick, say). With
+    `now_ts`, a wake-up lapsed by then (WAKEUP_LAPSE_S after its time) is not pending either."""
+    last: Mapping[str, Any] | None = None
+    for e in events:
+        if e["type"] == "agent_wakeup_set" and e["payload"].get("portfolio") == portfolio:
+            last = e
+    if last is None or last["payload"].get("due_ts") is None:
+        return None
+    due, seq = int(last["payload"]["due_ts"]), last["seq"]
+    if now_ts is not None and now_ts - due >= WAKEUP_LAPSE_S:
+        return None
+    for e in events:
+        if (
+            e["type"] == "round_data"
+            and e["seq"] > seq
+            and e["payload"].get("portfolio") == portfolio
+            and e["ts"] >= due - WAKEUP_EARLY_S
+        ):
+            return None
+    return {"due_ts": due, "round": last["payload"].get("round"), "seq": seq}

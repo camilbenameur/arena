@@ -37,11 +37,13 @@ def test_the_config_file_is_valid_and_strict(tmp_path):
         "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2",
     ]  # fmt: skip
     assert LEAGUE.enabled and LEAGUE.wakeups and LEAGUE.max_parallel == 4
-    assert [m.daily_budget_uusd for m in LEAGUE.models] == [100_000, 900_000, 1_800_000, 3_500_000]
+    assert [m.daily_budget_uusd for m in LEAGUE.models] == [200_000, 2_000_000, 4_000_000, 8_500_000]
+    assert LEAGUE.rounds_per_day == 48
     bad = tmp_path / "bad.toml"
     raw = Path("config/perp-llm.toml").read_text()
     for old, new in (
-        ('"0.10"', "0.10"),
+        ('"0.20"', "0.20"),
+        ("rounds_per_day = 48", "rounds_per_day = 5"),
         ("max_parallel = 4", "max_parallel = 9"),
         ("wakeups = true", "x = 1"),
     ):
@@ -284,7 +286,7 @@ def mark_prices(btc: int) -> dict[str, int]:
 
 
 def alert_rounds(w):
-    return [e["payload"] for e in w.events("perp_round") if e["payload"]["kind"] == "alert"]
+    return [e["payload"] for e in w.events("perp_round") if e["payload"]["kind"] in ("alert", "private")]
 
 
 def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
@@ -306,9 +308,11 @@ def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
     )
     assert trig[0]["payload"]["mark_low_uusd"] == BTC_DOWN and trig[0]["payload"]["minute"] >= T0 + 3600
     [rnd] = alert_rounds(w)
-    assert rnd["portfolios"] == [HAIKU] and rnd["trigger"]["alert_id"] == trig[0]["payload"]["id"]
-    assert rnd["trigger"]["price_usd"] == str(LEVEL) and rnd["trigger"]["note"] == "support"
-    assert rep.rounds == [f"alert:{T0 + 4200}"]
+    own = rnd["triggers"][HAIKU]
+    assert rnd["portfolios"] == [HAIKU] and list(rnd["triggers"]) == [HAIKU] and rnd["trigger"] is None
+    assert own["kind"] == "alert" and own["alert_id"] == trig[0]["payload"]["id"]
+    assert own["price_usd"] == str(LEVEL) and own["note"] == "support"
+    assert rep.rounds == [f"private:{T0 + 4200}"]
     assert calls[4:] == [HAIKU_MODEL]  # nobody else was called
     rid = rnd["round"]
     rd = [e["payload"] for e in w.events("round_data") if e["payload"]["round"] == rid]
@@ -324,7 +328,7 @@ def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
     from arene.perp.agent_round import snapshot
 
     mine = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
-    comp = snapshot(mine, "alert", rnd["trigger"])
+    comp = snapshot(mine, "alert", own)
     assert comp["appel"]["type"] == "alert"
     assert comp["compte"]["depuis_ta_derniere_ronde"]["alertes_declenchees"][0]["niveau_usd"] == str(LEVEL)
     assert comp["compte"]["alertes_en_attente"] == []  # consumed: an alert serves once
@@ -338,46 +342,43 @@ def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
     assert len(alert_rounds(w)) == 1
 
 
-def test_alert_round_guards(tmp_path, monkeypatch):
+def test_alert_round_limits(tmp_path, monkeypatch):
     import arene.perp.watcher as W
 
-    # 1 h since the owner's last round: the alert waits (it stays servable for an hour)
+    # no delay after the owner's last round: the alert is served by the next tick
     w, calls, _ = orders_world(tmp_path / "a", alerts=[alert()])
     w.advance(T0 + 600, mark_prices(BTC_DOWN))
     w.w.tick(T0 + 600)
-    assert len(w.events("agent_alert_triggered")) == 1 and not alert_rounds(w)
-    w.advance(T0 + 3600 + 120)
-    w.w.tick(T0 + 3600 + 120)
-    assert len(alert_rounds(w)) == 1 and calls[4:] == [HAIKU_MODEL]
-    # a crossed alert waiting more than an hour is no longer served by a wake-up
+    assert len(w.events("agent_alert_triggered")) == 1 and len(alert_rounds(w)) == 1
+    assert calls[4:] == [HAIKU_MODEL]
+    # a crossed alert waiting more than an hour (here: a spot cycle never ending) is no longer served
     w2, calls2, _ = orders_world(tmp_path / "b", alerts=[alert()])
+    monkeypatch.setattr(W, "spot_cycle_soon", lambda ts: True)
     w2.advance(T0 + 600, mark_prices(BTC_DOWN))
     w2.w.tick(T0 + 600)
+    assert len(w2.events("agent_alert_triggered")) == 1 and not alert_rounds(w2)
+    monkeypatch.undo()
     w2.advance(T0 + 4500)
     w2.w.tick(T0 + 4500)
     assert not alert_rounds(w2) and len(calls2) == 4
-    # 4 alert rounds per portfolio and UTC day
+    # no round left today outside the rendez-vous: the alert waits for the next one
     w3, calls3, _ = orders_world(tmp_path / "c", alerts=[alert()])
-    for i in range(W.ALERT_MAX_PER_DAY):
-        rid = T0 + 1000 + i
-        w3.w.sim.append_event(
-            "perp_round",
-            {"round": rid, "kind": "alert", "trigger": None, "ts": T0 + 1000 + i, "portfolios": [HAIKU]},
-            T0 + 1000 + i,
-        )
-        w3.w.sim.append_event("perp_round_done", {"round": rid}, T0 + 1000 + i)
+    for i in range(LEAGUE.rounds_per_day):
+        w3.w.sim.append_event("round_data", {"portfolio": HAIKU, "round": -1 - i}, T0 + 200)
     w3.advance(T0 + 4200, mark_prices(BTC_DOWN))
     w3.w.tick(T0 + 4200)
-    assert len(w3.events("agent_alert_triggered")) == 1 and len(alert_rounds(w3)) == W.ALERT_MAX_PER_DAY
-    assert len(calls3) == 4
-    # none near a spot cycle; the alert is served by the first tick outside it
+    assert len(w3.events("agent_alert_triggered")) == 1 and not alert_rounds(w3) and len(calls3) == 4
+    # the spot league holds its cycle lock: the round waits; it is served by the first tick after
     w4, calls4, _ = orders_world(tmp_path / "d", alerts=[alert()])
-    real = W.near_spot_cycle
-    monkeypatch.setattr(W, "near_spot_cycle", lambda ts: True)
-    w4.advance(T0 + 4200, mark_prices(BTC_DOWN))
-    w4.w.tick(T0 + 4200)
-    assert not alert_rounds(w4)
-    monkeypatch.setattr(W, "near_spot_cycle", real)
+    import fcntl
+
+    w4.spot.var.mkdir(parents=True, exist_ok=True)
+    with open(w4.spot.lock, "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        w4.advance(T0 + 4200, mark_prices(BTC_DOWN))
+        rep = w4.w.tick(T0 + 4200)
+        assert not alert_rounds(w4) and any("spot league" in n for n in rep.notes)
+        fcntl.flock(f, fcntl.LOCK_UN)
     w4.advance(T0 + 4500)
     w4.w.tick(T0 + 4500)
     assert len(alert_rounds(w4)) == 1 and calls4[4:] == [HAIKU_MODEL]
@@ -385,7 +386,7 @@ def test_alert_round_guards(tmp_path, monkeypatch):
 
 def test_no_alert_round_before_a_rendezvous_and_the_rendezvous_serves_it(tmp_path):
     w, calls, _ = orders_world(tmp_path, alerts=[alert(expires_h=24)])
-    t = T0 + 4 * 3600 - 1500  # 25 min before the next rendezvous
+    t = T0 + 4 * 3600 - 200  # the next rendezvous falls within the tick
     w.advance(t, mark_prices(BTC_DOWN))
     w.w.tick(t)
     assert len(w.events("agent_alert_triggered")) == 1 and not alert_rounds(w) and len(calls) == 4
@@ -444,7 +445,7 @@ def test_an_interrupted_alert_round_is_resumed_for_its_owner_only(tmp_path, monk
     monkeypatch.undo()
     w.advance(T0 + 4500)
     rep = w.w.tick(T0 + 4500)
-    assert any("(resumed)" in r and r.startswith("alert:") for r in rep.rounds)
+    assert any("(resumed)" in r and r.startswith("private:") for r in rep.rounds)
     assert len(calls) == 4  # never called again after a cut
     skipped = [e["payload"] for e in w.events("perp_llm_skipped")]
     assert [s["portfolio"] for s in skipped] == [HAIKU]  # the filter survived the resume: nobody else
@@ -692,3 +693,271 @@ def test_a_cut_between_the_fill_and_the_stop_is_never_left_unprotected(tmp_path,
     assert statuses == ["closed_without_stop"]
     assert "PF_XBTUSD" not in replay(w.events())[HAIKU].positions
     assert len([e for e in w.events("perp_fill") if e["payload"]["order_id"] == oid]) == 1
+
+
+# ---- free wake-ups (docs/SPEC-PERP-REVEILS-LIBRES.md)
+
+
+def private_rounds(w):
+    return [e["payload"] for e in w.events("perp_round") if e["payload"]["kind"] == "private"]
+
+
+def asked_world(tmp_path, minutes: dict[str, int | None], league=LEAGUE):
+    """The first rendezvous (T0) where each model in `minutes` asks to be woken up; nobody trades."""
+    calls: list[str] = []
+    extra: dict = {"*": {"actions": [], "justification": "j"}}
+    for model, n in minutes.items():
+        extra[model] = {"next_wakeup_min": n}
+    w = World(tmp_path, llm=league, factory=factory(tmp_path, calls, extra=extra))
+    rep = w.w.tick(T0 + 120)
+    assert not rep.problems, rep.problems
+    for model in minutes:
+        extra[model] = {}
+    return w, calls, extra
+
+
+def test_a_model_is_woken_up_when_it_asked(tmp_path):
+    import json
+
+    from arene.perp.agent_orders import pending_wakeup
+    from arene.perp.agent_round import snapshot
+
+    w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 30})
+    [asked] = w.events("agent_wakeup_set")
+    due = asked["payload"]["due_ts"]
+    assert asked["payload"]["portfolio"] == HAIKU and asked["payload"]["minutes"] == 30
+    assert T0 + 120 + 1800 <= due < T0 + 120 + 1800 + 60  # counted from when the decision is applied
+    w.advance(T0 + 1500)
+    w.w.tick(T0 + 1500)
+    assert not private_rounds(w) and len(calls) == 4  # not yet
+    w.advance(T0 + 1800)
+    rep = w.w.tick(T0 + 1800)  # the tick starting at most 2.5 min before the time asked serves it
+    [rnd] = private_rounds(w)
+    assert rep.rounds == [f"private:{T0 + 1800}"] and rnd["portfolios"] == [HAIKU]
+    assert rnd["triggers"][HAIKU] == {"kind": "scheduled", "asked_at_round": T0, "due_ts": due}
+    assert calls[4:] == [HAIKU_MODEL]
+    rd = [e["payload"] for e in w.events("round_data") if e["payload"]["round"] == T0 + 1800]
+    assert [r["kind"] for r in rd] == ["scheduled"]
+    data = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
+    snap = snapshot(data, "scheduled", rnd["triggers"][HAIKU])
+    assert snap["appel"]["type"] == "scheduled"
+    rounds = snap["compte"]["rondes"]
+    assert rounds["rondes_par_jour"] == 48 and rounds["rondes_jouees_aujourd_hui"] == 1
+    from arene.perp.round_quota import rendezvous_left
+
+    left = rendezvous_left(T0 + 1800, 0)
+    assert rounds["rendez_vous_restants_aujourd_hui"] == left
+    assert rounds["rondes_hors_rendez_vous_restantes"] == 48 - 1 - left - 1
+    assert rounds["reveil_demande_utc"] is not None  # still pending when the round was built
+    assert pending_wakeup(w.events(), HAIKU) is None  # served
+    w.advance(T0 + 2100)
+    w.w.tick(T0 + 2100)
+    assert len(private_rounds(w)) == 1 and len(calls) == 5  # served once
+
+
+def test_each_decision_replaces_the_asked_wakeup(tmp_path):
+    from arene.perp.agent_orders import pending_wakeup
+
+    w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 240})
+    assert pending_wakeup(w.events(), HAIKU) is not None
+    # an alert-free market wake-up at 01:00: Haiku's decision asks nothing, so the pending wake-up is cancelled
+    w.advance(T0 + 3630)
+    play_at(w, T0 + 3600, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 3630)
+    sets = [e["payload"] for e in w.events("agent_wakeup_set")]
+    assert [s["due_ts"] for s in sets][-1] is None and pending_wakeup(w.events(), HAIKU) is None
+    # a decision that asks again replaces it; a model that never asked writes nothing
+    extra[HAIKU_MODEL] = {"next_wakeup_min": 5}
+    w.advance(T0 + 7230)
+    play_at(w, T0 + 7200, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 7230)
+    assert {e["payload"]["portfolio"] for e in w.events("agent_wakeup_set")} == {HAIKU}
+    due = pending_wakeup(w.events(), HAIKU)["due_ts"]
+    assert T0 + 7200 + 30 + 300 <= due < T0 + 7200 + 30 + 360
+
+
+def play_at(w: World, round_id: int, kind: str, trigger, now: int) -> None:
+    view, rep = _view(w, now)
+    w.w._deferred = None
+    w.w._round(round_id, kind, trigger, now, view, rep)
+    if w.w._deferred is not None:
+        w.w._llm_phase(**w.w._deferred, rep=rep)
+
+
+def test_an_invalid_asked_time_keeps_the_pending_wakeup(tmp_path):
+    from arene.perp.agent_orders import pending_wakeup
+
+    w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 240})
+    due = pending_wakeup(w.events(), HAIKU)["due_ts"]
+    extra[HAIKU_MODEL] = {"next_wakeup_min": 4}
+    w.advance(T0 + 3630)
+    play_at(w, T0 + 3600, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 3630)
+    [d] = [
+        e["payload"]
+        for e in w.events("agent_decision")
+        if e["payload"]["round"] == T0 + 3600 and e["payload"]["portfolio"] == HAIKU
+    ]
+    assert d["parse_error"] is None and d["parsed"]["next_wakeup_invalid"]
+    assert len(w.events("agent_wakeup_set")) == 1 and pending_wakeup(w.events(), HAIKU)["due_ts"] == due
+    # 60.0 is an integer for the CLI's JSON schema: accepted
+    extra[HAIKU_MODEL] = {"next_wakeup_min": 60.0}
+    w.advance(T0 + 7230)
+    play_at(w, T0 + 7200, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 7230)
+    assert w.events("agent_wakeup_set")[-1]["payload"]["minutes"] == 60
+
+
+def test_an_invalid_asked_time_is_rejected_alone(tmp_path):
+    w, _calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 3})
+    assert not w.events("agent_wakeup_set")
+    [d] = [e["payload"] for e in w.events("agent_decision") if e["payload"]["portfolio"] == HAIKU]
+    assert d["parse_error"] is None and d["parsed"]["next_wakeup_min"] is None
+    rej = [
+        e["payload"]["rejected"] for e in w.events("agent_orders_set") if e["payload"]["portfolio"] == HAIKU
+    ]
+    assert rej == [
+        [{"kind": "wakeup", "k": 0, "error": "next_wakeup_min: an integer from 5 to 240 is expected"}]
+    ]
+
+
+def test_two_models_due_at_the_same_tick_share_one_private_round(tmp_path):
+    w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 30, "claude-sonnet-5-5": 30})
+    w.advance(T0 + 1800)
+    w.w.tick(T0 + 1800)
+    [rnd] = private_rounds(w)
+    sonnet = "llm-perp:claude-sonnet-5-5"
+    assert rnd["portfolios"] == sorted([HAIKU, sonnet]) and set(rnd["triggers"]) == {HAIKU, sonnet}
+    assert sorted(calls[4:]) == sorted([HAIKU_MODEL, "claude-sonnet-5-5"])
+    # each model saw its own trigger only
+    rd = {
+        e["payload"]["portfolio"]: e["payload"]
+        for e in w.events("round_data")
+        if e["payload"]["round"] == T0 + 1800
+    }
+    import json
+
+    for p in (HAIKU, sonnet):
+        assert json.loads(rd[p]["trigger"]) == rnd["triggers"][p]
+    # no benchmark plays a private round
+    assert not [
+        e
+        for e in w.events("perp_verdict")
+        if e["payload"]["portfolio"].startswith("random") and e["ts"] >= T0 + 1800
+    ]
+
+
+def test_a_rendezvous_within_the_tick_serves_the_asked_wakeup(tmp_path):
+    w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 237})  # due at about 03:59
+    t = T0 + 4 * 3600 - 90
+    w.advance(t)
+    w.w.tick(t)
+    assert not private_rounds(w) and len(calls) == 4
+    w.advance(T0 + 4 * 3600 + 120)
+    w.w.tick(T0 + 4 * 3600 + 120)  # the rendezvous serves it
+    assert len(calls) == 8
+    w.advance(T0 + 4 * 3600 + 420)
+    w.w.tick(T0 + 4 * 3600 + 420)
+    assert not private_rounds(w) and len(calls) == 8
+
+
+def test_an_asked_wakeup_lapses_after_an_hour(tmp_path, monkeypatch):
+    import arene.perp.watcher as W
+
+    w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 30})
+    monkeypatch.setattr(W, "spot_busy", lambda lock: True)
+    for t in range(T0 + 1800, T0 + 1800 + 3900, 300):
+        w.advance(t)
+        w.w.tick(t)
+    monkeypatch.undo()
+    w.advance(T0 + 6000)
+    w.w.tick(T0 + 6000)
+    assert not private_rounds(w) and len(calls) == 4
+
+
+def test_the_rounds_per_day_quota(tmp_path):
+    from arene.perp.round_quota import quota, rendezvous_left
+
+    day = 1_794_441_600
+    assert [rendezvous_left(day + h * 3600, 7200) for h in (0, 2, 3, 21, 22, 23)] == [6, 5, 5, 1, 0, 0]
+    events = [
+        {"type": "round_data", "ts": day + 60 + i, "seq": i, "payload": {"portfolio": "p", "round": i}}
+        for i in range(10)
+    ]
+    events.append(
+        {"type": "round_data", "ts": day - 10, "seq": 99, "payload": {"portfolio": "p", "round": 99}}
+    )
+    q = quota(events, "p", day + 3 * 3600, 48, 7200)
+    assert q == {"per_day": 48, "played_today": 10, "rendezvous_left": 5, "extra_left": 33}
+    # with no extra round left, the market wake-up leaves the model out (the others play)
+    w, calls, _ = asked_world(tmp_path, {})
+    for i in range(LEAGUE.rounds_per_day):
+        w.w.sim.append_event("round_data", {"portfolio": HAIKU, "round": -1 - i}, T0 + 200)
+    w.advance(T0 + 3600 + 300)
+    w.w.tick(T0 + 3600 + 300)
+    up = dict(PRICES, PF_SOLUSD=PRICES["PF_SOLUSD"] * 1025 // 1000)  # +2.5 %: over the 2 % threshold
+    w.advance(T0 + 3600 + 600, up)
+    rep = w.w.tick(T0 + 3600 + 600)
+    [wk] = [e["payload"] for e in w.events("perp_round") if e["payload"]["kind"] == "wakeup"]
+    assert rep.rounds == [f"wakeup:{T0 + 3600 + 600}"]
+    assert HAIKU not in wk["portfolios"] and len(wk["portfolios"]) == 3 and HAIKU_MODEL not in calls[4:]
+    assert len(calls) == 7
+
+
+def test_market_wakeups_are_15_min_apart_without_a_daily_cap(tmp_path):
+    import arene.perp.watcher as W
+
+    assert W.WAKE_MOVE_BP == 200 and W.WAKE_COOLDOWN_S == 900 and not hasattr(W, "WAKE_MAX_PER_DAY")
+    w, _calls, _ = asked_world(tmp_path, {})
+    w.advance(T0 + 3600 + 300)
+    w.w.tick(T0 + 3600 + 300)
+    up = dict(PRICES, PF_SOLUSD=PRICES["PF_SOLUSD"] * 1025 // 1000)
+    w.advance(T0 + 3600 + 600, up)
+    assert w.w.tick(T0 + 3600 + 600).rounds == [f"wakeup:{T0 + 3600 + 600}"]
+    up2 = dict(up, PF_ETHUSD=PRICES["PF_ETHUSD"] * 1025 // 1000)
+    w.advance(T0 + 3600 + 900, up2)
+    assert w.w.tick(T0 + 3600 + 900).rounds == []  # ETH crossed, but 5 min after the last wake-up
+    w.advance(T0 + 3600 + 1500, up2)
+    assert w.w.tick(T0 + 3600 + 1500).rounds == [f"wakeup:{T0 + 3600 + 1500}"]  # served 15 min after
+
+
+def test_a_market_crossing_during_the_spot_guard_is_served_after(tmp_path, monkeypatch):
+    import arene.perp.watcher as W
+
+    w, calls, _ = asked_world(tmp_path, {})
+    w.advance(T0 + 3600 + 300)
+    w.w.tick(T0 + 3600 + 300)
+    monkeypatch.setattr(W, "spot_busy", lambda lock: True)
+    up = dict(PRICES, PF_SOLUSD=PRICES["PF_SOLUSD"] * 1025 // 1000)
+    w.advance(T0 + 3600 + 600, up)
+    rep = w.w.tick(T0 + 3600 + 600)
+    assert rep.rounds == [] and len(w.events("perp_wake_pending")) == 1  # recorded while waiting
+    monkeypatch.undo()
+    w.advance(T0 + 3600 + 900, up)
+    assert w.w.tick(T0 + 3600 + 900).rounds == [f"wakeup:{T0 + 3600 + 900}"]
+    assert len(calls) == 8
+
+
+def test_a_rendezvous_starts_even_while_a_private_round_waits_for_the_spot_league(tmp_path, monkeypatch):
+    import arene.perp.watcher as W
+
+    w, _calls, _ = asked_world(tmp_path, {})
+    rid = T0 + 4 * 3600 - 600
+    payload = {
+        "round": rid, "kind": "private", "trigger": None, "ts": rid, "portfolios": [HAIKU],
+        "triggers": {HAIKU: {"kind": "scheduled"}},
+    }  # fmt: skip
+    w.w.sim.append_event("perp_round", payload, rid)
+    monkeypatch.setattr(W, "spot_busy", lambda lock: True)
+    w.advance(T0 + 4 * 3600 + 120)
+    rep = w.w.tick(T0 + 4 * 3600 + 120)
+    assert rep.rounds == [f"rendezvous:{T0 + 4 * 3600}"]
+
+
+def test_a_move_seen_at_a_rendezvous_is_not_played_again_as_a_wakeup(tmp_path):
+    w, calls, _ = asked_world(tmp_path, {})
+    w.advance(T0 + 4 * 3600 - 900)
+    w.w.tick(T0 + 4 * 3600 - 900)
+    up = dict(PRICES, PF_SOLUSD=PRICES["PF_SOLUSD"] * 1025 // 1000)
+    w.advance(T0 + 4 * 3600 + 120, up)
+    assert w.w.tick(T0 + 4 * 3600 + 120).rounds == [f"rendezvous:{T0 + 4 * 3600}"]
+    assert len(w.events("perp_wake_pending")) == 1  # recorded at the rendezvous tick
+    w.advance(T0 + 4 * 3600 + 1200, up)
+    assert w.w.tick(T0 + 4 * 3600 + 1200).rounds == []  # the models saw it at the rendezvous
+    assert len(calls) == 8

@@ -8,7 +8,8 @@ is called, so that the tools never touch the network and a round stays auditable
   predicted, 24 h and 7 d history), open interest (48 h hourly, closed hours only), mark, index;
 - `view`: the riskd market view at the round; `account`: the portfolio state; `counters`; `specs`;
   `policy` and `params` (so `simulate_order` is self-contained); `history`: the portfolio's last decisions;
-`agent_orders`: the portfolio's OWN pending alerts and entry orders and what happened to them since its last round.
+`agent_orders`: the portfolio's OWN pending alerts and entry orders and what happened to them since its last round;
+`rounds`: its rounds of the day against its quota, and the wake-up it asked for (docs/SPEC-PERP-REVEILS-LIBRES.md).
 Nothing after `now_ts` is read.
 """
 
@@ -22,7 +23,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from arene.perp.agent_orders import orders_view
+from arene.perp.agent_orders import orders_view, pending_wakeup
 from arene.perp.ledger import MarginAccount
 from arene.perp.policy import PerpPolicy
 from arene.perp.riskd import PerpCounters, PerpMarketView
@@ -131,7 +132,10 @@ def build_round(
     now_ts: int,
     config_sha256: str,
     entries_blocked: bool = False,
+    *,
+    quota: Mapping[str, int] | None = None,
 ) -> tuple[dict[str, Any], str]:
+    past = [e for e in events if e["ts"] <= now_ts]
     data = {
         "meta": {
             "round": round_id,
@@ -155,7 +159,11 @@ def build_round(
         "policy": {**asdict(policy), "instruments": list(policy.instruments)},
         "params": asdict(params),
         "history": history_block(events, acc.portfolio, now_ts),
-        "agent_orders": orders_view([e for e in events if e["ts"] <= now_ts], acc.portfolio),
+        "agent_orders": orders_view(past, acc.portfolio),
+        "rounds": {
+            "quota": dict(quota) if quota is not None else None,
+            "next_wakeup_ts": (pending_wakeup(past, acc.portfolio, now_ts) or {}).get("due_ts"),
+        },
     }
     raw = _canonical(data)
     out_dir.mkdir(parents=True, exist_ok=True)

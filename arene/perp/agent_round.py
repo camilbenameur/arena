@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from arene.perp.agent import AgentDecider, AgentResult, cli_version, parse_decision, prompt_sha256
-from arene.perp.agent_orders import pending_state, validate_levels
+from arene.perp.agent_orders import pending_state, pending_wakeup, validate_levels
 from arene.perp.counters import counters_for
 from arene.perp.ledger import (
     BP,
@@ -55,6 +55,27 @@ def _pct(bp: int | None) -> str | None:
 
 def _utc(ts: int) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_KIND_FR = {"alert": "alerte", "entry": "ordre_d_entree", "wakeup": "reveil"}
+
+
+def rounds_snapshot(rounds: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The agent's rounds of the day and its pending wake-up (French keys, like the rest of the snapshot)."""
+    if not rounds:
+        return {}
+    q = rounds.get("quota")
+    due = rounds.get("next_wakeup_ts")
+    out: dict[str, Any] = {"reveil_demande_utc": _utc(due) if due is not None else None}
+    if q:
+        out |= {
+            "rondes_par_jour": q["per_day"],
+            "rondes_jouees_aujourd_hui": q["played_today"],
+            "rendez_vous_restants_aujourd_hui": q["rendezvous_left"],
+            # this round is not counted in played_today yet: what is left once it is played
+            "rondes_hors_rendez_vous_restantes": max(0, q["extra_left"] - 1),
+        }
+    return {"rondes": out}
 
 
 def orders_snapshot(view: Mapping[str, Any]) -> dict[str, Any]:
@@ -128,7 +149,7 @@ def orders_snapshot(view: Mapping[str, Any]) -> dict[str, Any]:
             ],
             "elements_rejetes": [
                 {
-                    "type": "alerte" if x["kind"] == "alert" else "ordre_d_entree",
+                    "type": _KIND_FR.get(x["kind"], x["kind"]),
                     "rang": x["k"],
                     "erreur": x["error"],
                 }
@@ -208,6 +229,7 @@ def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | No
             "entrees_bloquees": bool(data["meta"].get("entries_blocked")),
             "positions": positions,
             **orders_snapshot(data["agent_orders"]),
+            **rounds_snapshot(data.get("rounds")),
         },
         "marche": market,
         "tes_conditions_d_invalidation": invalidations,
@@ -289,6 +311,7 @@ def prepare_agent_round(
     trigger: Mapping[str, Any] | None,
     entries_blocked: bool | Callable[[], bool],
     extra: Mapping[str, Any] | None = None,
+    quota: Mapping[str, int] | None = None,
 ) -> RoundContext | AgentResult:
     """Freezes and journals the round's data (`round_data`); an AgentResult with an error if this portfolio
     already played this round. Thread-free: the caller may run `decider.decide` in parallel afterwards."""
@@ -306,7 +329,7 @@ def prepare_agent_round(
     out_dir = var / "rounds" / str(round_id) / name.replace(":", "_")
     data, sha = build_round(
         out_dir, store, events, view, acc, counters, specs, policy, sim.params, round_id, now_ts,
-        config_sha256, _blocked(entries_blocked),
+        config_sha256, _blocked(entries_blocked), quota=quota,
     )  # fmt: skip
     snap = snapshot(data, kind, trigger)
     message = decider.message(snap)
@@ -425,18 +448,42 @@ def finish_agent_round(
     # only a valid decision applied on a fresh market replaces the pending set (without a fresh view, its levels
     # could not be checked on the market of the moment: the set in place stays, like after no decision)
     if parsed is not None and perr is None and execute:
-        try:
-            _set_agent_orders(ctx, parsed)
-        except Exception as exc:  # noqa: BLE001 (the actions are done: the failure is journaled, never raised)
-            sim.append_event(
-                "alert",
-                {
-                    "level": "action",
-                    "code": "perp_agent_orders_failed",
-                    "message": f"{name} round {round_id}: {type(exc).__name__}: {exc}"[:1000],
-                },
-                now_ts,
-            )
+        for code, step in (
+            ("perp_agent_orders_failed", _set_agent_orders),
+            ("perp_agent_wakeup_failed", _set_wakeup),
+        ):
+            try:
+                step(ctx, parsed)
+            except Exception as exc:  # noqa: BLE001 (the actions are done: the failure is journaled, never raised)
+                sim.append_event(
+                    "alert",
+                    {
+                        "level": "action",
+                        "code": code,
+                        "message": f"{name} round {round_id}: {type(exc).__name__}: {exc}"[:1000],
+                    },
+                    now_ts,
+                )
+
+
+def _set_wakeup(ctx: RoundContext, parsed: Mapping[str, Any]) -> None:
+    """A valid decision replaces the wake-up the portfolio asked for: `agent_wakeup_set` with the time asked
+    (counted from when the decision is applied), or with `due_ts` null when it asks none and one is pending."""
+    if parsed.get("next_wakeup_invalid"):
+        return  # an invalid time asks nothing and cancels nothing: the pending wake-up stays
+    minutes = parsed.get("next_wakeup_min")
+    if minutes is None and pending_wakeup(ctx.sim.journal.events(), ctx.name, ctx.now_ts) is None:
+        return
+    ctx.sim.append_event(
+        "agent_wakeup_set",
+        {
+            "portfolio": ctx.name,
+            "round": ctx.round_id,
+            "minutes": minutes,
+            "due_ts": None if minutes is None else ctx.now_ts + int(minutes) * 60,
+        },
+        ctx.now_ts,
+    )
 
 
 def _set_agent_orders(ctx: RoundContext, parsed: Mapping[str, Any]) -> None:

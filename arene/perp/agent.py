@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, f
 
 from arene.perp.riskd import PerpIntent
 
-PROMPT_PATH = Path(__file__).parent / "prompt" / "v4.md"
+PROMPT_PATH = Path(__file__).parent / "prompt" / "v5.md"
 MCP_SERVER = "arene"
 TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
 MAX_TOOL_CALLS = 4
@@ -50,6 +50,8 @@ INVALIDATION_MAX = 200
 NOTE_MAX = 120
 MAX_ORDERS = 3  # alerts, and entry orders, per decision
 EXPIRES_DEFAULT_H = 4
+WAKEUP_MIN_MIN = 5  # a wake-up asked by the model: one watcher tick at least...
+WAKEUP_MAX_MIN = 240  # ...and at most the time between two rendez-vous
 MAX_PRICE_USD = 1_000_000_000
 # Claude Code's built-in plugins, turned off (the preflight of step 5-bis checks none is loaded)
 BUILTIN_PLUGINS = (
@@ -114,6 +116,11 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             },
         },
         "justification": {"type": "string", "maxLength": JUSTIFICATION_MAX},
+        "next_wakeup_min": {
+            "type": ["integer", "null"],
+            "minimum": WAKEUP_MIN_MIN,
+            "maximum": WAKEUP_MAX_MIN,
+        },
         "alerts": {
             "type": "array",
             "maxItems": MAX_ORDERS,
@@ -347,8 +354,16 @@ def parse_decision(
     try:
         if isinstance(data, str):
             data = json.loads(data, parse_float=Decimal)
-        if not isinstance(data, dict) or set(data) - {"actions", "justification", "alerts", "entry_orders"}:
-            raise ValueError("an object {actions, justification, alerts?, entry_orders?} is expected")
+        if not isinstance(data, dict) or set(data) - {
+            "actions",
+            "justification",
+            "alerts",
+            "entry_orders",
+            "next_wakeup_min",
+        }:
+            raise ValueError(
+                "an object {actions, justification, alerts?, entry_orders?, next_wakeup_min?} is expected"
+            )
         raw_actions = data.get("actions")
         if not isinstance(raw_actions, list) or len(raw_actions) > 2:
             raise ValueError("actions: a list of 0 to 2 elements is expected")
@@ -392,15 +407,32 @@ def parse_decision(
         )
     alerts, alert_errors = _parse_orders(raw_orders["alerts"], "alert", portfolio, round_id)
     entries, entry_errors = _parse_orders(raw_orders["entry_orders"], "entry", portfolio, round_id)
+    wakeup, wakeup_errors = _parse_wakeup(data.get("next_wakeup_min"))
     parsed = {
         "actions": parsed_actions,
         "justification": justification,
         "action_errors": errors,
         "alerts": alerts,
         "entry_orders": entries,
-        "order_errors": alert_errors + entry_errors,
+        "order_errors": alert_errors + entry_errors + wakeup_errors,
+        "next_wakeup_min": wakeup,
+        "next_wakeup_invalid": bool(wakeup_errors),
     }
     return parsed, None, intents
+
+
+def _parse_wakeup(raw: Any) -> tuple[int | None, list[dict[str, Any]]]:
+    """(minutes | None, errors) of `next_wakeup_min`: an integer from 5 to 240, absent or null for none. A bad
+    value is dropped alone (the rest of the decision stands, and so does the pending wake-up) and noted like a
+    rejected order."""
+    if raw is None:
+        return None, []
+    if isinstance(raw, Decimal) and raw.is_finite() and raw == raw.to_integral_value():
+        raw = int(raw)  # 60.0: an integer for the JSON schema the CLI checks against
+    if type(raw) is not int or not WAKEUP_MIN_MIN <= raw <= WAKEUP_MAX_MIN:
+        error = f"next_wakeup_min: an integer from {WAKEUP_MIN_MIN} to {WAKEUP_MAX_MIN} is expected"
+        return None, [{"kind": "wakeup", "k": 0, "error": error}]
+    return raw, []
 
 
 def canonical_json(obj: Any) -> str:

@@ -42,6 +42,7 @@ class LlmModel:
 class LlmLeague:
     enabled: bool
     wakeups: bool
+    rounds_per_day: int
     max_parallel: int
     timeout_s: int
     max_budget_usd: str
@@ -66,11 +67,22 @@ def load_llm_league(path: Path = DEFAULT_LLM_CONFIG) -> LlmLeague:
         data = tomllib.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise LlmConfigError(f"unreadable {path}: {exc}") from exc
-    expected = {"enabled", "wakeups", "max_parallel", "timeout_s", "max_budget_usd", "effort", "models"}
+    expected = {
+        "enabled",
+        "wakeups",
+        "rounds_per_day",
+        "max_parallel",
+        "timeout_s",
+        "max_budget_usd",
+        "effort",
+        "models",
+    }
     if set(data) != expected:
         raise LlmConfigError(f"keys: expected {sorted(expected)}, got {sorted(data)}")
     if type(data["enabled"]) is not bool or type(data["wakeups"]) is not bool:
         raise LlmConfigError("enabled and wakeups are booleans")
+    if type(data["rounds_per_day"]) is not int or not 6 <= data["rounds_per_day"] <= 288:
+        raise LlmConfigError("rounds_per_day: 6 (the rendez-vous) to 288 (one per tick)")
     if type(data["max_parallel"]) is not int or not 1 <= data["max_parallel"] <= 4:
         raise LlmConfigError("max_parallel: 1 to 4")
     if type(data["timeout_s"]) is not int or not 30 <= data["timeout_s"] <= 600:
@@ -94,6 +106,7 @@ def load_llm_league(path: Path = DEFAULT_LLM_CONFIG) -> LlmLeague:
     return LlmLeague(
         data["enabled"],
         data["wakeups"],
+        data["rounds_per_day"],
         data["max_parallel"],
         data["timeout_s"],
         data["max_budget_usd"],
@@ -166,13 +179,20 @@ def run_llm_round(
     decider_factory: Callable[[LlmModel], AgentDecider] | None = None,
     refresh: Callable[[], tuple[Any, int] | None] | None = None,
     only: set[str] | None = None,
+    triggers: Mapping[str, Mapping[str, Any]] | None = None,
+    quota_of: Callable[[str], Mapping[str, int]] | None = None,
 ) -> LlmRoundReport:
     """Plays the LLM part of one league round; every outcome is journaled (problems never stop the others).
 
     `refresh` gives the market view and time at which the decisions are executed (after the calls); without
     it, or when it returns None, they are executed on the round's view at its time.
 
-    `only`: the portfolios allowed to play (a private `alert` round); the other models are not even looked at."""
+    `only`: the portfolios allowed to play (a private round, or a market wake-up without the models out of
+    rounds); the other models are not even looked at.
+
+    `triggers`: in a private round, each portfolio's own trigger ({"kind": "alert" | "scheduled", ...}): its
+    `kind` is the call type the model sees, and no model sees another's trigger. `quota_of(portfolio)`: its
+    rounds of the day, shown in its snapshot."""
     rep = LlmRoundReport([])
     max_call = _usd_to_uusd(league.max_budget_usd, "max_budget_usd")
 
@@ -228,11 +248,14 @@ def run_llm_round(
         try:
             if reason is None:
                 ceiling = min(max_call, remaining)
+                own = triggers.get(m.portfolio) if triggers is not None else None
                 ctx = prepare_agent_round(
                     var=var, sim=sim, store=store, decider=make(m, ceiling), view=view, specs=specs,
-                    policy=policy, config_sha256=config_sha256, round_id=round_id, now_ts=now_ts, kind=kind,
-                    trigger=trigger, entries_blocked=entries_blocked,
+                    policy=policy, config_sha256=config_sha256, round_id=round_id, now_ts=now_ts,
+                    kind=str(own["kind"]) if own else kind, trigger=own if triggers is not None else trigger,
+                    entries_blocked=entries_blocked,
                     extra={"llm_config_sha256": league.sha256, "budget_ceiling_uusd": ceiling},
+                    quota=quota_of(m.portfolio) if quota_of is not None else None,
                 )  # fmt: skip
                 if not isinstance(ctx, AgentResult):
                     prepared.append((ctx, ceiling))

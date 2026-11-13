@@ -53,6 +53,7 @@ from arene.ops.notify import Notifier
 from arene.paths import Paths
 from arene.perp import agent_orders as AO
 from arene.perp import benchmarks as B
+from arene.perp import round_quota as RQ
 from arene.perp.agent import AgentDecider
 from arene.perp.agent_round import _close_unprotected, _execute
 from arene.perp.collect import data_root
@@ -87,32 +88,52 @@ CHECKPOINT_MINUTES = 360
 FX_MAX_AGE_S = 1800
 VIEW_MAX_AGE_S = 900
 FUNDING_MISSING_AFTER_S = 3 * HOUR_S
-WAKE_MOVE_BP = 300  # 3 %
-WAKE_FADE_BP = 200  # a pending crossing is dropped when the move falls under 2 %
+# Market wake-ups. Time limits lifted on 13/11/2026 (the owner, docs/SPEC-PERP-REVEILS-LIBRES.md): 2 % in 1 h, 15 min
+# between two, no daily cap; the rounds per model and day (`rounds_per_day`) are the only limit left.
+WAKE_MOVE_BP = 200  # 2 %
+WAKE_FADE_BP = 150  # a pending crossing is dropped when the move falls under 1.5 %
 WAKE_WINDOW_S = HOUR_S
 WAKE_PENDING_S = HOUR_S
-WAKE_COOLDOWN_S = HOUR_S
-WAKE_MAX_PER_DAY = 6  # per UTC day, as docs/VEILLE.md
-WAKE_GUARD_BEFORE_ROUND_S = 1800
-# no wake-up from 5 min before to 30 min after a spot cycle (HH:05 at 00, 04, ... UTC): the two leagues do not call
-# the models at the same time; the crossing stays pending (an hour) and is served after the window
+WAKE_COOLDOWN_S = 900
+# No extra round (market wake-up, alert, asked wake-up) when a rendez-vous falls within the next tick: the
+# rendez-vous serves it.
+RDV_SERVES_S = TICK_S
+# Spot cycles at HH:05 at 00, 04, ... UTC: no perp round starts in the 5 min before one (a round lasts at most
+# about 4 min), and none while the spot league holds its cycle lock (a cycle or a spot wake-up running): the
+# perp rounds wait for the next tick, so the two leagues never call the models at the same time.
 SPOT_CYCLE_S = 4 * HOUR_S
 SPOT_CYCLE_OFFSET_S = 300
 SPOT_GUARD_BEFORE_S = 300
-SPOT_GUARD_AFTER_S = 1800
-# Private `alert` rounds (docs/SPEC-PERP-ALERTES-ORDRES.md §3): a crossed alert wakes its owner alone
-ALERT_COOLDOWN_S = HOUR_S  # since the owner's last round of any kind
-ALERT_MAX_PER_DAY = 4  # per portfolio and UTC day
-ALERT_GUARD_BEFORE_ROUND_S = 1800  # none in the 30 min before a rendez-vous
+# Private rounds (alerts, wake-ups asked by the model): served at the first tick allowed, within the hour.
 ALERT_PENDING_S = HOUR_S  # a crossed alert waiting longer is no longer served by a wake-up
+ASKED_EARLY_S = TICK_S // 2  # an asked wake-up is served by the tick that starts at most 2.5 min before it
 ENTRY_MAX_LAG_S = 900  # a crossed entry order is executed only if its crossing minute is under 15 min old
+PRIVATE_KINDS = ("alert", "private")  # "alert": the private rounds before 13/11/2026 15:00 UTC (one owner)
 ROUND_LATE_S = 1800  # a rendez-vous is run (or resumed) by a tick at most 30 min after its time
 
 
-def near_spot_cycle(ts: int) -> bool:
-    """True from SPOT_GUARD_BEFORE_S before to SPOT_GUARD_AFTER_S after a spot cycle."""
+def spot_cycle_soon(ts: int) -> bool:
+    """True in the SPOT_GUARD_BEFORE_S before a spot cycle."""
     since = (ts - SPOT_CYCLE_OFFSET_S) % SPOT_CYCLE_S  # seconds since the last spot cycle
-    return since < SPOT_GUARD_AFTER_S or SPOT_CYCLE_S - since <= SPOT_GUARD_BEFORE_S
+    return SPOT_CYCLE_S - since <= SPOT_GUARD_BEFORE_S
+
+
+def spot_busy(lock: Path) -> bool:
+    """True while the spot league holds its cycle lock (a cycle, or a spot watcher tick and its wake-up).
+    Only tested, never kept: the spot league is never delayed by the perp league."""
+    try:
+        fd = os.open(lock, os.O_RDONLY)
+    except FileNotFoundError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
 
 
 @dataclass
@@ -309,6 +330,7 @@ class PerpWatcher:
         ok: bool,
         rep: TickReport,
         portfolios: list[str] | None = None,
+        triggers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """The LLM part of a round, then `perp_round_done`. Decisions are executed on a market view read again
         after the calls (when fresh), at that time: the models get no latency advantage."""
@@ -326,7 +348,8 @@ class PerpWatcher:
                 policy=self.policy, config_sha256=self.cfg.sha256, round_id=round_id, now_ts=now_ts, kind=kind,
                 trigger=trigger, entries_blocked=lambda: blocked or self._kill_active(),
                 decider_factory=self.decider_factory, refresh=refresh,
-                only=None if portfolios is None else set(portfolios),
+                only=None if portfolios is None else set(portfolios), triggers=triggers,
+                quota_of=lambda p: self.quota(self._events(), p, now_ts),
             )  # fmt: skip
         except Exception as exc:  # noqa: BLE001 (the round stays open: resumed by the next tick)
             message = f"llm round {round_id}: {type(exc).__name__}: {exc}"[:500]
@@ -797,11 +820,32 @@ class PerpWatcher:
         return None if ref is None else (closes[last] - ref) * BP // ref
 
     def _rounds(self, now_ts: int, view: PerpMarketView, rep: TickReport, cursor: int) -> None:
+        # market crossings are recorded at every tick, whatever round runs or waits (served within the hour)
+        self._record_crossings(now_ts, cursor, self._events())
         events = self._events()
         started = {e["payload"]["round"]: e["payload"] for e in events if e["type"] == "perp_round"}
         done = {e["payload"]["round"] for e in events if e["type"] == "perp_round_done"}
+        rdv = (now_ts - self.round_offset_s) // ROUND_S * ROUND_S + self.round_offset_s
+        waits: list[bool] = []
+
+        def may_start() -> bool:
+            """For the rounds outside the rendez-vous: none when the rendez-vous falls within the tick (it serves
+            them), none just before a spot cycle nor while the spot league holds its lock (tested only here,
+            when a round is about to start)."""
+            if rdv + ROUND_S - now_ts <= RDV_SERVES_S:
+                return False
+            if not waits:
+                waits.append(spot_cycle_soon(now_ts) or spot_busy(self.spot_paths.lock))
+                if waits[0]:
+                    rep.notes.append(
+                        "spot league cycle soon or running: perp extra rounds wait for the next tick"
+                    )
+            return not waits[0]
+
         for rid, r in started.items():  # resume an interrupted round within its window
             if rid not in done and now_ts - r["ts"] < ROUND_LATE_S:
+                if r["kind"] != "rendezvous" and not may_start():
+                    continue  # another interrupted round, or a rendez-vous due now, may still start
                 self._round(
                     rid,
                     r["kind"],
@@ -811,16 +855,19 @@ class PerpWatcher:
                     rep,
                     resume=True,
                     portfolios=r.get("portfolios"),
+                    triggers=r.get("triggers"),
                 )
                 return
-        rdv = (now_ts - self.round_offset_s) // ROUND_S * ROUND_S + self.round_offset_s
         if now_ts - rdv < ROUND_LATE_S and rdv not in started:
             self._round(rdv, "rendezvous", None, now_ts, view, rep)
             return
-        if not self._wakeup(now_ts, view, rep, cursor, events, started, rdv):
-            self._alert_round(
-                now_ts, view, rep, events, started, rdv
-            )  # one round per tick: wake-ups come first
+        # one round per tick: a market wake-up first, then the private rounds
+        if not self._wakeup(now_ts, view, rep, cursor, events, started, may_start):
+            self._private_round(now_ts, view, rep, events, may_start)
+
+    def quota(self, events: list[dict[str, Any]], portfolio: str, now_ts: int) -> dict[str, int]:
+        assert self.llm is not None
+        return RQ.quota(events, portfolio, now_ts, self.llm.rounds_per_day, self.round_offset_s)
 
     def _wakeup(
         self,
@@ -830,95 +877,136 @@ class PerpWatcher:
         cursor: int,
         events: list[dict[str, Any]],
         started: dict[int, dict[str, Any]],
-        rdv: int,
+        may_start: Callable[[], bool],
     ) -> bool:
-        """Market wake-ups: a crossing is recorded, kept pending for an hour, served when the guards allow it.
-        True when a round was started."""
+        """Market wake-ups: a crossing recorded by `_record_crossings` is kept pending for an hour and served
+        when the guards allow it. True when a round was started."""
         pend = [e for e in events if e["type"] == "perp_wake_pending" and now_ts - e["ts"] < WAKE_PENDING_S]
         served = {
             r.get("trigger", {}).get("pending_ts")
             for r in started.values()
             if r["kind"] == "wakeup" and r.get("trigger")
         }
+        # private rounds count neither in the cooldown of the market wake-ups (common to all)
+        last_round = max((r["ts"] for r in started.values() if r["kind"] not in PRIVATE_KINDS), default=0)
+        candidates = [
+            p
+            for p in pend
+            if p["ts"] not in served
+            and p["ts"] > last_round  # a move recorded at or before the last common round: the models saw it
+            and abs(self._move_bp(p["payload"]["instrument"], cursor) or 0) >= WAKE_FADE_BP
+        ]
+        if not candidates:
+            return False
+        if now_ts - last_round < WAKE_COOLDOWN_S:
+            return False
+        portfolios = None
+        if self.llm is not None and self.llm.enabled and self.llm.wakeups:
+            # the models out of rounds for today (or halted, or out of budget) sit this wake-up out; none left:
+            # no wake-up
+            states = self.sim.states()
+            eligible = [
+                m.portfolio
+                for m in self.llm.models
+                if m.portfolio in states
+                and not states[m.portfolio].halted
+                and has_budget(m, events, now_ts)
+                and self.quota(events, m.portfolio, now_ts)["extra_left"] > 0
+            ]
+            if not eligible:
+                return False
+            if len(eligible) < len(self.llm.models):
+                portfolios = eligible
+        if not may_start():
+            return False
+        best = max(candidates, key=lambda p: abs(p["payload"]["move_bp"]))
+        tick = now_ts // TICK_S * TICK_S
+        self._round(
+            tick,
+            "wakeup",
+            {**best["payload"], "pending_ts": best["ts"]},
+            now_ts,
+            view,
+            rep,
+            portfolios=portfolios,
+        )
+        return True
+
+    def _record_crossings(self, now_ts: int, cursor: int, events: list[dict[str, Any]]) -> None:
+        """A move of WAKE_MOVE_BP over the hour, newly reached at this tick: `perp_wake_pending`."""
         cursors = [e["payload"]["last_minute"] for e in events if e["type"] == "perp_tick"]
         prev_cursor = cursors[-1] if cursors else None
         for s in self.symbols:
             mv = self._move_bp(s, cursor)
             prev = self._move_bp(s, prev_cursor) if prev_cursor is not None else None
             if mv is not None and abs(mv) >= WAKE_MOVE_BP and (prev is None or abs(prev) < WAKE_MOVE_BP):
-                payload = {"instrument": s, "move_bp": mv, "window_s": WAKE_WINDOW_S}
-                self._append("perp_wake_pending", payload, now_ts)
-                pend.append({"ts": now_ts, "payload": payload})
-        candidates = [
-            p
-            for p in pend
-            if p["ts"] not in served
-            and abs(self._move_bp(p["payload"]["instrument"], cursor) or 0) >= WAKE_FADE_BP
-        ]
-        if not candidates:
-            return False
-        # private alert rounds count neither in the cooldown nor in the daily cap of the market wake-ups
-        last_round = max((r["ts"] for r in started.values() if r["kind"] != "alert"), default=0)
-        day = now_ts // 86_400
-        today = [r for r in started.values() if r["kind"] == "wakeup" and r["ts"] // 86_400 == day]
-        if (
-            now_ts - last_round < WAKE_COOLDOWN_S
-            or len(today) >= WAKE_MAX_PER_DAY
-            or rdv + ROUND_S - now_ts < WAKE_GUARD_BEFORE_ROUND_S
-            or near_spot_cycle(now_ts)
-        ):
-            return False
-        best = max(candidates, key=lambda p: abs(p["payload"]["move_bp"]))
-        tick = now_ts // TICK_S * TICK_S
-        self._round(tick, "wakeup", {**best["payload"], "pending_ts": best["ts"]}, now_ts, view, rep)
-        return True
+                self._append(
+                    "perp_wake_pending", {"instrument": s, "move_bp": mv, "window_s": WAKE_WINDOW_S}, now_ts
+                )
 
-    def _alert_round(
+    def _private_round(
         self,
         now_ts: int,
         view: PerpMarketView,
         rep: TickReport,
         events: list[dict[str, Any]],
-        started: dict[int, dict[str, Any]],
-        rdv: int,
+        may_start: Callable[[], bool],
     ) -> None:
-        """A crossed alert wakes its owner alone (spec §3). The oldest waiting alert whose owner passes the
-        guards is served; the others wait for the next tick."""
+        """One private round for every model with a crossed alert or a wake-up it asked for that is due (spec
+        §3): each plays alone with its own trigger, and sees nothing of the others'. A model is served if it is
+        not halted, within its budget and has rounds left today; the others wait (within the hour)."""
         if self.llm is None or not self.llm.enabled:
             return
-        if rdv + ROUND_S - now_ts < ALERT_GUARD_BEFORE_ROUND_S or near_spot_cycle(now_ts):
-            return
-        models = {m.portfolio: m for m in self.llm.models}
         states = self.sim.states()
-        day = now_ts // 86_400
-        for a in AO.unserved_alerts(events, now_ts, ALERT_PENDING_S):
-            owner = a["portfolio"]
-            if owner not in models or states[owner].halted or not has_budget(models[owner], events, now_ts):
-                continue
-            last = max(
-                (
-                    e["ts"]
-                    for e in events
-                    if e["type"] == "round_data" and e["payload"].get("portfolio") == owner
-                ),
-                default=0,
+        triggers: dict[str, dict[str, Any]] = {}
+        for a in AO.unserved_alerts(events, now_ts, ALERT_PENDING_S):  # oldest first: the first one wins
+            triggers.setdefault(
+                a["portfolio"],
+                {
+                    "kind": "alert",
+                    "alert_id": a["id"],
+                    "instrument": a["instrument"],
+                    "condition": a["condition"],
+                    "price_usd": usd(a["price_uusd"]),
+                    "note": a["note"],
+                },
             )
-            today = sum(
-                1
-                for r in started.values()
-                if r["kind"] == "alert" and r.get("portfolios") == [owner] and r["ts"] // 86_400 == day
-            )
-            if now_ts - last < ALERT_COOLDOWN_S or today >= ALERT_MAX_PER_DAY:
+        for m in self.llm.models:
+            asked = AO.pending_wakeup(events, m.portfolio)
+            if asked is None or asked["due_ts"] - now_ts > ASKED_EARLY_S:
                 continue
-            trigger = {
-                "alert_id": a["id"],
-                "instrument": a["instrument"],
-                "condition": a["condition"],
-                "price_usd": usd(a["price_uusd"]),
-                "note": a["note"],
-            }
-            self._round(now_ts // TICK_S * TICK_S, "alert", trigger, now_ts, view, rep, portfolios=[owner])
+            if now_ts - asked["due_ts"] >= AO.WAKEUP_LAPSE_S:
+                continue  # lapsed: shown as such by the dashboard, never served late
+            if m.portfolio in triggers:
+                triggers[m.portfolio]["asked_wakeup_ts"] = asked["due_ts"]
+            else:
+                triggers[m.portfolio] = {
+                    "kind": "scheduled",
+                    "asked_at_round": asked["round"],
+                    "due_ts": asked["due_ts"],
+                }
+        models = {m.portfolio: m for m in self.llm.models}
+        served = {
+            p: t
+            for p, t in triggers.items()
+            if p in models
+            and not states[p].halted
+            and has_budget(models[p], events, now_ts)
+            and self.quota(events, p, now_ts)["extra_left"] > 0
+        }
+        if not served or not may_start():
             return
+        owners = sorted(served)
+        self._round(
+            now_ts // TICK_S * TICK_S,
+            "private",
+            None,
+            now_ts,
+            view,
+            rep,
+            portfolios=owners,
+            triggers={p: served[p] for p in owners},
+        )
 
     def _round(
         self,
@@ -931,9 +1019,12 @@ class PerpWatcher:
         *,
         resume: bool = False,
         portfolios: list[str] | None = None,
+        triggers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         if not resume:
-            extra = {} if portfolios is None else {"portfolios": portfolios}
+            extra: dict[str, Any] = {} if portfolios is None else {"portfolios": portfolios}
+            if triggers is not None:
+                extra["triggers"] = triggers
             self._append(
                 "perp_round",
                 {"round": round_id, "kind": kind, "trigger": trigger, "ts": now_ts, **extra},
@@ -958,11 +1049,11 @@ class PerpWatcher:
                 ok &= self._basket(now_ts, month, marks, quotes, fx, rep)
             if (B.TREND, str(day)) not in marker:
                 ok &= self._trend(now_ts, str(day), marks, quotes, fx, rep)
-        private = kind == "alert"  # only its owner plays: no benchmark, no other model
+        private = kind in PRIVATE_KINDS  # only their owners play: no benchmark, no other model
         llm_plays = (
             self.llm is not None
             and self.llm.enabled
-            and (kind in ("rendezvous", "alert") or self.llm.wakeups)
+            and (kind == "rendezvous" or private or self.llm.wakeups)
         )
         # the random benchmark plays the rounds the models play (wake-ups too only once the models have them)
         if not private and (
@@ -972,7 +1063,7 @@ class PerpWatcher:
         if llm_plays:
             self._deferred = {
                 "round_id": round_id, "kind": kind, "trigger": trigger, "now_ts": now_ts, "view": view,
-                "blocked": blocked, "ok": ok, "portfolios": portfolios,
+                "blocked": blocked, "ok": ok, "portfolios": portfolios, "triggers": triggers,
             }  # fmt: skip
             return
         if ok:

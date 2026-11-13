@@ -1,29 +1,34 @@
 # Perp league, step 7: the LLM portfolios (docs/ETUDE-AGENTS-TRADERS.md §11, decisions D7, D8 and step 7 unblocked
 # by the owner on 12/11/2026). Hashed (sha256 of the bytes) and journaled with every agent round.
 enabled = true
-# LLM wake-ups on from 13/11/2026 (the owner's decision, earlier than the two weeks of the study, step 7), within
-# the watcher's limits: 3 % in 1 h, cooldown 1 h, 6 per UTC day, none 30 min before a rendez-vous or near a spot cycle.
+# LLM wake-ups on from 13/11/2026 (the owner's decision, earlier than the two weeks of the study, step 7). Time limits
+# lifted the same day (the owner, ~14:10 UTC, docs/SPEC-PERP-REVEILS-LIBRES.md): market wake-ups at 2 % in 1 h, 15 min
+# apart; alerts and wake-ups asked by the model itself (5 min to 4 h ahead) served at the next tick.
 wakeups = true
+# The only time limit left: rounds per model and UTC day, rendez-vous included (the rendez-vous to come are
+# reserved). 48 = one every 30 min on average, spread as the model wants.
+rounds_per_day = 48
 max_parallel = 4          # at most 4 `claude` processes at the same time (study §2.4)
 timeout_s = 240           # per call (study §2.4)
 max_budget_usd = "1.00"   # hard ceiling of one call (--max-budget-usd); a round costs 0.002 to 0.13 $ (step 6)
 effort = "low"            # as in the spot league
 
-# Daily budgets (D7, kept after step 6): equivalent USD per UTC day. A model over its budget skips its round
-# (positions and stops stay in place) and the skip is journaled.
+# Daily budgets (D7): equivalent USD per UTC day. A model over its budget skips its round (positions and stops
+# stay in place) and the skip is journaled. Raised on 13/11/2026 so they never bind before `rounds_per_day`:
+# 48 rounds at the costs measured that day (Haiku 0.002, Sonnet 0.037, Opus 0.077, Fable 0.164 $ per round).
 [[models]]
 portfolio = "llm-perp:claude-haiku-5-5"
 model = "claude-haiku-5-5"
-daily_budget_usd = "0.10"
+daily_budget_usd = "0.20"
 [[models]]
 portfolio = "llm-perp:claude-sonnet-5-5"
 model = "claude-sonnet-5-5"
-daily_budget_usd = "0.90"
+daily_budget_usd = "2.00"
 [[models]]
 portfolio = "llm-perp:claude-opus-5-5"
 model = "claude-opus-5-5"
-daily_budget_usd = "1.80"
+daily_budget_usd = "4.00"
 [[models]]
 portfolio = "llm-perp:claude-fable-5-2"
 model = "claude-fable-5-2"
-daily_budget_usd = "3.50"
+daily_budget_usd = "8.50"
