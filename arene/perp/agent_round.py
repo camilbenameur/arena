@@ -24,10 +24,13 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from arene.perp.agent import AgentDecider, AgentResult, cli_version, parse_decision, prompt_sha256
+from arene.perp.agent_orders import pending_state, validate_levels
 from arene.perp.counters import counters_for
 from arene.perp.ledger import (
     BP,
@@ -44,6 +47,95 @@ from arene.perp.round_data import build_round
 from arene.perp.sim import PerpSimulator
 from arene.perp.store import PerpDataStore
 from arene.perp.types import InstrumentSpec
+
+
+def _pct(bp: int | None) -> str | None:
+    return None if bp is None else format((Decimal(bp) / 100).normalize(), "f")
+
+
+def _utc(ts: int) -> str:
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def orders_snapshot(view: Mapping[str, Any]) -> dict[str, Any]:
+    """The agent's own alerts and entry orders for the snapshot (French keys, like the rest of it)."""
+    since = view["since"]
+    return {
+        "alertes_en_attente": [
+            {
+                "instrument": a["instrument"],
+                "condition": a["condition"],
+                "niveau_usd": usd(a["price_uusd"]),
+                "echeance_utc": _utc(a["expires_ts"]),
+                "note": a.get("note"),
+            }
+            for a in view["alerts"]
+        ],
+        "ordres_d_entree_en_attente": [
+            {
+                "instrument": o["instrument"],
+                "sens": o["side"],
+                "condition": o["condition"],
+                "niveau_usd": usd(o["price_uusd"]),
+                "taille_pct": _pct(o["size_bp"]),
+                "stop_pct": _pct(o["stop_bp"]),
+                "objectif_pct": _pct(o["take_profit_bp"]),
+                "horizon_h": o["horizon_h"],
+                "mouvement_attendu_pct": _pct(o["expected_move_bp"]),
+                "confiance_pct": o["confidence_pct"],
+                "invalidation": o["invalidation"],
+                "echeance_utc": _utc(o["expires_ts"]),
+            }
+            for o in view["entries"]
+        ],
+        "depuis_ta_derniere_ronde": {
+            "alertes_declenchees": [
+                {
+                    "instrument": a["instrument"],
+                    "condition": a["condition"],
+                    "niveau_usd": usd(a["price_uusd"]),
+                    "minute_utc": _utc(a["minute"]),
+                    "note": a["note"],
+                }
+                for a in since["alerts_triggered"]
+            ],
+            "ordres_declenches": [
+                {
+                    "instrument": o["instrument"],
+                    "sens": o["side"],
+                    "condition": o["condition"],
+                    "niveau_usd": usd(o["price_uusd"]),
+                    "minute_utc": _utc(o["minute"]),
+                    "garde_fou": None
+                    if o["approved"] is None
+                    else ("approuve" if o["approved"] else "refuse"),
+                    "raisons_de_refus": o["reasons"],
+                    "execution": o["status"],
+                    "prix_de_remplissage_usd": usd(o["fill_price_uusd"]),
+                    "invalidation": o.get("invalidation"),
+                }
+                for o in since["entries_triggered"]
+            ],
+            "elements_expires": [
+                {
+                    "type": "alerte" if x["kind"] == "alert" else "ordre_d_entree",
+                    "instrument": x["instrument"],
+                    "condition": x["condition"],
+                    "niveau_usd": usd(x["price_uusd"]),
+                    "raison": x["reason"],
+                }
+                for x in since["ended"]
+            ],
+            "elements_rejetes": [
+                {
+                    "type": "alerte" if x["kind"] == "alert" else "ordre_d_entree",
+                    "rang": x["k"],
+                    "erreur": x["error"],
+                }
+                for x in since["rejected"]
+            ],
+        },
+    }
 
 
 def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -115,6 +207,7 @@ def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | No
             "arrete": acc["halted"],
             "entrees_bloquees": bool(data["meta"].get("entries_blocked")),
             "positions": positions,
+            **orders_snapshot(data["agent_orders"]),
         },
         "marche": market,
         "tes_conditions_d_invalidation": invalidations,
@@ -232,8 +325,8 @@ def prepare_agent_round(
         now_ts,
     )
     return RoundContext(
-        var, sim, decider, view, specs, policy, round_id, now_ts, kind, entries_blocked, out_dir, snap
-    )
+        var, sim, decider, view, specs, policy, round_id, now_ts, kind, entries_blocked, out_dir, snap,
+    )  # fmt: skip
 
 
 def finish_agent_round(
@@ -329,6 +422,61 @@ def finish_agent_round(
         )
         if v.approved:
             _execute(sim, name, it.intent_id, it.instrument, it.action, v, quotes, marks, fx, now_ts)
+    # only a valid decision applied on a fresh market replaces the pending set (without a fresh view, its levels
+    # could not be checked on the market of the moment: the set in place stays, like after no decision)
+    if parsed is not None and perr is None and execute:
+        try:
+            _set_agent_orders(ctx, parsed)
+        except Exception as exc:  # noqa: BLE001 (the actions are done: the failure is journaled, never raised)
+            sim.append_event(
+                "alert",
+                {
+                    "level": "action",
+                    "code": "perp_agent_orders_failed",
+                    "message": f"{name} round {round_id}: {type(exc).__name__}: {exc}"[:1000],
+                },
+                now_ts,
+            )
+
+
+def _set_agent_orders(ctx: RoundContext, parsed: Mapping[str, Any]) -> None:
+    """A valid decision replaces the portfolio's whole set of alerts and entry orders: `agent_orders_set`,
+    then one `agent_order_ended` (`replaced`) per element of the previous set still pending (a restated
+    element is a new element of the new set).
+
+    The levels are checked on the market as it is when the decision is applied (`ctx.view`, read again after
+    the call), and the elements count from that time (`created_ts`): a level crossed while the model was
+    thinking is rejected as already crossed, never filled on minutes the model did not see."""
+    sim, name = ctx.sim, ctx.name
+    created_ts = ctx.now_ts
+    marks = {s: m.mark_uusd for s, m in ctx.view.instruments.items()}
+    alerts, entries, rejected = validate_levels(parsed, marks)
+
+    def final(el: Mapping[str, Any]) -> dict[str, Any]:
+        out = {k: v for k, v in el.items() if k not in ("k", "expires_h")}
+        out["expires_ts"] = created_ts + int(el["expires_h"]) * 3600
+        return out
+
+    new_alerts, new_entries = [final(a) for a in alerts], [final(o) for o in entries]
+    old = pending_state(sim.journal.events(), name).pending
+    sim.append_event(
+        "agent_orders_set",
+        {
+            "portfolio": name,
+            "round": ctx.round_id,
+            "created_ts": created_ts,
+            "alerts": new_alerts,
+            "entry_orders": new_entries,
+            "rejected": rejected,
+        },
+        ctx.now_ts,
+    )
+    for el in old:
+        sim.append_event(
+            "agent_order_ended",
+            {"portfolio": name, "id": el.id, "kind": el.kind, "reason": "replaced"},
+            ctx.now_ts,
+        )
 
 
 def _execute(

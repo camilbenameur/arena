@@ -12,15 +12,15 @@ from arene.perp.agent import AgentDecider
 from arene.perp.ledger import replay
 from arene.perp.llm_league import LlmConfigError, load_llm_league
 from tests.test_perp_agent import fake_runner
-from tests.test_perp_watcher import T0, World
+from tests.test_perp_watcher import PRICES, T0, World
 
 LEAGUE = load_llm_league()
 NAMES = [m.portfolio for m in LEAGUE.models]
 
 
-def factory(tmp: Path, calls: list, mode: str = "normal"):
+def factory(tmp: Path, calls: list, mode: str = "normal", extra: dict | None = None):
     lock = threading.Lock()
-    run = fake_runner(mode)
+    run = fake_runner(mode, extra)
 
     def counted(cmd, stdin, env, cwd, timeout):
         with lock:
@@ -242,3 +242,453 @@ def test_the_rendezvous_is_two_hours_away_from_the_spot_cycle(tmp_path):
     w.advance(T0 + 2 * 3600 + 120)
     rep = w.w.tick(T0 + 2 * 3600 + 120)  # 18:02 UTC
     assert rep.rounds == [f"rendezvous:{T0 + 2 * 3600}"] and len(calls) == 4
+
+
+# ---------------------------------------------------------------------- alerts and entry orders (spec)
+
+HAIKU = "llm-perp:claude-haiku-5-5"
+HAIKU_MODEL = "claude-haiku-5-5"
+LEVEL = 69_437  # USD: below the 70 000 mark of the World
+UP_LEVEL = 70_500
+BTC_DOWN = 69_000_000_000
+BTC_UP = 71_000_000_000
+
+
+def alert(**kw):
+    return {"instrument": "PF_XBTUSD", "condition": "below", "price_usd": LEVEL, "note": "support", **kw}
+
+
+def entry(**kw):
+    return {
+        "instrument": "PF_XBTUSD", "side": "long", "condition": "above", "price_usd": UP_LEVEL,
+        "size_pct": 10, "stop_pct": 3, "take_profit_pct": 6, "horizon_h": 24, "expected_move_pct": 5, **kw,
+    }  # fmt: skip
+
+
+def orders_world(tmp_path, *, alerts=(), entries=(), league=LEAGUE):
+    """A World whose first rendezvous (T0) leaves the given orders for Haiku only; nobody trades."""
+    calls: list[str] = []
+    extra = {
+        "*": {"actions": [], "justification": "j"},
+        HAIKU_MODEL: {"alerts": list(alerts), "entry_orders": list(entries)},
+    }
+    w = World(tmp_path, llm=league, factory=factory(tmp_path, calls, extra=extra))
+    rep = w.w.tick(T0 + 120)
+    assert not rep.problems, rep.problems
+    extra[HAIKU_MODEL] = {}  # later rounds of Haiku post nothing new
+    return w, calls, extra
+
+
+def mark_prices(btc: int) -> dict[str, int]:
+    return dict(PRICES, PF_XBTUSD=btc)
+
+
+def alert_rounds(w):
+    return [e["payload"] for e in w.events("perp_round") if e["payload"]["kind"] == "alert"]
+
+
+def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
+    w, calls, _ = orders_world(tmp_path, alerts=[alert()])
+    assert len(calls) == 4
+    set_ev = w.events("agent_orders_set")
+    assert [len(e["payload"]["alerts"]) for e in set_ev if e["payload"]["portfolio"] == HAIKU] == [1]
+    random_before = len([e for e in w.events("perp_verdict") if "random" in e["payload"]["portfolio"]])
+    w.advance(T0 + 3900)
+    w.w.tick(T0 + 3900)
+    assert not alert_rounds(w)  # not crossed yet
+    w.advance(T0 + 4200, mark_prices(BTC_DOWN))
+    rep = w.w.tick(T0 + 4200)
+    trig = w.events("agent_alert_triggered")
+    assert (
+        len(trig) == 1
+        and trig[0]["payload"]["portfolio"] == HAIKU
+        and trig[0]["payload"]["price_uusd"] == LEVEL * 1_000_000
+    )
+    assert trig[0]["payload"]["mark_low_uusd"] == BTC_DOWN and trig[0]["payload"]["minute"] >= T0 + 3600
+    [rnd] = alert_rounds(w)
+    assert rnd["portfolios"] == [HAIKU] and rnd["trigger"]["alert_id"] == trig[0]["payload"]["id"]
+    assert rnd["trigger"]["price_usd"] == str(LEVEL) and rnd["trigger"]["note"] == "support"
+    assert rep.rounds == [f"alert:{T0 + 4200}"]
+    assert calls[4:] == [HAIKU_MODEL]  # nobody else was called
+    rid = rnd["round"]
+    rd = [e["payload"] for e in w.events("round_data") if e["payload"]["round"] == rid]
+    assert [r["portfolio"] for r in rd] == [HAIKU] and rd[0]["kind"] == "alert"
+    assert (w.var / "rounds" / str(rid)).is_dir() and len(list((w.var / "rounds" / str(rid)).iterdir())) == 1
+    assert (
+        len([e for e in w.events("perp_verdict") if "random" in e["payload"]["portfolio"]]) == random_before
+    )
+    assert any(e["type"] == "perp_round_done" and e["payload"]["round"] == rid for e in w.events())
+    # the owner's snapshot carries the crossing; the rivals' next round carries nothing about it
+    import json
+
+    from arene.perp.agent_round import snapshot
+
+    mine = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
+    comp = snapshot(mine, "alert", rnd["trigger"])
+    assert comp["appel"]["type"] == "alert"
+    assert comp["compte"]["depuis_ta_derniere_ronde"]["alertes_declenchees"][0]["niveau_usd"] == str(LEVEL)
+    assert comp["compte"]["alertes_en_attente"] == []  # consumed: an alert serves once
+    # the next rendezvous: nobody else ever saw it, and the alert is not served twice
+    w.advance(T0 + 14400 + 120, mark_prices(BTC_DOWN))
+    w.w.tick(T0 + 14400 + 120)
+    for e in w.events("round_data"):
+        if e["payload"]["portfolio"] != HAIKU:
+            raw = (w.var / e["payload"]["path"] / "round.json").read_text()
+            assert str(LEVEL) not in raw and "support" not in raw, e["payload"]["portfolio"]
+    assert len(alert_rounds(w)) == 1
+
+
+def test_alert_round_guards(tmp_path, monkeypatch):
+    import arene.perp.watcher as W
+
+    # 1 h since the owner's last round: the alert waits (it stays servable for an hour)
+    w, calls, _ = orders_world(tmp_path / "a", alerts=[alert()])
+    w.advance(T0 + 600, mark_prices(BTC_DOWN))
+    w.w.tick(T0 + 600)
+    assert len(w.events("agent_alert_triggered")) == 1 and not alert_rounds(w)
+    w.advance(T0 + 3600 + 120)
+    w.w.tick(T0 + 3600 + 120)
+    assert len(alert_rounds(w)) == 1 and calls[4:] == [HAIKU_MODEL]
+    # a crossed alert waiting more than an hour is no longer served by a wake-up
+    w2, calls2, _ = orders_world(tmp_path / "b", alerts=[alert()])
+    w2.advance(T0 + 600, mark_prices(BTC_DOWN))
+    w2.w.tick(T0 + 600)
+    w2.advance(T0 + 4500)
+    w2.w.tick(T0 + 4500)
+    assert not alert_rounds(w2) and len(calls2) == 4
+    # 4 alert rounds per portfolio and UTC day
+    w3, calls3, _ = orders_world(tmp_path / "c", alerts=[alert()])
+    for i in range(W.ALERT_MAX_PER_DAY):
+        rid = T0 + 1000 + i
+        w3.w.sim.append_event(
+            "perp_round",
+            {"round": rid, "kind": "alert", "trigger": None, "ts": T0 + 1000 + i, "portfolios": [HAIKU]},
+            T0 + 1000 + i,
+        )
+        w3.w.sim.append_event("perp_round_done", {"round": rid}, T0 + 1000 + i)
+    w3.advance(T0 + 4200, mark_prices(BTC_DOWN))
+    w3.w.tick(T0 + 4200)
+    assert len(w3.events("agent_alert_triggered")) == 1 and len(alert_rounds(w3)) == W.ALERT_MAX_PER_DAY
+    assert len(calls3) == 4
+    # none near a spot cycle; the alert is served by the first tick outside it
+    w4, calls4, _ = orders_world(tmp_path / "d", alerts=[alert()])
+    real = W.near_spot_cycle
+    monkeypatch.setattr(W, "near_spot_cycle", lambda ts: True)
+    w4.advance(T0 + 4200, mark_prices(BTC_DOWN))
+    w4.w.tick(T0 + 4200)
+    assert not alert_rounds(w4)
+    monkeypatch.setattr(W, "near_spot_cycle", real)
+    w4.advance(T0 + 4500)
+    w4.w.tick(T0 + 4500)
+    assert len(alert_rounds(w4)) == 1 and calls4[4:] == [HAIKU_MODEL]
+
+
+def test_no_alert_round_before_a_rendezvous_and_the_rendezvous_serves_it(tmp_path):
+    w, calls, _ = orders_world(tmp_path, alerts=[alert(expires_h=24)])
+    t = T0 + 4 * 3600 - 1500  # 25 min before the next rendezvous
+    w.advance(t, mark_prices(BTC_DOWN))
+    w.w.tick(t)
+    assert len(w.events("agent_alert_triggered")) == 1 and not alert_rounds(w) and len(calls) == 4
+    w.advance(T0 + 4 * 3600 + 120)
+    w.w.tick(T0 + 4 * 3600 + 120)  # the rendezvous: every model plays, Haiku sees its crossed alert
+    assert len(calls) == 8 and not alert_rounds(w)
+    import json
+
+    rd = [e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == HAIKU][-1]
+    view = json.loads((w.var / rd["path"] / "round.json").read_text())["agent_orders"]
+    assert len(view["since"]["alerts_triggered"]) == 1
+    w.advance(T0 + 4 * 3600 + 7200)
+    w.w.tick(T0 + 4 * 3600 + 7200)
+    assert not alert_rounds(w)  # served by the rendezvous: no second round
+
+
+def test_alert_rounds_do_not_use_the_wakeup_cooldown_nor_the_alert_budget_gate(tmp_path):
+    small = dataclasses.replace(
+        LEAGUE,
+        models=tuple(
+            dataclasses.replace(m, daily_budget_uusd=1) if m.model == HAIKU_MODEL else m
+            for m in LEAGUE.models
+        ),
+    )
+    # no budget left for the owner: no alert round is even started
+    w, calls, _ = orders_world(tmp_path / "a", alerts=[alert()], league=small)
+    w.advance(T0 + 4200, mark_prices(BTC_DOWN))
+    w.w.tick(T0 + 4200)
+    assert len(w.events("agent_alert_triggered")) == 1 and not alert_rounds(w) and len(calls) == 4
+    # an alert round does not delay the market wake-ups
+    w2, _calls2, _ = orders_world(tmp_path / "b", alerts=[alert()])
+    w2.advance(T0 + 4200, mark_prices(BTC_DOWN))
+    w2.w.tick(T0 + 4200)
+    assert len(alert_rounds(w2)) == 1
+    w2.advance(T0 + 4500)
+    w2.w.tick(T0 + 4500)
+    up = mark_prices(BTC_DOWN)
+    up["PF_SOLUSD"] = PRICES["PF_SOLUSD"] * 105 // 100
+    w2.advance(T0 + 4800, up)
+    rep = w2.w.tick(T0 + 4800)
+    assert any(r.startswith("wakeup:") for r in rep.rounds), rep.rounds
+
+
+def test_an_interrupted_alert_round_is_resumed_for_its_owner_only(tmp_path, monkeypatch):
+    w, calls, _ = orders_world(tmp_path, alerts=[alert()])
+    import arene.perp.llm_league as L
+
+    class Cut:
+        def __init__(self, *a, **k):
+            raise RuntimeError("power cut")
+
+    w.advance(T0 + 4200, mark_prices(BTC_DOWN))
+    monkeypatch.setattr(L, "ThreadPoolExecutor", Cut)
+    rep = w.w.tick(T0 + 4200)
+    assert any("llm round" in p for p in rep.problems) and len(calls) == 4
+    monkeypatch.undo()
+    w.advance(T0 + 4500)
+    rep = w.w.tick(T0 + 4500)
+    assert any("(resumed)" in r and r.startswith("alert:") for r in rep.rounds)
+    assert len(calls) == 4  # never called again after a cut
+    skipped = [e["payload"] for e in w.events("perp_llm_skipped")]
+    assert [s["portfolio"] for s in skipped] == [HAIKU]  # the filter survived the resume: nobody else
+    assert any(e["type"] == "perp_round_done" and e["payload"]["round"] == T0 + 4200 for e in w.events())
+
+
+def test_run_llm_round_only_filters_the_models(tmp_path):
+    calls: list[str] = []
+    w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
+    w.w.tick(T0 + 120)
+    view, _ = _view(w, T0 + 120)
+    from arene.perp.llm_league import run_llm_round
+
+    n = len(calls)
+    run_llm_round(
+        league=LEAGUE, var=w.var, sim=w.w.sim, store=w.store, view=view, specs=w.w.specs, policy=w.w.policy,
+        config_sha256=w.w.cfg.sha256, round_id=777, now_ts=T0 + 4000, kind="alert", trigger=None,
+        entries_blocked=lambda: False, decider_factory=factory(tmp_path, calls), only={HAIKU},
+    )  # fmt: skip
+    assert calls[n:] == [HAIKU_MODEL]
+    assert {e["payload"]["portfolio"] for e in w.events("round_data") if e["payload"]["round"] == 777} == {
+        HAIKU
+    }
+
+
+# ---- entry orders
+
+
+def entry_events(w):
+    ev = w.events()
+    oid = w.events("agent_entry_triggered")[0]["payload"]["id"]
+    return oid, [e for e in ev if e["payload"].get("intent_id") == oid or e["payload"].get("order_id") == oid]
+
+
+def test_a_crossed_entry_order_goes_through_riskd_and_is_filled_with_a_stop(tmp_path):
+    w, calls, _ = orders_world(tmp_path, entries=[entry()])
+    w.advance(T0 + 600, mark_prices(BTC_UP))
+    rep = w.w.tick(T0 + 600)
+    assert not rep.problems, rep.problems
+    assert len(calls) == 4  # no model call for an entry order
+    [trig] = w.events("agent_entry_triggered")
+    assert trig["payload"]["side"] == "long" and trig["payload"]["mark_high_uusd"] == BTC_UP
+    oid, evs = entry_events(w)
+    kinds = [e["type"] for e in evs]
+    assert kinds == ["perp_verdict", "perp_fill", "perp_execution"], kinds
+    verdict, fill, execution = (e["payload"] for e in evs)
+    assert verdict["approved"] and verdict["portfolio"] == HAIKU and verdict["action"] == "open_long"
+    assert fill["reason"] == "intent" and fill["qty"] == verdict["qty"] > 0 and fill["fee_ueur"] > 0
+    assert fill["price_uusd"] >= BTC_UP  # filled at market with slippage, not at the level
+    assert execution["status"] == "filled"
+    pos = replay(w.events())[HAIKU].positions["PF_XBTUSD"]
+    assert (
+        pos.stop_uusd and pos.take_profit_uusd and pos.stop_uusd < fill["price_uusd"] < pos.take_profit_uusd
+    )
+    stops = [e for e in w.events("conditional_order") if e["payload"]["portfolio"] == HAIKU]
+    assert {e["payload"]["kind"] for e in stops} == {"stop", "take_profit"}
+    # consumed: the next ticks do not fire it again
+    w.advance(T0 + 1200)
+    w.w.tick(T0 + 1200)
+    assert (
+        len(w.events("agent_entry_triggered")) == 1
+        and len([e for e in w.events("perp_fill") if e["payload"]["order_id"] == oid]) == 1
+    )
+
+
+def test_a_refused_entry_is_journaled_and_shown_next_round(tmp_path):
+    import json
+
+    from arene.perp.agent_round import snapshot
+
+    w, _calls, _extra = orders_world(tmp_path, entries=[entry(size_pct=100)])  # over the 50 % order cap
+    w.advance(T0 + 600, mark_prices(BTC_UP))
+    w.w.tick(T0 + 600)
+    _oid, evs = entry_events(w)
+    assert [e["type"] for e in evs] == ["perp_verdict"] and not evs[0]["payload"]["approved"]
+    assert "MAX_ORDER_SIZE" in evs[0]["payload"]["reasons"]
+    assert not replay(w.events())[HAIKU].positions
+    w.advance(T0 + 4 * 3600 + 120, mark_prices(BTC_UP))
+    w.w.tick(T0 + 4 * 3600 + 120)
+    rd = [e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == HAIKU][-1]
+    comp = snapshot(json.loads((w.var / rd["path"] / "round.json").read_text()), "rendezvous", None)["compte"]
+    [o] = comp["depuis_ta_derniere_ronde"]["ordres_declenches"]
+    assert (
+        o["garde_fou"] == "refuse"
+        and "MAX_ORDER_SIZE" in o["raisons_de_refus"]
+        and o["niveau_usd"] == str(UP_LEVEL)
+    )
+    assert o["prix_de_remplissage_usd"] is None
+
+
+def test_a_stale_trigger_is_never_executed(tmp_path):
+    from arene.perp.watcher import ENTRY_MAX_LAG_S
+
+    assert ENTRY_MAX_LAG_S == 900
+    w, _calls, _ = orders_world(tmp_path, entries=[entry()])
+    w.advance(T0 + 2400, mark_prices(BTC_UP))  # crossed at ~T0+120.. but the tick only runs 40 min later
+    w.w.tick(T0 + 2400)
+    oid, evs = entry_events(w)
+    assert [e["type"] for e in evs] == ["perp_execution"]
+    assert evs[0]["payload"]["status"] == "not_executed_stale_trigger"
+    assert not w.events("perp_fill") or all(e["payload"]["order_id"] != oid for e in w.events("perp_fill"))
+    assert not replay(w.events())[HAIKU].positions
+
+
+def test_a_cut_between_trigger_and_verdict_is_resumed_once(tmp_path, monkeypatch):
+    import arene.perp.watcher as W
+
+    w, _calls, _ = orders_world(tmp_path, entries=[entry()])
+    w.advance(T0 + 600, mark_prices(BTC_UP))
+    real = W.evaluate_perp
+
+    def cut(intent, *a, **k):
+        if intent.portfolio == HAIKU:
+            raise KeyboardInterrupt
+        return real(intent, *a, **k)
+
+    monkeypatch.setattr(W, "evaluate_perp", cut)
+    with pytest.raises(KeyboardInterrupt):
+        w.w.tick(T0 + 600)
+    monkeypatch.setattr(W, "evaluate_perp", real)
+    assert len(w.events("agent_entry_triggered")) == 1
+    assert not [e for e in w.events("perp_fill") if e["payload"]["portfolio"] == HAIKU]
+    w.advance(T0 + 900)
+    w.w.tick(T0 + 900)
+    _oid, evs = entry_events(w)
+    assert [e["type"] for e in evs] == ["perp_verdict", "perp_fill", "perp_execution"]
+    assert len(w.events("agent_entry_triggered")) == 1 and len(replay(w.events())[HAIKU].positions) == 1
+
+
+def test_a_cut_between_the_approved_verdict_and_the_execution_is_resumed_once(tmp_path, monkeypatch):
+    w, _calls, _ = orders_world(tmp_path, entries=[entry()])
+    w.advance(T0 + 600, mark_prices(BTC_UP))
+    real = w.w.sim.market_order
+
+    def cut(order_id, portfolio, *a, **k):
+        if portfolio == HAIKU:
+            raise KeyboardInterrupt
+        return real(order_id, portfolio, *a, **k)
+
+    monkeypatch.setattr(w.w.sim, "market_order", cut)
+    with pytest.raises(KeyboardInterrupt):
+        w.w.tick(T0 + 600)
+    monkeypatch.setattr(w.w.sim, "market_order", real)
+    oid, evs = entry_events(w)
+    assert [e["type"] for e in evs] == ["perp_verdict"] and evs[0]["payload"]["approved"]
+    w.advance(T0 + 900)
+    w.w.tick(T0 + 900)
+    oid, evs = entry_events(w)
+    assert [e["type"] for e in evs] == ["perp_verdict", "perp_fill", "perp_execution"]
+    assert evs[2]["payload"]["status"] == "filled" and len(w.events("perp_verdict")) == len(
+        [e for e in w.events("perp_verdict")]
+    )
+    assert len([e for e in w.events("perp_verdict") if e["payload"]["intent_id"] == oid]) == 1
+    assert replay(w.events())[HAIKU].positions["PF_XBTUSD"].stop_uusd
+
+
+def test_expiry_halt_and_failures_of_the_orders_step(tmp_path, monkeypatch):
+    # an expired element never fires, even if the level is crossed afterwards (the crossing starts after the
+    # expiry at T0 + 120 + 3600, and the tick that sees both comes later)
+    w, _calls, _ = orders_world(tmp_path / "a", alerts=[alert(expires_h=1)], entries=[entry(expires_h=1)])
+    w.advance(T0 + 3840)
+    w.advance(T0 + 3900, mark_prices(BTC_UP))
+    w.w.tick(T0 + 3900)
+    ended = [e["payload"] for e in w.events("agent_order_ended")]
+    assert sorted((x["kind"], x["reason"]) for x in ended) == [("alert", "expired"), ("entry", "expired")]
+    assert (
+        not w.events("agent_alert_triggered")
+        and not w.events("agent_entry_triggered")
+        and not alert_rounds(w)
+    )
+    # a halted portfolio expires everything it had pending
+    w2, _c, _ = orders_world(tmp_path / "b", alerts=[alert()], entries=[entry()])
+    w2.w.sim.append_event(
+        "portfolio_halted", {"portfolio": HAIKU, "reason": "drawdown", "until_ts": 0}, T0 + 200
+    )
+    w2.advance(T0 + 600, mark_prices(BTC_UP))
+    w2.w.tick(T0 + 600)
+    ended = [e["payload"] for e in w2.events("agent_order_ended")]
+    assert sorted(x["reason"] for x in ended) == ["portfolio_halted", "portfolio_halted"]
+    assert not w2.events("agent_entry_triggered") and not replay(w2.events())[HAIKU].positions
+    # a failure of the step is reported in the tick, never raised, and the tick completes
+    w3, _c, _ = orders_world(tmp_path / "c", alerts=[alert()])
+    import arene.perp.watcher as W
+
+    monkeypatch.setattr(W.AO, "pending_state", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    w3.advance(T0 + 600)
+    rep = w3.w.tick(T0 + 600)
+    assert any("agent orders" in p and "boom" in p for p in rep.problems)
+    assert w3.events("perp_tick")[-1]["ts"] == T0 + 600
+
+
+def test_a_crossing_before_the_expiry_counts_even_when_seen_after_it(tmp_path):
+    w, _calls, _ = orders_world(tmp_path, alerts=[alert(expires_h=1)])
+    w.advance(T0 + 3000)
+    w.advance(T0 + 3600, mark_prices(BTC_DOWN))  # crossed before T0 + 3720
+    w.advance(T0 + 3900)
+    w.w.tick(T0 + 3900)  # first tick since T0 + 120: after the expiry
+    assert len(w.events("agent_alert_triggered")) == 1
+    assert not [e for e in w.events("agent_order_ended") if e["payload"]["reason"] == "expired"]
+
+
+def test_crossings_are_detected_even_with_a_stale_market_view(tmp_path):
+    w, _calls, _ = orders_world(tmp_path, alerts=[alert()], entries=[entry()])
+    # the alert (below) and the entry (above) on two instruments' worth of moves: BTC dips, then rallies;
+    # minutes keep coming, but no ticker snapshot for 40 min: the view is stale, and the minutes older than
+    # MINUTE_PATIENCE_S are processed without their EUR/USD
+    w.minutes(T0 + 120, T0 + 600, mark_prices(BTC_DOWN))
+    w.minutes(T0 + 600, T0 + 2400, mark_prices(BTC_UP))
+    rep = w.w.tick(T0 + 2400)
+    assert any("stale" in p for p in rep.problems), rep
+    assert len(w.events("agent_alert_triggered")) == 1 and len(w.events("agent_entry_triggered")) == 1
+    assert not w.events("perp_verdict") or all(
+        e["payload"]["portfolio"] != HAIKU for e in w.events("perp_verdict")
+    )  # an entry is never judged on a stale view
+    # the next fresh tick: the crossing is more than 15 min old, never executed late
+    w.advance(T0 + 2700, mark_prices(BTC_UP))
+    w.w.tick(T0 + 2700)
+    _oid, evs = entry_events(w)
+    assert [e["payload"]["status"] for e in evs if e["type"] == "perp_execution"] == [
+        "not_executed_stale_trigger"
+    ]
+    assert HAIKU not in {n for n, a in replay(w.events()).items() if a.positions}
+
+
+def test_a_cut_between_the_fill_and_the_stop_is_never_left_unprotected(tmp_path, monkeypatch):
+    w, _calls, _ = orders_world(tmp_path, entries=[entry()])
+    w.advance(T0 + 600, mark_prices(BTC_UP))
+    real = w.w.sim.set_conditional
+
+    def cut(portfolio, *a, **k):
+        if portfolio == HAIKU:
+            raise KeyboardInterrupt
+        return real(portfolio, *a, **k)
+
+    monkeypatch.setattr(w.w.sim, "set_conditional", cut)
+    with pytest.raises(KeyboardInterrupt):
+        w.w.tick(T0 + 600)
+    monkeypatch.setattr(w.w.sim, "set_conditional", real)
+    oid, evs = entry_events(w)
+    assert [e["type"] for e in evs] == ["perp_verdict", "perp_fill"]
+    w.advance(T0 + 900, mark_prices(BTC_UP))
+    w.w.tick(T0 + 900)
+    oid, evs = entry_events(w)
+    statuses = [e["payload"]["status"] for e in evs if e["type"] == "perp_execution"]
+    assert statuses == ["closed_without_stop"]
+    assert "PF_XBTUSD" not in replay(w.events())[HAIKU].positions
+    assert len([e for e in w.events("perp_fill") if e["payload"]["order_id"] == oid]) == 1

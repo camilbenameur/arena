@@ -51,17 +51,27 @@ from arene.journal import Journal
 from arene.ops import dormance, killswitch
 from arene.ops.notify import Notifier
 from arene.paths import Paths
+from arene.perp import agent_orders as AO
 from arene.perp import benchmarks as B
 from arene.perp.agent import AgentDecider
+from arene.perp.agent_round import _close_unprotected, _execute
 from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
 from arene.perp.counters import counters_for
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
-from arene.perp.llm_league import LlmConfigError, LlmLeague, LlmModel, load_llm_league, run_llm_round
+from arene.perp.llm_league import (
+    LlmConfigError,
+    LlmLeague,
+    LlmModel,
+    has_budget,
+    load_llm_league,
+    run_llm_round,
+)
 from arene.perp.market import market_view, worst_half_spread_bp
+from arene.perp.mcp_server import usd
 from arene.perp.policy import PerpPolicy, load_perp_policy
-from arene.perp.riskd import PerpMarketView, evaluate_perp
+from arene.perp.riskd import PerpIntent, PerpMarketView, evaluate_perp
 from arene.perp.sim import MinuteCandles, PerpSimulator
 from arene.perp.store import PerpDataStore
 from arene.perp.types import InstrumentSpec
@@ -90,6 +100,12 @@ SPOT_CYCLE_S = 4 * HOUR_S
 SPOT_CYCLE_OFFSET_S = 300
 SPOT_GUARD_BEFORE_S = 300
 SPOT_GUARD_AFTER_S = 1800
+# Private `alert` rounds (docs/SPEC-PERP-ALERTES-ORDRES.md §3): a crossed alert wakes its owner alone
+ALERT_COOLDOWN_S = HOUR_S  # since the owner's last round of any kind
+ALERT_MAX_PER_DAY = 4  # per portfolio and UTC day
+ALERT_GUARD_BEFORE_ROUND_S = 1800  # none in the 30 min before a rendez-vous
+ALERT_PENDING_S = HOUR_S  # a crossed alert waiting longer is no longer served by a wake-up
+ENTRY_MAX_LAG_S = 900  # a crossed entry order is executed only if its crossing minute is under 15 min old
 ROUND_LATE_S = 1800  # a rendez-vous is run (or resumed) by a tick at most 30 min after its time
 
 
@@ -232,6 +248,10 @@ class PerpWatcher:
             self.sim.open_portfolio(name, "benchmark", now_ts)
         last = marks_ev[-1]["payload"] if marks_ev else None
         last_minute = last["last_minute"] if last else None
+        # the agents' orders scan from the last TICK (not a checkpoint): a tick killed during a catch-up scans
+        # its minutes again (a crossing already journaled is never journaled twice)
+        ticks = [e for e in marks_ev if e["type"] == "perp_tick"]
+        prev_minute = ticks[-1]["payload"]["last_minute"] if ticks else None
         pending = list(last["pending_funding"]) if last else []
         self._closeout_followups(events, rep)
         view = market_view(self.store, self.symbols, now_ts)
@@ -240,6 +260,10 @@ class PerpWatcher:
         snap_ts = [s.ts for s in snaps]
         last_minute, pending = self._process_minutes(last_minute, now_ts, snaps, snap_ts, pending, rep)
         pending = self._settle_funding(pending, now_ts, snaps, snap_ts, rep)
+        events = self._events()
+        # crossings are detected on every processed minute, even with a stale view (an entry order then waits
+        # for a fresh view, within ENTRY_MAX_LAG_S)
+        self._agent_orders(now_ts, view if fresh else None, rep, prev_minute, last_minute)
         events = self._events()
         if fresh:
             assert view is not None
@@ -284,6 +308,7 @@ class PerpWatcher:
         blocked: bool,
         ok: bool,
         rep: TickReport,
+        portfolios: list[str] | None = None,
     ) -> None:
         """The LLM part of a round, then `perp_round_done`. Decisions are executed on a market view read again
         after the calls (when fresh), at that time: the models get no latency advantage."""
@@ -301,6 +326,7 @@ class PerpWatcher:
                 policy=self.policy, config_sha256=self.cfg.sha256, round_id=round_id, now_ts=now_ts, kind=kind,
                 trigger=trigger, entries_blocked=lambda: blocked or self._kill_active(),
                 decider_factory=self.decider_factory, refresh=refresh,
+                only=None if portfolios is None else set(portfolios),
             )  # fmt: skip
         except Exception as exc:  # noqa: BLE001 (the round stays open: resumed by the next tick)
             message = f"llm round {round_id}: {type(exc).__name__}: {exc}"[:500]
@@ -552,6 +578,209 @@ class PerpWatcher:
         except PerpLedgerError as exc:
             rep.problems.append(f"max holding: {exc}")
 
+    # ------------------------------------------------------------------ agent alerts and entry orders
+
+    def _agent_orders(
+        self, now_ts: int, view: PerpMarketView | None, rep: TickReport, prev_minute: int | None, cursor: int
+    ) -> None:
+        """Alerts and entry orders the agents left (spec §2), on the mark minutes this tick processed
+        (`prev_minute` < minute <= `cursor`). State is recomputed from the journal; a failure of one portfolio
+        is reported and never stops the tick."""
+        events = self._events()
+        owners = sorted({e["payload"]["portfolio"] for e in events if e["type"] == "agent_orders_set"})
+        cache: dict[str, list[Any]] = {}
+        for name in owners:
+            try:
+                self._agent_orders_for(name, now_ts, view, prev_minute, cursor, cache, rep)
+            except Exception as exc:  # noqa: BLE001 (one portfolio's failure never stops the tick)
+                rep.problems.append(f"{name} agent orders: {type(exc).__name__}: {exc}"[:300])
+
+    def _new_minutes(
+        self, symbol: str, prev_minute: int | None, cursor: int, cache: dict[str, list[Any]]
+    ) -> list[Any]:
+        if symbol not in cache:
+            cache[symbol] = (
+                []
+                if prev_minute is None or cursor <= prev_minute
+                else self.store.closed_candles(
+                    "mark", symbol, MINUTE_S, prev_minute + MINUTE_S, cursor + MINUTE_S
+                )
+            )
+        return cache[symbol]
+
+    def _agent_orders_for(
+        self,
+        name: str,
+        now_ts: int,
+        view: PerpMarketView | None,
+        prev_minute: int | None,
+        cursor: int,
+        cache: dict[str, list[Any]],
+        rep: TickReport,
+    ) -> None:
+        """Each stage and each crossing in its own try: one failure never hides the others (the minutes of
+        this tick are not scanned again by the next one)."""
+
+        def guarded(what: str, fn: Callable[[], None]) -> None:
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001
+                rep.problems.append(f"{name} agent orders, {what}: {type(exc).__name__}: {exc}"[:300])
+
+        # 1. a crash (or a stale view) left a crossed entry order without verdict, or approved without execution
+        if view is not None:
+            for el, trig in AO.pending_state(self._events(), name).unresolved_entries():
+                minute = trig["payload"]["minute"]
+                guarded(
+                    f"entry {el.id[:12]}",
+                    lambda el=el, minute=minute: self._entry_step(name, el, minute, now_ts, view, rep),
+                )
+
+        # 2. a halted portfolio loses everything (nothing of it fires any more)
+        def expire(only_halted: bool) -> None:
+            halted = self.sim.states()[name].halted
+            if only_halted and not halted:
+                return
+            for el in AO.pending_state(self._events(), name).pending:
+                if halted or el.data["expires_ts"] <= now_ts:
+                    reason = "portfolio_halted" if halted else "expired"
+                    self._append(
+                        "agent_order_ended",
+                        {"portfolio": name, "id": el.id, "kind": el.kind, "reason": reason},
+                        now_ts,
+                    )
+
+        guarded("halt", lambda: expire(True))
+        # 3. crossings on the newly processed minutes, before the expiry (a minute counts if it starts at or
+        #    after the creation and before the expiry)
+        live = AO.pending_state(self._events(), name).pending
+        hits = []
+        for rank, el in enumerate(live):
+            d = el.data
+            for c in self._new_minutes(d["instrument"], prev_minute, cursor, cache):
+                if c.ts < el.created_ts or c.ts >= d["expires_ts"]:
+                    continue
+                if (c.low <= d["price_uusd"]) if d["condition"] == "below" else (c.high >= d["price_uusd"]):
+                    hits.append((c.ts, 0 if el.kind == "alert" else 1, rank, el, c))
+                    break
+        for _ts, _kind, _rank, el, c in sorted(hits, key=lambda h: h[:3]):
+            guarded(
+                f"{el.kind} {el.id[:12]}", lambda el=el, c=c: self._crossed(name, el, c, now_ts, view, rep)
+            )
+
+        # 4. expiry
+        guarded("expiry", lambda: expire(False))
+
+    def _crossed(
+        self, name: str, el: AO.Element, c: Any, now_ts: int, view: PerpMarketView | None, rep: TickReport
+    ) -> None:
+        d = el.data
+        payload = {
+            "portfolio": name,
+            "id": el.id,
+            "instrument": d["instrument"],
+            **({"side": d["side"]} if el.kind == "entry" else {}),
+            "condition": d["condition"],
+            "price_uusd": d["price_uusd"],
+            "minute": c.ts,
+            "mark_high_uusd": c.high,
+            "mark_low_uusd": c.low,
+        }
+        self._append(
+            "agent_alert_triggered" if el.kind == "alert" else "agent_entry_triggered", payload, now_ts
+        )
+        rep.notes.append(f"{name}: {el.kind} {d['instrument']} {d['condition']} crossed at {c.ts}")
+        if el.kind == "entry" and view is not None:
+            self._entry_step(name, el, c.ts, now_ts, view, rep)
+
+    def _entry_step(
+        self, name: str, el: AO.Element, minute: int, now_ts: int, view: PerpMarketView, rep: TickReport
+    ) -> None:
+        """Takes a crossed entry order as far as it goes: verdict, then execution. Idempotent: each stage is
+        skipped when the journal already holds it (the market order itself is idempotent by the order id)."""
+        events = self._events()
+        st = AO.pending_state(events, name)
+        oid, d = el.id, el.data
+        inst = d["instrument"]
+        if oid in st.executions:
+            return
+
+        def outcome(status: str, error: str | None = None) -> None:
+            self._append(
+                "perp_execution",
+                {
+                    "intent_id": oid,
+                    "portfolio": name,
+                    "instrument": inst,
+                    "status": status,
+                    "error": None if error is None else error[:500],
+                },
+                now_ts,
+            )
+
+        acc = self.sim.states()[name]
+        if oid in st.fills:  # filled before a crash, the closing record is missing
+            pos = acc.positions.get(inst)
+            if (
+                pos is not None and pos.stop_uusd is None
+            ):  # cut between the fill and the stop: never unprotected
+                quotes = {s: (m.bid_uusd, m.ask_uusd) for s, m in view.instruments.items()}
+                marks = {s: m.mark_uusd for s, m in view.instruments.items()}
+                closed = _close_unprotected(
+                    self.sim, name, oid, inst, quotes, marks, (view.fx_bid, view.fx_ask), now_ts,
+                    PerpLedgerError("resumed after a cut between the fill and the stop"),
+                )  # fmt: skip
+                outcome("closed_without_stop" if closed else "unprotected_position_open", "resumed")
+                return
+            missing_tp = pos is not None and d["take_profit_bp"] is not None and pos.take_profit_uusd is None
+            outcome(
+                "filled_without_take_profit"
+                if missing_tp
+                else ("filled" if pos is not None else "filled_then_closed"),
+                "resumed",
+            )
+            return
+        if now_ts - minute >= ENTRY_MAX_LAG_S:  # a catch-up after a cut: never executed late
+            outcome("not_executed_stale_trigger")
+            return
+        blocked = self._kill_and_dormance(now_ts, view, events, rep)
+        action = "open_long" if d["side"] == "long" else "open_short"
+        intent = PerpIntent(
+            intent_id=oid, portfolio=name, ts=now_ts, instrument=inst, action=action,
+            size_bp=d["size_bp"], stop_bp=d["stop_bp"], take_profit_bp=d["take_profit_bp"],
+            horizon_h=d["horizon_h"], expected_move_bp=d["expected_move_bp"], confidence_pct=d["confidence_pct"],
+        )  # fmt: skip
+        counters = counters_for(events, name, now_ts)
+        v = evaluate_perp(
+            intent, acc, view, self.specs, counters, self.policy, self.cfg.simulation, now_ts, blocked
+        )
+        if oid not in st.verdicts:
+            self._append(
+                "perp_verdict",
+                {
+                    "intent_id": oid,
+                    "portfolio": name,
+                    "instrument": inst,
+                    "action": action,
+                    "approved": v.approved,
+                    "reasons": list(v.reasons),
+                    "qty": v.qty,
+                    "policy_sha256": v.policy_sha256,
+                    "error": v.error,
+                },
+                now_ts,
+            )
+        elif (
+            not v.approved
+        ):  # approved before a cut, refused now: the stop and the size come from this verdict
+            outcome("not_executed_refused_on_resume", ",".join(v.reasons))
+            return
+        if not v.approved:
+            return
+        quotes = {s: (m.bid_uusd, m.ask_uusd) for s, m in view.instruments.items()}
+        marks = {s: m.mark_uusd for s, m in view.instruments.items()}
+        _execute(self.sim, name, oid, inst, action, v, quotes, marks, (view.fx_bid, view.fx_ask), now_ts)
+
     # ------------------------------------------------------------------ rounds
 
     def _move_bp(self, symbol: str, last_minute: int) -> int | None:
@@ -573,13 +802,38 @@ class PerpWatcher:
         done = {e["payload"]["round"] for e in events if e["type"] == "perp_round_done"}
         for rid, r in started.items():  # resume an interrupted round within its window
             if rid not in done and now_ts - r["ts"] < ROUND_LATE_S:
-                self._round(rid, r["kind"], r.get("trigger"), now_ts, view, rep, resume=True)
+                self._round(
+                    rid,
+                    r["kind"],
+                    r.get("trigger"),
+                    now_ts,
+                    view,
+                    rep,
+                    resume=True,
+                    portfolios=r.get("portfolios"),
+                )
                 return
         rdv = (now_ts - self.round_offset_s) // ROUND_S * ROUND_S + self.round_offset_s
         if now_ts - rdv < ROUND_LATE_S and rdv not in started:
             self._round(rdv, "rendezvous", None, now_ts, view, rep)
             return
-        # wake-ups: a crossing is recorded, kept pending for an hour, served when the guards allow it
+        if not self._wakeup(now_ts, view, rep, cursor, events, started, rdv):
+            self._alert_round(
+                now_ts, view, rep, events, started, rdv
+            )  # one round per tick: wake-ups come first
+
+    def _wakeup(
+        self,
+        now_ts: int,
+        view: PerpMarketView,
+        rep: TickReport,
+        cursor: int,
+        events: list[dict[str, Any]],
+        started: dict[int, dict[str, Any]],
+        rdv: int,
+    ) -> bool:
+        """Market wake-ups: a crossing is recorded, kept pending for an hour, served when the guards allow it.
+        True when a round was started."""
         pend = [e for e in events if e["type"] == "perp_wake_pending" and now_ts - e["ts"] < WAKE_PENDING_S]
         served = {
             r.get("trigger", {}).get("pending_ts")
@@ -602,8 +856,9 @@ class PerpWatcher:
             and abs(self._move_bp(p["payload"]["instrument"], cursor) or 0) >= WAKE_FADE_BP
         ]
         if not candidates:
-            return
-        last_round = max((r["ts"] for r in started.values()), default=0)
+            return False
+        # private alert rounds count neither in the cooldown nor in the daily cap of the market wake-ups
+        last_round = max((r["ts"] for r in started.values() if r["kind"] != "alert"), default=0)
         day = now_ts // 86_400
         today = [r for r in started.values() if r["kind"] == "wakeup" and r["ts"] // 86_400 == day]
         if (
@@ -612,10 +867,58 @@ class PerpWatcher:
             or rdv + ROUND_S - now_ts < WAKE_GUARD_BEFORE_ROUND_S
             or near_spot_cycle(now_ts)
         ):
-            return
+            return False
         best = max(candidates, key=lambda p: abs(p["payload"]["move_bp"]))
         tick = now_ts // TICK_S * TICK_S
         self._round(tick, "wakeup", {**best["payload"], "pending_ts": best["ts"]}, now_ts, view, rep)
+        return True
+
+    def _alert_round(
+        self,
+        now_ts: int,
+        view: PerpMarketView,
+        rep: TickReport,
+        events: list[dict[str, Any]],
+        started: dict[int, dict[str, Any]],
+        rdv: int,
+    ) -> None:
+        """A crossed alert wakes its owner alone (spec §3). The oldest waiting alert whose owner passes the
+        guards is served; the others wait for the next tick."""
+        if self.llm is None or not self.llm.enabled:
+            return
+        if rdv + ROUND_S - now_ts < ALERT_GUARD_BEFORE_ROUND_S or near_spot_cycle(now_ts):
+            return
+        models = {m.portfolio: m for m in self.llm.models}
+        states = self.sim.states()
+        day = now_ts // 86_400
+        for a in AO.unserved_alerts(events, now_ts, ALERT_PENDING_S):
+            owner = a["portfolio"]
+            if owner not in models or states[owner].halted or not has_budget(models[owner], events, now_ts):
+                continue
+            last = max(
+                (
+                    e["ts"]
+                    for e in events
+                    if e["type"] == "round_data" and e["payload"].get("portfolio") == owner
+                ),
+                default=0,
+            )
+            today = sum(
+                1
+                for r in started.values()
+                if r["kind"] == "alert" and r.get("portfolios") == [owner] and r["ts"] // 86_400 == day
+            )
+            if now_ts - last < ALERT_COOLDOWN_S or today >= ALERT_MAX_PER_DAY:
+                continue
+            trigger = {
+                "alert_id": a["id"],
+                "instrument": a["instrument"],
+                "condition": a["condition"],
+                "price_usd": usd(a["price_uusd"]),
+                "note": a["note"],
+            }
+            self._round(now_ts // TICK_S * TICK_S, "alert", trigger, now_ts, view, rep, portfolios=[owner])
+            return
 
     def _round(
         self,
@@ -627,10 +930,14 @@ class PerpWatcher:
         rep: TickReport,
         *,
         resume: bool = False,
+        portfolios: list[str] | None = None,
     ) -> None:
         if not resume:
+            extra = {} if portfolios is None else {"portfolios": portfolios}
             self._append(
-                "perp_round", {"round": round_id, "kind": kind, "trigger": trigger, "ts": now_ts}, now_ts
+                "perp_round",
+                {"round": round_id, "kind": kind, "trigger": trigger, "ts": now_ts, **extra},
+                now_ts,
             )
         rep.rounds.append(f"{kind}:{round_id}{' (resumed)' if resume else ''}")
         fx = (view.fx_bid, view.fx_ask)
@@ -651,14 +958,21 @@ class PerpWatcher:
                 ok &= self._basket(now_ts, month, marks, quotes, fx, rep)
             if (B.TREND, str(day)) not in marker:
                 ok &= self._trend(now_ts, str(day), marks, quotes, fx, rep)
-        llm_plays = self.llm is not None and self.llm.enabled and (kind == "rendezvous" or self.llm.wakeups)
+        private = kind == "alert"  # only its owner plays: no benchmark, no other model
+        llm_plays = (
+            self.llm is not None
+            and self.llm.enabled
+            and (kind in ("rendezvous", "alert") or self.llm.wakeups)
+        )
         # the random benchmark plays the rounds the models play (wake-ups too only once the models have them)
-        if kind == "rendezvous" or self.llm is None or not self.llm.enabled or self.llm.wakeups:
+        if not private and (
+            kind == "rendezvous" or self.llm is None or not self.llm.enabled or self.llm.wakeups
+        ):
             ok &= self._random(round_id, now_ts, view, quotes, marks, fx, blocked, rep)
         if llm_plays:
             self._deferred = {
                 "round_id": round_id, "kind": kind, "trigger": trigger, "now_ts": now_ts, "view": view,
-                "blocked": blocked, "ok": ok,
+                "blocked": blocked, "ok": ok, "portfolios": portfolios,
             }  # fmt: skip
             return
         if ok:

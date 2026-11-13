@@ -129,6 +129,14 @@ def spent_today_uusd(events: Sequence[Mapping[str, Any]], portfolio: str, now_ts
     )
 
 
+def has_budget(model: LlmModel, events: Sequence[Mapping[str, Any]], now_ts: int) -> bool:
+    """False when less than a twentieth of the model's daily budget is left (about one round)."""
+    return (
+        model.daily_budget_uusd - spent_today_uusd(events, model.portfolio, now_ts)
+        >= model.daily_budget_uusd // 20
+    )
+
+
 def _usd(uusd: int) -> str:
     return f"{Decimal(uusd).scaleb(-6):.6f}"
 
@@ -157,11 +165,14 @@ def run_llm_round(
     entries_blocked: Callable[[], bool],
     decider_factory: Callable[[LlmModel], AgentDecider] | None = None,
     refresh: Callable[[], tuple[Any, int] | None] | None = None,
+    only: set[str] | None = None,
 ) -> LlmRoundReport:
     """Plays the LLM part of one league round; every outcome is journaled (problems never stop the others).
 
     `refresh` gives the market view and time at which the decisions are executed (after the calls); without
-    it, or when it returns None, they are executed on the round's view at its time."""
+    it, or when it returns None, they are executed on the round's view at its time.
+
+    `only`: the portfolios allowed to play (a private `alert` round); the other models are not even looked at."""
     rep = LlmRoundReport([])
     max_call = _usd_to_uusd(league.max_budget_usd, "max_budget_usd")
 
@@ -192,6 +203,7 @@ def run_llm_round(
         of_round("agent_decision"),
         of_round("perp_llm_skipped"),
     )
+    models = [m for m in league.models if only is None or m.portfolio in only]
     for name in sorted(started - decided - skipped):
         # interrupted (power cut, kill): never called again, never executed late
         path = next(
@@ -204,14 +216,14 @@ def run_llm_round(
         rep.notes.append(f"{name}: {reason}, not replayed")
     played = started | skipped
     prepared = []
-    for m in league.models:
+    for m in models:
         if m.portfolio in played:
             continue
         remaining = m.daily_budget_uusd - spent_today_uusd(events, m.portfolio, now_ts)
         reason = None
         if states[m.portfolio].halted:
             reason = "halted"
-        elif remaining < m.daily_budget_uusd // 20:  # less than a twentieth of the day left: about one round
+        elif not has_budget(m, events, now_ts):
             reason = "daily_budget"
         try:
             if reason is None:

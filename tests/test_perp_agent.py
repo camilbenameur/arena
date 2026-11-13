@@ -37,7 +37,9 @@ FAKE = Path(__file__).parent / "fake_claude.py"
 LLM = "llm-perp:claude-test"
 
 
-def fake_runner(mode: str = "normal"):
+def fake_runner(mode: str = "normal", extra: dict | None = None):
+    """`extra` (read at every call): {model or "*": fields merged into the fake's decision}."""
+
     def run(cmd, stdin, env, cwd, timeout):
         p = subprocess.run(
             [sys.executable, str(FAKE), *cmd[1:]],
@@ -45,7 +47,7 @@ def fake_runner(mode: str = "normal"):
             check=False,
             capture_output=True,
             text=True,
-            env={**env, "FAKE_CLAUDE_MODE": mode},
+            env={**env, "FAKE_CLAUDE_MODE": mode, "FAKE_CLAUDE_EXTRA": json.dumps(extra or {})},
             cwd=cwd,
             timeout=timeout,
         )
@@ -61,10 +63,18 @@ def league(tmp_path: Path) -> World:
     return w
 
 
-def round_for(w: World, mode: str = "normal", now: int = T0 + 140, runner=None, blocked=False, round_id=T0):
+def round_for(
+    w: World,
+    mode: str = "normal",
+    now: int = T0 + 140,
+    runner=None,
+    blocked=False,
+    round_id=T0,
+    portfolio=LLM,
+):
     view = market_view(w.store, SYMBOLS, now)
     decider = AgentDecider(
-        "claude-haiku-5-5", LLM, w.var / "claude-empty", runner=runner or fake_runner(mode)
+        "claude-haiku-5-5", portfolio, w.var / "claude-empty", runner=runner or fake_runner(mode)
     )
     res = run_agent_round(
         var=w.var,
@@ -637,3 +647,237 @@ def test_first_call_guards():
     assert check_init({**good, "apiKeySource": "ANTHROPIC_API_KEY"}, "m")
     assert check_init({**good, "plugins": [{"name": "x"}]}, "m")
     assert check_init(None, "m")
+
+
+# ---------------------------------------------------------------------- alerts and entry orders (spec)
+
+MARK_BTC = 70_000  # USD, the mark of every World snapshot
+OTHER = "llm-perp:claude-other"
+ALERT = {
+    "instrument": "PF_XBTUSD",
+    "condition": "below",
+    "price_usd": 69_437,
+    "note": "support",
+    "expires_h": 6,
+}
+ENTRY = {
+    "instrument": "PF_XBTUSD", "side": "long", "condition": "above", "price_usd": 70_500,
+    "size_pct": 10, "stop_pct": 3, "take_profit_pct": 6, "horizon_h": 24, "expected_move_pct": 5,
+}  # fmt: skip
+
+
+def decision(**kw):
+    return {"actions": [], "justification": "j", **kw}
+
+
+def test_order_schema_and_parse_elements():
+    props = OUTPUT_SCHEMA["properties"]
+    for key in ("alerts", "entry_orders"):
+        assert props[key]["maxItems"] == 3 and props[key]["items"]["additionalProperties"] is False
+        assert key not in OUTPUT_SCHEMA["required"]
+    assert {"side", "size_pct", "stop_pct"} <= set(props["entry_orders"]["items"]["required"])
+    parsed, err, _ = parse_decision(decision(alerts=[ALERT], entry_orders=[ENTRY]), "p", 1, 2)
+    assert err is None and not parsed["order_errors"]
+    a, e = parsed["alerts"][0], parsed["entry_orders"][0]
+    assert a["price_uusd"] == 69_437_000_000 and a["expires_h"] == 6 and a["note"] == "support"
+    assert e["side"] == "long" and e["size_bp"] == 1000 and e["stop_bp"] == 300 and e["expires_h"] == 4
+    assert all(isinstance(v, int | str | type(None)) for el in (a, e) for v in el.values())
+    # the id is a sha256 of (portfolio, round, kind, rank, content): stable, and different per round
+    again = parse_decision(decision(alerts=[ALERT], entry_orders=[ENTRY]), "p", 1, 2)[0]
+    other = parse_decision(decision(alerts=[ALERT]), "p", 2, 2)[0]
+    assert again["alerts"][0]["id"] == a["id"] != other["alerts"][0]["id"]
+    # decimals are read exactly, never through a float
+    exact = parse_decision(
+        '{"actions":[],"justification":"","alerts":[{"instrument":"PF_XRPUSD","condition":"above","price_usd":1.0000005}]}',
+        "p",
+        1,
+        2,
+    )[0]
+    assert exact["alerts"][0]["price_uusd"] == 1_000_001  # half up
+
+
+def test_an_invalid_order_is_rejected_alone():
+    bad_alerts = [
+        {**ALERT, "price_usd": -1},
+        {**ALERT, "price_usd": 0},
+        {**ALERT, "price_usd": True},
+        {**ALERT, "condition": "sideways"},
+        {**ALERT, "expires_h": 25},
+        {**ALERT, "expires_h": 0},
+        {**ALERT, "extra": 1},
+        {**ALERT, "instrument": "PF_DOGEUSD"},
+        {"instrument": "PF_XBTUSD", "condition": "below"},
+    ]
+    for bad in bad_alerts:
+        parsed, err, _ = parse_decision(decision(alerts=[bad, ALERT]), "p", 1, 2)
+        assert err is None and len(parsed["alerts"]) == 1 and parsed["order_errors"][0]["k"] == 0, bad
+        assert parsed["order_errors"][0]["kind"] == "alert"
+    for bad in (
+        {k: v for k, v in ENTRY.items() if k != "stop_pct"},
+        {k: v for k, v in ENTRY.items() if k != "size_pct"},
+        {**ENTRY, "size_pct": 101},
+        {**ENTRY, "size_pct": 0},
+        {**ENTRY, "stop_pct": 101},
+        {**ENTRY, "take_profit_pct": 1001},
+        {**ENTRY, "horizon_h": 169},
+        {**ENTRY, "side": "buy"},
+        {**ENTRY, "confidence_pct": 101},
+    ):
+        parsed, err, _ = parse_decision(decision(entry_orders=[bad, ENTRY]), "p", 1, 2)
+        assert (
+            err is None and len(parsed["entry_orders"]) == 1 and parsed["order_errors"][0]["kind"] == "entry"
+        ), bad
+    assert parse_decision(decision(alerts=[ALERT] * 4), "p", 1, 2)[1]  # more than 3: the decision is invalid
+    assert parse_decision(decision(entry_orders=[ENTRY] * 4), "p", 1, 2)[1]
+    assert parse_decision(decision(alerts="x"), "p", 1, 2)[1]
+    assert parse_decision(decision(alerts=None, entry_orders=None), "p", 1, 2)[1] is None
+    assert parse_decision({"actions": [], "justification": "", "bogus": 1}, "p", 1, 2)[1]
+
+
+def test_levels_must_be_near_and_not_crossed():
+    from arene.perp.agent_orders import validate_levels
+
+    marks = {"PF_XBTUSD": 70_000_000_000}
+    cases = [
+        ("below", 69_000, True), ("above", 71_000, True),
+        ("above", 69_000, False),  # already crossed
+        ("below", 71_000, False),
+        ("below", 70_000, False), ("above", 70_000, False),  # at the mark: crossed
+        ("above", 87_500, True), ("above", 87_501, False),  # 25 % away
+        ("below", 52_500, True), ("below", 52_499, False),
+    ]  # fmt: skip
+    for cond, px, ok in cases:
+        parsed = parse_decision(decision(alerts=[{**ALERT, "condition": cond, "price_usd": px}]), "p", 1, 2)[
+            0
+        ]
+        alerts, _entries, rejected = validate_levels(parsed, marks)
+        assert bool(alerts) is ok and bool(rejected) is not ok, (cond, px)
+    parsed = parse_decision(decision(alerts=[{**ALERT, "instrument": "PF_ETHUSD"}]), "p", 1, 2)[0]
+    assert validate_levels(parsed, marks)[2]  # no mark known: rejected
+
+
+def _state(w, name=LLM):
+    from arene.perp.agent_orders import pending_state
+
+    return pending_state(w.events(), name)
+
+
+def test_a_valid_decision_replaces_the_whole_set(tmp_path):
+    w = league(tmp_path)
+    extra = {"*": decision(alerts=[ALERT], entry_orders=[ENTRY])}
+    round_for(w, runner=fake_runner(extra=extra), round_id=1)
+    first = _state(w)
+    assert [el.kind for el in first.pending] == ["alert", "entry"]
+    sets = w.events("agent_orders_set")
+    assert sets[0]["payload"]["alerts"][0]["expires_ts"] == T0 + 140 + 6 * 3600
+    assert sets[0]["payload"]["entry_orders"][0]["expires_ts"] == T0 + 140 + 4 * 3600
+    assert sets[0]["payload"]["rejected"] == [] and not w.events("agent_order_ended")
+    # round 2 restates the alert and drops the entry order; adds a new alert
+    other = {**ALERT, "price_usd": 68_000}
+    extra["*"] = decision(alerts=[ALERT, other])
+    round_for(w, runner=fake_runner(extra=extra), round_id=2)
+    ended = [e["payload"] for e in w.events("agent_order_ended")]
+    # every element of the previous set ends; the restated alert lives on as a new element of the new set
+    assert sorted((x["kind"], x["reason"]) for x in ended) == [("alert", "replaced"), ("entry", "replaced")]
+    assert {x["id"] for x in ended} == {el.id for el in first.pending}
+    assert [el.kind for el in _state(w).pending] == ["alert", "alert"]
+    # round 3 states nothing: everything is replaced
+    extra["*"] = decision()
+    round_for(w, runner=fake_runner(extra=extra), round_id=3)
+    assert _state(w).pending == [] and len(w.events("agent_order_ended")) == 4
+
+
+def test_an_invalid_decision_keeps_the_set(tmp_path):
+    w = league(tmp_path)
+    extra = {"*": decision(alerts=[ALERT])}
+    round_for(w, runner=fake_runner(extra=extra), round_id=1)
+    n = len(w.events("agent_orders_set"))
+    for k, bad in enumerate(({"bogus": 1}, {"alerts": [ALERT] * 4}, {"actions": 1})):
+        extra["*"] = bad
+        round_for(w, runner=fake_runner(extra=extra), round_id=10 + k)
+    round_for(w, "no_result", round_id=20)  # no decision at all
+    dec = [e["payload"] for e in w.events("agent_decision")]
+    assert all(d["parse_error"] for d in dec[1:]) and len(w.events("agent_orders_set")) == n
+    assert len(_state(w).pending) == 1 and not w.events("agent_order_ended")
+
+
+def test_rejected_elements_are_journaled_and_shown_next_round(tmp_path):
+    from arene.perp.agent_round import snapshot
+
+    w = league(tmp_path)
+    crossed = {**ALERT, "condition": "above", "price_usd": 69_000}
+    far = {**ENTRY, "price_usd": 95_000}
+    extra = {"*": decision(alerts=[crossed, ALERT], entry_orders=[far, {**ENTRY, "size_pct": 101}])}
+    round_for(w, runner=fake_runner(extra=extra), round_id=1)
+    rej = w.events("agent_orders_set")[0]["payload"]["rejected"]
+    assert sorted((r["kind"], r["k"]) for r in rej) == [("alert", 0), ("entry", 0), ("entry", 1)]
+    assert len(_state(w).pending) == 1
+    round_for(w, runner=fake_runner(extra={"*": decision()}), round_id=2, now=T0 + 150)
+    rd = [e["payload"] for e in w.events("round_data")][-1]
+    data = json.loads((w.var / rd["path"] / "round.json").read_text())
+    comp = snapshot(data, "rendezvous", None)["compte"]
+    assert len(comp["alertes_en_attente"]) == 1 and comp["alertes_en_attente"][0]["niveau_usd"] == "69437"
+    assert comp["alertes_en_attente"][0]["echeance_utc"].endswith("Z")
+    assert {(x["type"], x["rang"]) for x in comp["depuis_ta_derniere_ronde"]["elements_rejetes"]} == {
+        ("alerte", 0), ("ordre_d_entree", 0), ("ordre_d_entree", 1)
+    }  # fmt: skip
+
+
+def test_orders_are_private_to_their_portfolio(tmp_path):
+    from arene.perp.agent_round import snapshot
+
+    w = league(tmp_path)
+    w.w.sim.open_portfolio(OTHER, "llm", T0 + 130)
+    extra = {"*": decision(alerts=[ALERT], entry_orders=[ENTRY])}
+    round_for(w, runner=fake_runner(extra=extra), round_id=1)
+    round_for(w, runner=fake_runner(extra={"*": decision()}), round_id=2, portfolio=OTHER, now=T0 + 150)
+    rd = next(e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == OTHER)
+    raw = (w.var / rd["path"] / "round.json").read_text()
+    assert "69437" not in raw and "70500" not in raw and "support" not in raw
+    comp = snapshot(json.loads(raw), "rendezvous", None)["compte"]
+    assert comp["alertes_en_attente"] == [] and comp["ordres_d_entree_en_attente"] == []
+    assert not any(comp["depuis_ta_derniere_ronde"].values())
+    # the tools of the other portfolio read that round.json only
+    out, err = RoundTools(w.var / rd["path"], OTHER, 4).call("historique", {})
+    assert not err and "69437" not in json.dumps(out)
+    # its owner sees them
+    round_for(w, runner=fake_runner(extra={"*": decision()}), round_id=3, now=T0 + 160)
+    rd = [e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == LLM][-1]
+    mine = snapshot(json.loads((w.var / rd["path"] / "round.json").read_text()), "rendezvous", None)["compte"]
+    assert len(mine["alertes_en_attente"]) == 1 and len(mine["ordres_d_entree_en_attente"]) == 1
+    assert mine["ordres_d_entree_en_attente"][0]["taille_pct"] == "10"
+
+
+def test_the_schema_requires_horizon_and_move_on_entry_orders_only():
+    action = OUTPUT_SCHEMA["properties"]["actions"]["items"]["properties"]
+    entry_schema = OUTPUT_SCHEMA["properties"]["entry_orders"]["items"]
+    # a close or a reduce may leave them null
+    assert "null" in action["horizon_h"]["type"] and "null" in action["expected_move_pct"]["type"]
+    assert entry_schema["properties"]["horizon_h"]["type"] == "integer"
+    assert entry_schema["properties"]["expected_move_pct"]["type"] == "number"
+    assert {"horizon_h", "expected_move_pct"} <= set(entry_schema["required"])
+    parsed = parse_decision(decision(entry_orders=[{**ENTRY, "horizon_h": None}]), "p", 1, 2)[0]
+    assert parsed["entry_orders"] == [] and parsed["order_errors"]
+    parsed = parse_decision(decision(entry_orders=[{**ENTRY, "size_pct": "10"}]), "p", 1, 2)[0]
+    assert parsed["entry_orders"] == [] and parsed["order_errors"]  # a number sent as text
+
+
+def test_no_fresh_view_after_the_call_keeps_the_set_in_place(tmp_path):
+    from arene.perp.agent_round import finish_agent_round, prepare_agent_round
+
+    w = league(tmp_path)
+    extra = {"*": decision(alerts=[ALERT])}
+    round_for(w, runner=fake_runner(extra=extra), round_id=1)
+    first = _state(w).pending
+    view = market_view(w.store, SYMBOLS, T0 + 150)
+    decider = AgentDecider(
+        "claude-haiku-5-5", LLM, w.var / "claude-empty", runner=fake_runner(extra={"*": decision()})
+    )
+    ctx = prepare_agent_round(
+        var=w.var, sim=w.w.sim, store=w.store, decider=decider, view=view, specs=SPECS, policy=POLICY,
+        config_sha256=CFG.sha256, round_id=2, now_ts=T0 + 150, kind="rendezvous", trigger=None,
+        entries_blocked=False,
+    )  # fmt: skip
+    finish_agent_round(ctx, decider.decide(ctx.out_dir, ctx.snapshot), execute=False)
+    assert len(w.events("agent_orders_set")) == 1 and not w.events("agent_order_ended")
+    assert [el.id for el in _state(w).pending] == [el.id for el in first]

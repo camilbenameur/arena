@@ -2,6 +2,7 @@
 calls tools through JSON-RPC, and prints a stream-json transcript like the CLI's. No model, no network.
 
 FAKE_CLAUDE_MODE: normal | five_tools | no_result | mcp_failed
+FAKE_CLAUDE_EXTRA: JSON {<model> or "*": {fields merged into the decision, e.g. alerts, entry_orders, actions}}
 """
 
 from __future__ import annotations
@@ -133,6 +134,9 @@ if approved:
         ],
         "justification": "funding faible et simulation approuvée",
     }
+extra = json.loads(os.environ.get("FAKE_CLAUDE_EXTRA") or "{}")
+decision.update(extra.get("*", {}))
+decision.update(extra.get(model, {}))
 out(
     {
         "type": "assistant",

@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, f
 
 from arene.perp.riskd import PerpIntent
 
-PROMPT_PATH = Path(__file__).parent / "prompt" / "v3.md"
+PROMPT_PATH = Path(__file__).parent / "prompt" / "v4.md"
 MCP_SERVER = "arene"
 TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
 MAX_TOOL_CALLS = 4
@@ -47,6 +47,10 @@ TIMEOUT_RC = -9  # the runner's return code when the CLI was killed on timeout
 MAX_BUDGET_USD = "1.00"  # hard ceiling of one call (equivalent cost on the subscription)
 JUSTIFICATION_MAX = 1200
 INVALIDATION_MAX = 200
+NOTE_MAX = 120
+MAX_ORDERS = 3  # alerts, and entry orders, per decision
+EXPIRES_DEFAULT_H = 4
+MAX_PRICE_USD = 1_000_000_000
 # Claude Code's built-in plugins, turned off (the preflight of step 5-bis checks none is loaded)
 BUILTIN_PLUGINS = (
     "cc-plugin-agents-md@builtin",
@@ -71,6 +75,18 @@ def _num(name: str) -> dict[str, Any]:
     lo, hi = BOUNDS[name]
     return {"type": ["number", "null"], "minimum": lo, "maximum": hi}
 
+
+def _bounded(name: str) -> dict[str, Any]:
+    lo, hi = BOUNDS[name]
+    return {"type": "number", "minimum": lo, "maximum": hi}
+
+
+_ORDER_COMMON = {
+    "instrument": {"type": "string", "enum": list(INSTRUMENTS)},
+    "condition": {"type": "string", "enum": ["above", "below"]},
+    "price_usd": {"type": "number", "minimum": 0, "maximum": MAX_PRICE_USD},
+    "expires_h": {"type": ["integer", "null"], "minimum": 1, "maximum": 24},
+}
 
 OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -98,6 +114,45 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             },
         },
         "justification": {"type": "string", "maxLength": JUSTIFICATION_MAX},
+        "alerts": {
+            "type": "array",
+            "maxItems": MAX_ORDERS,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["instrument", "condition", "price_usd"],
+                "properties": {**_ORDER_COMMON, "note": {"type": ["string", "null"], "maxLength": NOTE_MAX}},
+            },
+        },
+        "entry_orders": {
+            "type": "array",
+            "maxItems": MAX_ORDERS,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "instrument",
+                    "side",
+                    "condition",
+                    "price_usd",
+                    "size_pct",
+                    "stop_pct",
+                    "horizon_h",
+                    "expected_move_pct",
+                ],
+                "properties": {
+                    **_ORDER_COMMON,
+                    "side": {"type": "string", "enum": ["long", "short"]},
+                    "size_pct": _bounded("size_pct"),
+                    "stop_pct": _bounded("stop_pct"),
+                    "take_profit_pct": _num("take_profit_pct"),
+                    "horizon_h": {"type": "integer", "minimum": 1, "maximum": 168},
+                    "expected_move_pct": _bounded("expected_move_pct"),
+                    "confidence_pct": _num("confidence_pct"),
+                    "invalidation": {"type": ["string", "null"], "maxLength": INVALIDATION_MAX},
+                },
+            },
+        },
     },
 }
 
@@ -117,7 +172,26 @@ def _clean(v: Any, n: int) -> Any:
     return v[:n].encode("utf-8", "replace").decode("utf-8") if isinstance(v, str) else v
 
 
-class ActionV3(BaseModel):
+class _Bounded(BaseModel):
+    """Numeric fields named in BOUNDS: no boolean, finite, within the shared bounds."""
+
+    @field_validator(*BOUNDS, mode="before", check_fields=False)
+    @classmethod
+    def _no_bool(cls, v: Any) -> Any:
+        if isinstance(v, bool | str):
+            raise ValueError("a boolean or a string is not a number")  # noqa: TRY004 (pydantic needs ValueError)
+        return v
+
+    @field_validator(*BOUNDS, check_fields=False)
+    @classmethod
+    def _bounds(cls, v: Decimal | None, info: Any) -> Decimal | None:
+        lo, hi = BOUNDS[info.field_name]
+        if v is not None and (not v.is_finite() or v < lo or v > hi):
+            raise ValueError(f"{info.field_name} hors bornes [{lo}, {hi}] : {v}")
+        return v
+
+
+class ActionV3(_Bounded):
     model_config = ConfigDict(extra="forbid")
 
     instrument: Literal[INSTRUMENTS]  # type: ignore[valid-type]
@@ -135,19 +209,61 @@ class ActionV3(BaseModel):
     def _cut(cls, v: Any) -> Any:
         return _clean(v, INVALIDATION_MAX)
 
-    @field_validator(*BOUNDS, mode="before")
+
+class _Level(_Bounded):
+    instrument: Literal[INSTRUMENTS]  # type: ignore[valid-type]
+    condition: Literal["above", "below"]
+    price_usd: Decimal
+    expires_h: StrictInt | None = Field(default=None, ge=1, le=24)
+
+    @field_validator("price_usd", mode="before")
     @classmethod
-    def _no_bool(cls, v: Any) -> Any:
-        if isinstance(v, bool):
-            raise ValueError("a boolean is not a number")  # noqa: TRY004 (pydantic needs ValueError)
+    def _no_bool_price(cls, v: Any) -> Any:
+        if isinstance(v, bool | str):
+            raise ValueError("a boolean or a string is not a number")  # noqa: TRY004
         return v
 
-    @field_validator(*BOUNDS)
+    @field_validator("price_usd")
     @classmethod
-    def _bounds(cls, v: Decimal | None, info: Any) -> Decimal | None:
-        lo, hi = BOUNDS[info.field_name]
-        if v is not None and (not v.is_finite() or v < lo or v > hi):
-            raise ValueError(f"{info.field_name} hors bornes [{lo}, {hi}] : {v}")
+    def _price(cls, v: Decimal) -> Decimal:
+        if not v.is_finite() or v <= 0 or v > MAX_PRICE_USD:
+            raise ValueError(f"price_usd hors bornes ]0, {MAX_PRICE_USD}] : {v}")
+        return v
+
+
+class AlertV4(_Level):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str | None = None
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _cut_note(cls, v: Any) -> Any:
+        return _clean(v, NOTE_MAX)
+
+
+class EntryOrderV4(_Level):
+    model_config = ConfigDict(extra="forbid")
+
+    side: Literal["long", "short"]
+    size_pct: Decimal
+    stop_pct: Decimal
+    take_profit_pct: Decimal | None = None
+    horizon_h: StrictInt = Field(ge=1, le=168)  # riskd needs both to judge the cost against the move
+    expected_move_pct: Decimal
+    confidence_pct: Decimal | None = None
+    invalidation: str | None = None
+
+    @field_validator("invalidation", mode="before")
+    @classmethod
+    def _cut(cls, v: Any) -> Any:
+        return _clean(v, INVALIDATION_MAX)
+
+    @field_validator("size_pct", "stop_pct", "expected_move_pct")
+    @classmethod
+    def _positive(cls, v: Decimal, info: Any) -> Decimal:
+        if v <= 0:
+            raise ValueError(f"{info.field_name} doit être > 0 : {v}")
         return v
 
 
@@ -162,22 +278,85 @@ def _dstr(v: Decimal | None) -> str | None:
     return s
 
 
+def _uusd(price: Decimal) -> int:
+    return int((price * 1_000_000).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def _order_id(portfolio: str, round_id: int, kind: str, k: int, content: Mapping[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {"p": portfolio, "r": round_id, "kind": kind, "k": k, "c": content}, sort_keys=True
+        ).encode()
+    ).hexdigest()
+
+
+def _parse_orders(
+    raw: Any, kind: str, portfolio: str, round_id: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(valid elements, errors) of `alerts` or `entry_orders`; each element is validated on its own.
+    An element is {id, instrument, condition, price_uusd, ..., expires_h}: integers and strings only."""
+    model = AlertV4 if kind == "alert" else EntryOrderV4
+    out, errors = [], []
+    for k, item in enumerate(raw):
+        try:
+            o = model.model_validate(item)
+        except ValidationError as exc:
+            errors.append({"kind": kind, "k": k, "error": str(exc)[:300]})
+            continue
+        content: dict[str, Any] = {
+            "instrument": o.instrument,
+            "condition": o.condition,
+            "price_uusd": _uusd(o.price_usd),
+            "expires_h": o.expires_h if o.expires_h is not None else EXPIRES_DEFAULT_H,
+        }
+        if isinstance(o, AlertV4):
+            content["note"] = o.note
+        else:
+            content.update(
+                side=o.side,
+                size_bp=_bp(o.size_pct, ROUND_DOWN),
+                stop_bp=_bp(o.stop_pct),
+                take_profit_bp=_bp(o.take_profit_pct),
+                horizon_h=o.horizon_h,
+                expected_move_bp=_bp(o.expected_move_pct),
+                confidence_pct=int(o.confidence_pct.to_integral_value(rounding=ROUND_HALF_UP))
+                if o.confidence_pct is not None
+                else None,
+                invalidation=o.invalidation,
+            )
+        zero = content["price_uusd"] <= 0 or (
+            kind == "entry" and (not content["size_bp"] or not content["stop_bp"])
+        )
+        if zero:
+            errors.append({"kind": kind, "k": k, "error": "level or size rounds to zero"})
+            continue
+        out.append({"id": _order_id(portfolio, round_id, kind, k, content), "k": k, **content})
+    return out, errors
+
+
 def parse_decision(
     data: Any, portfolio: str, round_id: int, now_ts: int
 ) -> tuple[dict[str, Any] | None, str | None, list[PerpIntent]]:
     """(journalable parsed decision | None, error | None, intents). Never raises.
 
     Each action is validated on its own: an invalid action is dropped and its error kept in the parsed
-    decision (`action_errors`), so one bad entry never discards a close in the same decision. The decision
-    itself is invalid only when it is not an object with at most two actions."""
+    decision (`action_errors`), so one bad entry never discards a close in the same decision. The same holds
+    for each alert (`alerts`) and entry order (`entry_orders`), whose rejections are in `order_errors`. The
+    decision itself is invalid only when it is not an object with at most two actions, and at most three
+    alerts and three entry orders (absent or null: none)."""
     try:
         if isinstance(data, str):
             data = json.loads(data, parse_float=Decimal)
-        if not isinstance(data, dict) or set(data) - {"actions", "justification"}:
-            raise ValueError("an object {actions, justification} is expected")
+        if not isinstance(data, dict) or set(data) - {"actions", "justification", "alerts", "entry_orders"}:
+            raise ValueError("an object {actions, justification, alerts?, entry_orders?} is expected")
         raw_actions = data.get("actions")
         if not isinstance(raw_actions, list) or len(raw_actions) > 2:
             raise ValueError("actions: a list of 0 to 2 elements is expected")
+        raw_orders = {}
+        for key in ("alerts", "entry_orders"):
+            raw_orders[key] = data.get(key) if data.get(key) is not None else []
+            if not isinstance(raw_orders[key], list) or len(raw_orders[key]) > MAX_ORDERS:
+                raise ValueError(f"{key}: a list of 0 to {MAX_ORDERS} elements is expected")
         justification = _clean(data.get("justification", ""), JUSTIFICATION_MAX)
         if not isinstance(justification, str):
             raise TypeError("justification: a string is expected")
@@ -211,7 +390,16 @@ def parse_decision(
         parsed_actions.append(
             {k2: _dstr(v) if isinstance(v, Decimal) else v for k2, v in a.model_dump().items()}
         )
-    parsed = {"actions": parsed_actions, "justification": justification, "action_errors": errors}
+    alerts, alert_errors = _parse_orders(raw_orders["alerts"], "alert", portfolio, round_id)
+    entries, entry_errors = _parse_orders(raw_orders["entry_orders"], "entry", portfolio, round_id)
+    parsed = {
+        "actions": parsed_actions,
+        "justification": justification,
+        "action_errors": errors,
+        "alerts": alerts,
+        "entry_orders": entries,
+        "order_errors": alert_errors + entry_errors,
+    }
     return parsed, None, intents
 
 
