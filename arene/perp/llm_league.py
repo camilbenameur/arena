@@ -43,6 +43,7 @@ class LlmLeague:
     enabled: bool
     wakeups: bool
     rounds_per_day: int
+    cadence_min: int
     max_parallel: int
     timeout_s: int
     max_budget_usd: str
@@ -71,6 +72,7 @@ def load_llm_league(path: Path = DEFAULT_LLM_CONFIG) -> LlmLeague:
         "enabled",
         "wakeups",
         "rounds_per_day",
+        "cadence_min",
         "max_parallel",
         "timeout_s",
         "max_budget_usd",
@@ -83,6 +85,9 @@ def load_llm_league(path: Path = DEFAULT_LLM_CONFIG) -> LlmLeague:
         raise LlmConfigError("enabled and wakeups are booleans")
     if type(data["rounds_per_day"]) is not int or not 6 <= data["rounds_per_day"] <= 288:
         raise LlmConfigError("rounds_per_day: 6 (the rendez-vous) to 288 (one per tick)")
+    cadence = data["cadence_min"]
+    if type(cadence) is not int or not (cadence == 0 or 5 <= cadence <= 60):
+        raise LlmConfigError("cadence_min: 0 (off) or 5 to 60")
     if type(data["max_parallel"]) is not int or not 1 <= data["max_parallel"] <= 4:
         raise LlmConfigError("max_parallel: 1 to 4")
     if type(data["timeout_s"]) is not int or not 30 <= data["timeout_s"] <= 600:
@@ -107,6 +112,7 @@ def load_llm_league(path: Path = DEFAULT_LLM_CONFIG) -> LlmLeague:
         data["enabled"],
         data["wakeups"],
         data["rounds_per_day"],
+        data["cadence_min"],
         data["max_parallel"],
         data["timeout_s"],
         data["max_budget_usd"],
@@ -190,8 +196,8 @@ def run_llm_round(
     `only`: the portfolios allowed to play (a private round, or a market wake-up without the models out of
     rounds); the other models are not even looked at.
 
-    `triggers`: in a private round, each portfolio's own trigger ({"kind": "alert" | "scheduled", ...}): its
-    `kind` is the call type the model sees, and no model sees another's trigger. `quota_of(portfolio)`: its
+    `triggers`: in a private round, each portfolio's own trigger ({"kind": "alert" | "scheduled" | "cadence",
+    ...}): its `kind` is the call type the model sees, and no model sees another's trigger. `quota_of(portfolio)`: its
     rounds of the day, shown in its snapshot."""
     rep = LlmRoundReport([])
     max_call = _usd_to_uusd(league.max_budget_usd, "max_budget_usd")

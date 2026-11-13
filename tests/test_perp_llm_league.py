@@ -14,7 +14,11 @@ from arene.perp.llm_league import LlmConfigError, load_llm_league
 from tests.test_perp_agent import fake_runner
 from tests.test_perp_watcher import PRICES, T0, World
 
-LEAGUE = load_llm_league()
+CONFIG = load_llm_league()
+# the tests of the alerts, the asked wake-ups and the quota run without the default cadence, at 48 rounds a day;
+# the cadence has its own tests (CADENCED)
+LEAGUE = dataclasses.replace(CONFIG, cadence_min=0, rounds_per_day=48)
+CADENCED = dataclasses.replace(CONFIG, rounds_per_day=48)
 NAMES = [m.portfolio for m in LEAGUE.models]
 
 
@@ -33,17 +37,21 @@ def factory(tmp: Path, calls: list, mode: str = "normal", extra: dict | None = N
 
 
 def test_the_config_file_is_valid_and_strict(tmp_path):
-    assert [m.model for m in LEAGUE.models] == [
+    assert [m.model for m in CONFIG.models] == [
         "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2",
     ]  # fmt: skip
-    assert LEAGUE.enabled and LEAGUE.wakeups and LEAGUE.max_parallel == 4
-    assert [m.daily_budget_uusd for m in LEAGUE.models] == [200_000, 2_000_000, 4_000_000, 8_500_000]
-    assert LEAGUE.rounds_per_day == 48
+    assert CONFIG.enabled and CONFIG.wakeups and CONFIG.max_parallel == 4
+    assert [m.daily_budget_uusd for m in CONFIG.models] == [500_000, 8_000_000, 16_000_000, 36_000_000]
+    assert CONFIG.rounds_per_day == 144 and CONFIG.cadence_min == 15
     bad = tmp_path / "bad.toml"
     raw = Path("config/perp-llm.toml").read_text()
     for old, new in (
-        ('"0.20"', "0.20"),
-        ("rounds_per_day = 48", "rounds_per_day = 5"),
+        ('"0.50"', "0.50"),
+        ("rounds_per_day = 144", "rounds_per_day = 5"),
+        ("cadence_min = 15", "cadence_min = 4"),
+        ("cadence_min = 15", "cadence_min = 61"),
+        ("cadence_min = 15", "cadence_min = true"),
+        ("cadence_min = 15", "x = 15"),
         ("max_parallel = 4", "max_parallel = 9"),
         ("wakeups = true", "x = 1"),
     ):
@@ -758,11 +766,11 @@ def test_a_model_is_woken_up_when_it_asked(tmp_path):
 def test_each_decision_replaces_the_asked_wakeup(tmp_path):
     from arene.perp.agent_orders import pending_wakeup
 
-    w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 240})
+    w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 45})
     assert pending_wakeup(w.events(), HAIKU) is not None
-    # an alert-free market wake-up at 01:00: Haiku's decision asks nothing, so the pending wake-up is cancelled
-    w.advance(T0 + 3630)
-    play_at(w, T0 + 3600, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 3630)
+    # an alert-free market wake-up at 00:30: Haiku's decision asks nothing, so the pending wake-up is cancelled
+    w.advance(T0 + 1830)
+    play_at(w, T0 + 1800, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 1830)
     sets = [e["payload"] for e in w.events("agent_wakeup_set")]
     assert [s["due_ts"] for s in sets][-1] is None and pending_wakeup(w.events(), HAIKU) is None
     # a decision that asks again replaces it; a model that never asked writes nothing
@@ -785,15 +793,15 @@ def play_at(w: World, round_id: int, kind: str, trigger, now: int) -> None:
 def test_an_invalid_asked_time_keeps_the_pending_wakeup(tmp_path):
     from arene.perp.agent_orders import pending_wakeup
 
-    w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 240})
+    w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 45})
     due = pending_wakeup(w.events(), HAIKU)["due_ts"]
     extra[HAIKU_MODEL] = {"next_wakeup_min": 4}
-    w.advance(T0 + 3630)
-    play_at(w, T0 + 3600, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 3630)
+    w.advance(T0 + 1830)
+    play_at(w, T0 + 1800, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 1830)
     [d] = [
         e["payload"]
         for e in w.events("agent_decision")
-        if e["payload"]["round"] == T0 + 3600 and e["payload"]["portfolio"] == HAIKU
+        if e["payload"]["round"] == T0 + 1800 and e["payload"]["portfolio"] == HAIKU
     ]
     assert d["parse_error"] is None and d["parsed"]["next_wakeup_invalid"]
     assert len(w.events("agent_wakeup_set")) == 1 and pending_wakeup(w.events(), HAIKU)["due_ts"] == due
@@ -813,7 +821,7 @@ def test_an_invalid_asked_time_is_rejected_alone(tmp_path):
         e["payload"]["rejected"] for e in w.events("agent_orders_set") if e["payload"]["portfolio"] == HAIKU
     ]
     assert rej == [
-        [{"kind": "wakeup", "k": 0, "error": "next_wakeup_min: an integer from 5 to 240 is expected"}]
+        [{"kind": "wakeup", "k": 0, "error": "next_wakeup_min: an integer from 5 to 60 is expected"}]
     ]
 
 
@@ -844,17 +852,24 @@ def test_two_models_due_at_the_same_tick_share_one_private_round(tmp_path):
 
 
 def test_a_rendezvous_within_the_tick_serves_the_asked_wakeup(tmp_path):
-    w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 237})  # due at about 03:59
+    from arene.perp.agent_orders import pending_wakeup
+
+    w, calls, extra = asked_world(tmp_path, {})
+    extra[HAIKU_MODEL] = {"next_wakeup_min": 57}  # asked at about 03:00, due at about 03:58
+    w.advance(T0 + 10830)
+    play_at(w, T0 + 10800, "wakeup", {"instrument": "PF_XBTUSD"}, T0 + 10830)
+    extra[HAIKU_MODEL] = {}
+    assert len(calls) == 8 and pending_wakeup(w.events(), HAIKU) is not None
     t = T0 + 4 * 3600 - 90
     w.advance(t)
     w.w.tick(t)
-    assert not private_rounds(w) and len(calls) == 4
+    assert not private_rounds(w) and len(calls) == 8
     w.advance(T0 + 4 * 3600 + 120)
     w.w.tick(T0 + 4 * 3600 + 120)  # the rendezvous serves it
-    assert len(calls) == 8
+    assert len(calls) == 12 and pending_wakeup(w.events(), HAIKU) is None
     w.advance(T0 + 4 * 3600 + 420)
     w.w.tick(T0 + 4 * 3600 + 420)
-    assert not private_rounds(w) and len(calls) == 8
+    assert not private_rounds(w) and len(calls) == 12
 
 
 def test_an_asked_wakeup_lapses_after_an_hour(tmp_path, monkeypatch):
@@ -961,3 +976,115 @@ def test_a_move_seen_at_a_rendezvous_is_not_played_again_as_a_wakeup(tmp_path):
     w.advance(T0 + 4 * 3600 + 1200, up)
     assert w.w.tick(T0 + 4 * 3600 + 1200).rounds == []  # the models saw it at the rendezvous
     assert len(calls) == 8
+
+
+# --- default cadence (the owner, 13/11 ~18:00 UTC, docs/SPEC-PERP-CADENCE.md) ---
+
+
+def cadenced_world(tmp_path, minutes: dict[str, int | None], league=CADENCED):
+    return asked_world(tmp_path, minutes, league=league)
+
+
+def test_the_default_cadence_calls_every_model_again(tmp_path):
+    import json
+
+    from arene.perp.agent_round import snapshot
+
+    w, calls, _ = cadenced_world(tmp_path, {})
+    assert len(calls) == 4
+    w.advance(T0 + 600)
+    w.w.tick(T0 + 600)
+    assert not private_rounds(w) and len(calls) == 4  # not yet: the rendezvous was 8 min ago
+    w.advance(T0 + 900)
+    rep = w.w.tick(T0 + 900)
+    [rnd] = private_rounds(w)
+    assert rep.rounds == [f"private:{T0 + 900}"] and rnd["portfolios"] == sorted(NAMES)
+    assert {p: t["kind"] for p, t in rnd["triggers"].items()} == dict.fromkeys(NAMES, "cadence")
+    assert rnd["triggers"][HAIKU] == {"kind": "cadence", "every_min": 15, "last_round_ts": T0 + 120}
+    assert len(calls) == 8
+    rd = [e["payload"] for e in w.events("round_data") if e["payload"]["round"] == T0 + 900]
+    assert {r["kind"] for r in rd} == {"cadence"}
+    data = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
+    assert snapshot(data, "cadence", rnd["triggers"][rd[0]["portfolio"]])["appel"]["type"] == "cadence"
+    for t in (T0 + 1200, T0 + 1500):
+        w.advance(t)
+        w.w.tick(t)
+    assert len(private_rounds(w)) == 1 and len(calls) == 8
+    w.advance(T0 + 1800)
+    w.w.tick(T0 + 1800)  # 15 min after the last round
+    assert len(private_rounds(w)) == 2 and len(calls) == 12
+
+
+def test_an_asked_wakeup_replaces_the_cadence(tmp_path):
+    w, calls, _ = cadenced_world(tmp_path, {HAIKU_MODEL: 45})
+    w.advance(T0 + 900)
+    w.w.tick(T0 + 900)
+    [rnd] = private_rounds(w)
+    assert HAIKU not in rnd["portfolios"] and len(rnd["portfolios"]) == 3 and len(calls) == 7
+    for t in range(T0 + 1200, T0 + 2700, 300):
+        w.advance(t)
+        w.w.tick(t)
+        assert all(HAIKU not in r["portfolios"] for r in private_rounds(w))
+    w.advance(T0 + 2700)
+    w.w.tick(T0 + 2700)  # 45 min after 00:02, within the tick
+    last = private_rounds(w)[-1]
+    assert HAIKU in last["portfolios"] and last["triggers"][HAIKU]["kind"] == "scheduled"
+    # and once served, Haiku (which asked nothing more) is back on the cadence: 15 min later
+    w.advance(T0 + 3600)
+    w.w.tick(T0 + 3600)
+    assert any(r["round"] == T0 + 3600 and HAIKU in r["portfolios"] for r in private_rounds(w))
+
+
+def test_the_cadence_respects_the_quota_and_can_be_off(tmp_path):
+    # T0 is 16:00 UTC: the rendezvous played and the one at 20:00 use the 2 rounds of the day
+    w, calls, _ = cadenced_world(tmp_path, {}, league=dataclasses.replace(CADENCED, rounds_per_day=2))
+    w.advance(T0 + 900)
+    w.w.tick(T0 + 900)
+    assert not private_rounds(w) and len(calls) == 4  # no round left outside the rendez-vous
+    off = tmp_path / "off"
+    off.mkdir()
+    w, calls, _ = cadenced_world(off, {}, league=dataclasses.replace(CADENCED, cadence_min=0))
+    w.advance(T0 + 900)
+    w.w.tick(T0 + 900)
+    assert not private_rounds(w) and len(calls) == 4
+
+
+def test_a_failed_round_counts_for_the_cadence(tmp_path):
+    w, _calls, extra = cadenced_world(tmp_path, {})
+    extra[HAIKU_MODEL] = {"actions": "not a list"}  # an invalid decision: the round is played all the same
+    w.advance(T0 + 900)
+    w.w.tick(T0 + 900)
+    [d] = [
+        e["payload"]
+        for e in w.events("agent_decision")
+        if e["payload"]["round"] == T0 + 900 and e["payload"]["portfolio"] == HAIKU
+    ]
+    assert d["parse_error"]
+    extra[HAIKU_MODEL] = {}
+    w.advance(T0 + 1500)
+    w.w.tick(T0 + 1500)
+    assert len(private_rounds(w)) == 1
+    w.advance(T0 + 1800)
+    w.w.tick(T0 + 1800)
+    assert HAIKU in private_rounds(w)[-1]["portfolios"]
+
+
+def test_the_prompt_states_the_cadence_and_the_wakeup_bounds():
+    from arene.perp.agent import PROMPT_PATH, WAKEUP_MAX_MIN, WAKEUP_MIN_MIN
+
+    text = PROMPT_PATH.read_text(encoding="utf-8")
+    assert PROMPT_PATH.name == "v6.md"
+    assert f"toutes les {CONFIG.cadence_min} minutes" in text
+    assert f"de {WAKEUP_MIN_MIN} à {WAKEUP_MAX_MIN}" in text and WAKEUP_MAX_MIN == 60
+    assert "souvent la meilleure" not in text  # the bias against trading is gone (the owner, 13/11)
+
+
+def test_last_played_counts_a_skipped_round():
+    from arene.perp.round_quota import last_played
+
+    ev = [
+        {"type": "round_data", "ts": 100, "payload": {"portfolio": HAIKU, "round": 1}},
+        {"type": "perp_llm_skipped", "ts": 400, "payload": {"portfolio": HAIKU, "round": 2, "reason": "x"}},
+        {"type": "round_data", "ts": 900, "payload": {"portfolio": "other", "round": 3}},
+    ]
+    assert last_played(ev, HAIKU) == 400 and last_played(ev, "nobody") is None

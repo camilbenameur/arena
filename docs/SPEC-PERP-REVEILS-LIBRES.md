@@ -2,6 +2,8 @@
 
 Spec du 13/11/2026. Demande du propriétaire, vers 14:10 UTC, relayée par la session moteur : « j'aimerais enlevé les restrictions de temps pour les llms pour qu'ils se réveillent plus souvent et quand ils veulent vraiment avec beaucoup moins de contrainte ».
 
+**Modifiée le 13/11 vers 18 h par `docs/SPEC-PERP-CADENCE.md`** : rappel demandé de 5 à 60 min, 144 rondes par jour, cadence par défaut de 15 min, consigne v6.
+
 Ne concerne que la ligue dérivés. Le spot reste gelé (Saison 1) et n'est pas modifié. Complète `docs/SPEC-PERP-ALERTES-ORDRES.md`, dont les §3 (limites du réveil par alerte) et la consigne v4 sont remplacés par ce qui suit.
 
 ## 1. Le réveil demandé par l'agent

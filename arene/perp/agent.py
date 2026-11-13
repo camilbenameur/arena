@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, f
 
 from arene.perp.riskd import PerpIntent
 
-PROMPT_PATH = Path(__file__).parent / "prompt" / "v5.md"
+PROMPT_PATH = Path(__file__).parent / "prompt" / "v6.md"
 MCP_SERVER = "arene"
 TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
 MAX_TOOL_CALLS = 4
@@ -51,7 +51,7 @@ NOTE_MAX = 120
 MAX_ORDERS = 3  # alerts, and entry orders, per decision
 EXPIRES_DEFAULT_H = 4
 WAKEUP_MIN_MIN = 5  # a wake-up asked by the model: one watcher tick at least...
-WAKEUP_MAX_MIN = 240  # ...and at most the time between two rendez-vous
+WAKEUP_MAX_MIN = 60  # ...and at most an hour (the owner, 13/11: several rounds an hour)
 MAX_PRICE_USD = 1_000_000_000
 # Claude Code's built-in plugins, turned off (the preflight of step 5-bis checks none is loaded)
 BUILTIN_PLUGINS = (
@@ -422,7 +422,7 @@ def parse_decision(
 
 
 def _parse_wakeup(raw: Any) -> tuple[int | None, list[dict[str, Any]]]:
-    """(minutes | None, errors) of `next_wakeup_min`: an integer from 5 to 240, absent or null for none. A bad
+    """(minutes | None, errors) of `next_wakeup_min`: an integer from 5 to 60, absent or null for none. A bad
     value is dropped alone (the rest of the decision stands, and so does the pending wake-up) and noted like a
     rejected order."""
     if raw is None:

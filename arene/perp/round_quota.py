@@ -36,6 +36,19 @@ def played_today(events: Sequence[Mapping[str, Any]], portfolio: str, now_ts: in
     )
 
 
+def last_played(events: Sequence[Mapping[str, Any]], portfolio: str) -> int | None:
+    """Time of the portfolio's last round (its last `round_data`) or skipped round (`perp_llm_skipped`: a round
+    whose preparation failed is not retried at every tick), None if it never played."""
+    return max(
+        (
+            e["ts"]
+            for e in events
+            if e["type"] in ("round_data", "perp_llm_skipped") and e["payload"].get("portfolio") == portfolio
+        ),
+        default=None,
+    )
+
+
 def quota(
     events: Sequence[Mapping[str, Any]], portfolio: str, now_ts: int, per_day: int, round_offset_s: int
 ) -> dict[str, int]:

@@ -19,11 +19,11 @@ Run every 5 minutes by `arene-perp-watcher.timer`, after the collector. One tick
    (drawdown >= 15 %: flatten and `portfolio_halted`), freeze (loss >= 5 % over 24 h, not re-armed by the same
    loss), maximum holding; the reference benchmarks are never stopped, frozen nor expired. Every margin
    close-out freezes its portfolio and raises a `panique` alert (idempotently, even after a crash);
-7. rounds: the 4-hour rendez-vous (02:00, 06:00, ... UTC, away from the spot cycles), and wake-ups when a mark crosses a 3 %-in-1-hour move (the crossing is kept
+7. rounds: the 4-hour rendez-vous (02:00, 06:00, ... UTC, away from the spot cycles), and wake-ups when a mark crosses a 2 %-in-1-hour move (the crossing is kept
    pending until the guards allow it or the move fades). A round is done only when `perp_round_done` is
    written: an interrupted round is resumed (its orders and intents are idempotent). The basket is set up and
    rebalanced once per month, the trend decides once per UTC day, each at the first rendez-vous able to.
-   The LLM portfolios play the rendez-vous (and the wake-ups once `wakeups = true`): their `claude -p` calls run
+   The LLM portfolios play the rendez-vous (and the market wake-ups once `wakeups = true`; their alerts, the wake-ups they ask for and the default cadence `cadence_min` in private rounds): their `claude -p` calls run
    in parallel inside the tick, which holds the watcher lock meanwhile (the next ticks skip, then catch up the
    minutes in order). See `arene/perp/llm_league.py`.
 
@@ -952,8 +952,9 @@ class PerpWatcher:
         events: list[dict[str, Any]],
         may_start: Callable[[], bool],
     ) -> None:
-        """One private round for every model with a crossed alert or a wake-up it asked for that is due (spec
-        §3): each plays alone with its own trigger, and sees nothing of the others'. A model is served if it is
+        """One private round for every model with a crossed alert, a wake-up it asked for that is due, or whose
+        default cadence is due (spec §3, docs/SPEC-PERP-CADENCE.md): each plays alone with its own trigger, and
+        sees nothing of the others'. A model is served if it is
         not halted, within its budget and has rounds left today; the others wait (within the hour)."""
         if self.llm is None or not self.llm.enabled:
             return
@@ -984,6 +985,20 @@ class PerpWatcher:
                     "kind": "scheduled",
                     "asked_at_round": asked["round"],
                     "due_ts": asked["due_ts"],
+                }
+        if self.llm.cadence_min:
+            # the default cadence (the owner, 13/11): a model that asked no wake-up of its own is called again
+            # `cadence_min` after its last round, whatever that round was (a failed one included)
+            for m in self.llm.models:
+                if m.portfolio in triggers or AO.pending_wakeup(events, m.portfolio, now_ts) is not None:
+                    continue
+                last = RQ.last_played(events, m.portfolio)
+                if last is None or last + self.llm.cadence_min * 60 - now_ts > ASKED_EARLY_S:
+                    continue
+                triggers[m.portfolio] = {
+                    "kind": "cadence",
+                    "every_min": self.llm.cadence_min,
+                    "last_round_ts": last,
                 }
         models = {m.portfolio: m for m in self.llm.models}
         served = {

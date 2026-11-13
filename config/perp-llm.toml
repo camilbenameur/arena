@@ -3,32 +3,37 @@
 enabled = true
 # LLM wake-ups on from 13/11/2026 (the owner's decision, earlier than the two weeks of the study, step 7). Time limits
 # lifted the same day (the owner, ~14:10 UTC, docs/SPEC-PERP-REVEILS-LIBRES.md): market wake-ups at 2 % in 1 h, 15 min
-# apart; alerts and wake-ups asked by the model itself (5 min to 4 h ahead) served at the next tick.
+# apart; alerts and wake-ups asked by the model itself (5 min to 1 h ahead since ~18:00 UTC) served at the next tick.
 wakeups = true
 # The only time limit left: rounds per model and UTC day, rendez-vous included (the rendez-vous to come are
-# reserved). 48 = one every 30 min on average, spread as the model wants.
-rounds_per_day = 48
+# reserved). Raised to 144 on 13/11/2026 (the owner, ~18:00 UTC: "plusieurs fois par heure même +"): one every 10 min
+# on average, room for the 96 of the cadence below plus alerts, market wake-ups and earlier wake-ups asked.
+rounds_per_day = 144
+# Default cadence (same decision, docs/SPEC-PERP-CADENCE.md): a model that asked no wake-up of its own is called
+# again 15 min after its last round. 0 turns it off.
+cadence_min = 15
 max_parallel = 4          # at most 4 `claude` processes at the same time (study §2.4)
 timeout_s = 240           # per call (study §2.4)
 max_budget_usd = "1.00"   # hard ceiling of one call (--max-budget-usd); a round costs 0.002 to 0.13 $ (step 6)
 effort = "low"            # as in the spot league
 
 # Daily budgets (D7): equivalent USD per UTC day. A model over its budget skips its round (positions and stops
-# stay in place) and the skip is journaled. Raised on 13/11/2026 so they never bind before `rounds_per_day`:
-# 48 rounds at the costs measured that day (Haiku 0.002, Sonnet 0.037, Opus 0.077, Fable 0.164 $ per round).
+# stay in place) and the skip is journaled. Raised again on 13/11/2026 (~18:00 UTC) so they never bind before
+# `rounds_per_day`: 144 rounds at the costs measured that day (Haiku 0.002, Sonnet 0.033, Opus 0.072, Fable 0.166 $
+# per round), plus a margin of about 1.5x: those costs were measured on rounds that did not trade.
 [[models]]
 portfolio = "llm-perp:claude-haiku-5-5"
 model = "claude-haiku-5-5"
-daily_budget_usd = "0.20"
+daily_budget_usd = "0.50"
 [[models]]
 portfolio = "llm-perp:claude-sonnet-5-5"
 model = "claude-sonnet-5-5"
-daily_budget_usd = "2.00"
+daily_budget_usd = "8.00"
 [[models]]
 portfolio = "llm-perp:claude-opus-5-5"
 model = "claude-opus-5-5"
-daily_budget_usd = "4.00"
+daily_budget_usd = "16.00"
 [[models]]
 portfolio = "llm-perp:claude-fable-5-2"
 model = "claude-fable-5-2"
-daily_budget_usd = "8.50"
+daily_budget_usd = "36.00"
