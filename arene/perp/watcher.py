@@ -987,13 +987,20 @@ class PerpWatcher:
                     "due_ts": asked["due_ts"],
                 }
         if self.llm.cadence_min:
-            # the default cadence (the owner, 13/11): a model that asked no wake-up of its own is called again
-            # `cadence_min` after its last round, whatever that round was (a failed one included)
+            # the cadence (the owner, 13/11 and 14/11): every model is called again at most `cadence_min` after its
+            # last round, whatever that round was (a failed one included). A wake-up it asked for can only bring
+            # that call forward: one asked for later than the cadence does not delay it.
             for m in self.llm.models:
-                if m.portfolio in triggers or AO.pending_wakeup(events, m.portfolio, now_ts) is not None:
+                if m.portfolio in triggers:
                     continue
                 last = RQ.last_played(events, m.portfolio)
-                if last is None or last + self.llm.cadence_min * 60 - now_ts > ASKED_EARLY_S:
+                if last is None:
+                    continue
+                due = last + self.llm.cadence_min * 60
+                asked = AO.pending_wakeup(events, m.portfolio, now_ts)
+                if asked is not None and asked["due_ts"] <= due:
+                    continue  # served as `scheduled`, at its own time
+                if due - now_ts > ASKED_EARLY_S:
                     continue
                 triggers[m.portfolio] = {
                     "kind": "cadence",

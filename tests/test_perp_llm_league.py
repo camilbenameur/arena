@@ -18,7 +18,7 @@ CONFIG = load_llm_league()
 # the tests of the alerts, the asked wake-ups and the quota run without the default cadence, at 48 rounds a day;
 # the cadence has its own tests (CADENCED)
 LEAGUE = dataclasses.replace(CONFIG, cadence_min=0, rounds_per_day=48)
-CADENCED = dataclasses.replace(CONFIG, rounds_per_day=48)
+CADENCED = dataclasses.replace(CONFIG, cadence_min=15, rounds_per_day=48)
 NAMES = [m.portfolio for m in LEAGUE.models]
 
 
@@ -41,17 +41,17 @@ def test_the_config_file_is_valid_and_strict(tmp_path):
         "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2",
     ]  # fmt: skip
     assert CONFIG.enabled and CONFIG.wakeups and CONFIG.max_parallel == 4
-    assert [m.daily_budget_uusd for m in CONFIG.models] == [500_000, 8_000_000, 16_000_000, 36_000_000]
-    assert CONFIG.rounds_per_day == 144 and CONFIG.cadence_min == 15
+    assert [m.daily_budget_uusd for m in CONFIG.models] == [500_000, 5_000_000, 14_000_000, 30_000_000]
+    assert CONFIG.rounds_per_day == 260 and CONFIG.cadence_min == 10
     bad = tmp_path / "bad.toml"
     raw = Path("config/perp-llm.toml").read_text()
     for old, new in (
         ('"0.50"', "0.50"),
-        ("rounds_per_day = 144", "rounds_per_day = 5"),
-        ("cadence_min = 15", "cadence_min = 4"),
-        ("cadence_min = 15", "cadence_min = 61"),
-        ("cadence_min = 15", "cadence_min = true"),
-        ("cadence_min = 15", "x = 15"),
+        ("rounds_per_day = 260", "rounds_per_day = 5"),
+        ("cadence_min = 10", "cadence_min = 4"),
+        ("cadence_min = 10", "cadence_min = 61"),
+        ("cadence_min = 10", "cadence_min = true"),
+        ("cadence_min = 10", "x = 15"),
         ("max_parallel = 4", "max_parallel = 9"),
         ("wakeups = true", "x = 1"),
     ):
@@ -1015,24 +1015,32 @@ def test_the_default_cadence_calls_every_model_again(tmp_path):
     assert len(private_rounds(w)) == 2 and len(calls) == 12
 
 
-def test_an_asked_wakeup_replaces_the_cadence(tmp_path):
-    w, calls, _ = cadenced_world(tmp_path, {HAIKU_MODEL: 45})
+def test_an_asked_wakeup_only_brings_the_cadence_forward(tmp_path):
+    from arene.perp.agent_orders import pending_wakeup
+
+    # Haiku asks 45 min, more than the cadence: it is called at the cadence all the same (the owner, 14/11)
+    w, calls, extra = cadenced_world(tmp_path, {HAIKU_MODEL: 45})
     w.advance(T0 + 900)
     w.w.tick(T0 + 900)
     [rnd] = private_rounds(w)
-    assert HAIKU not in rnd["portfolios"] and len(rnd["portfolios"]) == 3 and len(calls) == 7
-    for t in range(T0 + 1200, T0 + 2700, 300):
+    assert rnd["portfolios"] == sorted(NAMES) and rnd["triggers"][HAIKU]["kind"] == "cadence"
+    assert len(calls) == 8 and pending_wakeup(w.events(), HAIKU) is None  # its decision asked nothing more
+    # Sonnet asks 5 min: called earlier than the cadence, as `scheduled`
+    extra["claude-sonnet-5-5"] = {"next_wakeup_min": 5}
+    w.advance(T0 + 1800)
+    w.w.tick(T0 + 1800)
+    extra["claude-sonnet-5-5"] = {}
+    sonnet = "llm-perp:claude-sonnet-5-5"
+    w.advance(T0 + 2100)
+    w.w.tick(T0 + 2100)
+    last = private_rounds(w)[-1]
+    assert last["round"] == T0 + 2100 and last["portfolios"] == [sonnet]
+    assert last["triggers"][sonnet]["kind"] == "scheduled"
+    # Haiku's 45 min (T0+2820) never bring a call of their own: only the cadence calls it
+    for t in range(T0 + 2400, T0 + 3300, 300):
         w.advance(t)
         w.w.tick(t)
-        assert all(HAIKU not in r["portfolios"] for r in private_rounds(w))
-    w.advance(T0 + 2700)
-    w.w.tick(T0 + 2700)  # 45 min after 00:02, within the tick
-    last = private_rounds(w)[-1]
-    assert HAIKU in last["portfolios"] and last["triggers"][HAIKU]["kind"] == "scheduled"
-    # and once served, Haiku (which asked nothing more) is back on the cadence: 15 min later
-    w.advance(T0 + 3600)
-    w.w.tick(T0 + 3600)
-    assert any(r["round"] == T0 + 3600 and HAIKU in r["portfolios"] for r in private_rounds(w))
+    assert all(r["triggers"][HAIKU]["kind"] == "cadence" for r in private_rounds(w) if HAIKU in r["portfolios"])
 
 
 def test_the_cadence_respects_the_quota_and_can_be_off(tmp_path):
@@ -1073,7 +1081,7 @@ def test_the_prompt_states_the_cadence_and_the_wakeup_bounds():
     from arene.perp.agent import PROMPT_PATH, WAKEUP_MAX_MIN, WAKEUP_MIN_MIN
 
     text = PROMPT_PATH.read_text(encoding="utf-8")
-    assert PROMPT_PATH.name == "v6.md"
+    assert PROMPT_PATH.name == "v7.md"
     assert f"toutes les {CONFIG.cadence_min} minutes" in text
     assert f"de {WAKEUP_MIN_MIN} à {WAKEUP_MAX_MIN}" in text and WAKEUP_MAX_MIN == 60
     assert "souvent la meilleure" not in text  # the bias against trading is gone (the owner, 13/11)
@@ -1088,3 +1096,16 @@ def test_last_played_counts_a_skipped_round():
         {"type": "round_data", "ts": 900, "payload": {"portfolio": "other", "round": 3}},
     ]
     assert last_played(ev, HAIKU) == 400 and last_played(ev, "nobody") is None
+
+
+def test_the_ten_minute_cadence_of_the_config(tmp_path):
+    league = dataclasses.replace(CONFIG, rounds_per_day=48)
+    w, calls, _ = cadenced_world(tmp_path, {HAIKU_MODEL: 30}, league=league)
+    w.advance(T0 + 300)
+    w.w.tick(T0 + 300)
+    assert not private_rounds(w)
+    w.advance(T0 + 600)
+    w.w.tick(T0 + 600)  # 10 min after 00:02, within the tick; Haiku's 30 min do not delay it
+    [rnd] = private_rounds(w)
+    assert rnd["portfolios"] == sorted(NAMES) and len(calls) == 8
+    assert {t["every_min"] for t in rnd["triggers"].values()} == {10}

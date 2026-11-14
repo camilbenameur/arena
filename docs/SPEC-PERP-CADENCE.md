@@ -1,4 +1,6 @@
-# Ligue dérivés : cadence par défaut et consigne de trader (v6)
+# Ligue dérivés : cadence et consigne de trader (v6, puis v7)
+
+**Depuis le 14/11, voir le §5 :** cadence de 10 min devenue un plafond, 260 rondes par jour, consigne v7, budgets revus. Les §1 à §3 décrivent l'état du 13/11 (15 min, rappel demandé qui remplace la cadence).
 
 Spec du 13/11/2026. Demande du propriétaire, vers 18:00 UTC : « Les llms s'activent trop peu souvent à mon goût, j'aimerais plusieurs fois par heure même + et surtout toujours aucun trade ».
 
@@ -42,3 +44,13 @@ Nouvelle clé `cadence_min` de `config/perp-llm.toml` : **15**. 0 la coupe ; sin
 ## 4. Ce qui ne change pas
 
 riskd, stops, levier, rondes privées, idempotence, `max_parallel` 4, aucun déclenchement exécuté au-delà de 15 min, rendez-vous toutes les 4 h, témoins, spot gelé.
+
+## 5. Cadence de 10 min, plafond de l'écart (14/11/2026)
+
+Demande du propriétaire, le 14/11 vers 01:45 UTC : « Augmente la cadence on s'autorise deux fois plus de conso qu'actuellement ». Consigne v7.
+
+- **Le constat :** de 18:28 à 01:40 UTC, environ 2,3 $ en équivalent API, soit à peu près 8 $ par jour. Trois agents demandaient d'eux-mêmes un rappel à 30 min, ce qui les mettait à 2 ou 3 rondes par heure.
+- **`cadence_min` = 10, et la cadence devient un plafond :** un agent est rappelé **au plus tard** 10 min après sa dernière ronde. Un rappel qu'il a demandé ne peut qu'avancer cet appel (à 5 min) : demandé plus tard que la cadence, il ne le retarde plus. Les valeurs de `next_wakeup_min` restent acceptées de 5 à 60, mais seules 5 à 7 avancent l'appel d'un tick ; la consigne ne propose que 5.
+- **6 rondes par heure et par agent**, au lieu de 2 à 3. `rounds_per_day` : 260 (la cadence seule en fait 144 ; un agent qui demanderait 5 min à chaque ronde en jouerait 288).
+- **Coût attendu :** environ 20 $ par jour (Haiku 0,2, Sonnet 2,1, Opus 5,3, Fable 12 $ pour 144 rondes ; 28 $ à 200 rondes), au coût moyen par ronde mesuré cette nuit (0,0014, 0,014, 0,037 et 0,084 $), soit 2 à 2,5 fois la conso d'avant. Fable en fait plus de la moitié.
+- **Budgets journaliers**, plafonds contre un emballement et non objectifs, à environ deux fois le coût attendu : Haiku 0,50 $, Sonnet 5 $, Opus 14 $, Fable 30 $.
