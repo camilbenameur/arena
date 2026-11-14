@@ -201,10 +201,13 @@ def layout(
         return f'<a href="{root}{dossier}/{e(p["slug"])}.html"{courant}>{e(nom_court(p["name"]))}</a>'
 
     llms = "".join(lien(p) for p in pfs if p["kind"] == "llm")
-    tems = "".join(lien(p) for p in pfs if p["kind"] != "llm")
+    conseils = "".join(lien(p) for p in pfs if p["kind"] == "conseil")
+    tems = "".join(lien(p) for p in pfs if p["kind"] not in ("llm", "conseil"))
     groupes = ""
     if llms:
         groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Modèles d’IA</span>{llms}</div>'
+    if conseils:  # le Conseil Haiku (dérivés) : une catégorie à part, jamais avec les modèles neutres
+        groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Agressif</span>{conseils}</div>'
     if tems:
         groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Témoins</span>{tems}</div>'
     def cur(x: str) -> str:
@@ -326,7 +329,9 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
     out, llm, tem = [], 0, 0
     for s in chart["series"]:
         focused = focus is not None and s["id"] == focus
-        if s["kind"] == "llm":
+        if s["kind"] == "conseil":
+            st = {"color": "--conseil", "dash": None, "width": 2.5}
+        elif s["kind"] == "llm":
             k = COULEUR_LLM.get(s["id"].replace("llm-perp:", "llm:"), llm)
             st = {"color": f"--llm{k % N_COULEURS_LLM}", "dash": None, "width": 2.5}
             llm += 1
@@ -338,7 +343,7 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
             tem += 1
         if focused:
             st["width"], st["dash"] = 3, None
-            if s["kind"] != "llm":
+            if s["kind"] not in ("llm", "conseil"):
                 st["color"] = "--accent"
         st["visible"] = focus is None or focused or s["id"] in REFERENCES
         out.append(st)

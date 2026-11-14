@@ -30,6 +30,10 @@ PF_KRAKEN = {"BTC-PERP": "PF_XBTUSD", "ETH-PERP": "PF_ETHUSD", "SOL-PERP": "PF_S
              "LINK-PERP": "PF_LINKUSD", "LTC-PERP": "PF_LTCUSD"}  # fmt: skip
 LLMS = ["llm-perp:claude-haiku-5-5", "llm-perp:claude-sonnet-5-5", "llm-perp:claude-opus-5-5", "llm-perp:claude-fable-5-2"]
 TEMOINS = ["benchmark-perp:basket-1x", "benchmark-perp:trend", "benchmark-perp:random"]
+CONSEIL = "council-perp:haiku"
+ARG_CARTO = "Régime baissier net sur ETH : 4 h sous SMA20, MACD négatif. Short avec stop serré."
+ARG_AVOCAT = "Le short ETH arrive sur la bande basse : la baisse est déjà faite, le rebond guette."
+RAISON_PRESIDENT = "Short ETH à 300 %, stop 3 %. Je suis le Cartographe et le Suiveur ; j'écarte l'Avocat."
 FABLE_RAISON = "ETH perd 3 % sur 24 h, funding positif : les longs paient. RSI 4 h sous 45. Je vends 25 % à découvert."
 INVALIDATION = "clôture 4 h au-dessus de 3 300 $"
 SECRET = "/tmp/arena/var-perp/rounds/x"
@@ -77,7 +81,8 @@ class Gen:
         self.add("conditional_order", {"portfolio": pf, "instrument": inst, "kind": kind, "price_uusd": px, "ts": ts}, ts)
 
 
-def build(path: Path) -> Path:
+def build(path: Path, *, ruine: bool = False) -> Path:
+    """`ruine` : le Conseil Haiku finit arrêté (`portfolio_halted`, ruine à -90 %)."""
     g = Gen(path)
     for pf in TEMOINS + LLMS:
         g.add("portfolio_opened", {"portfolio": pf, "kind": "llm" if pf in LLMS else "benchmark", "league": "perp",
@@ -100,6 +105,13 @@ def build(path: Path) -> Path:
                         amt = funding_amount_ueur(qs, rate, *FX)
                         g.add("funding", {"portfolio": pf, "instrument": inst, "stamp": ts, "qty_seconds": qs, "rate_nusd": rate,
                                           "fx_bid": FX[0], "fx_ask": FX[1], "amount_ueur": amt}, ts)  # fmt: skip
+        if ts == rdvs[10] - 600:  # le Conseil Haiku entre en cours de route
+            g.add("portfolio_opened", {"portfolio": CONSEIL, "kind": "council", "league": "perp", "capital_ueur": 1_000_000_000,
+                                       "venue_mode": "paper"}, ts)  # fmt: skip
+        if ts in (rdvs[10], rdvs[11]):
+            _ronde_conseil(g, ts, ouvre=ts == rdvs[10])
+        if ruine and ts == fin:
+            g.add("portfolio_halted", {"portfolio": CONSEIL, "reason": "drawdown", "until_ts": 0}, ts)
         if ts in rdvs or ts == wake:
             rnd += 1
             _ronde(g, ts, rnd, wake=ts == wake)
@@ -274,3 +286,46 @@ def _ronde(g: Gen, ts: int, rnd: int, *, wake: bool) -> None:
         acc = g.book.states[opus]
         _executer(g, opus, "SOL-PERP", "reduce", t, 0, True, qty=-acc.positions["SOL-PERP"].qty // 2)
     g.add("perp_round_done", {"round": ts}, t + 30)
+
+
+def _avis(g: Gen, ts: int, rnd: int, member: str, name: str, stage: str, opinion: dict | None, error: str | None = None) -> None:
+    g.add("council_opinion", {"portfolio": CONSEIL, "round": rnd, "member": member, "name": name, "stage": stage,
+                              "persona_sha256": "1" * 64, "opinion": opinion, "error": error, "cost_uusd": 1_500,
+                              "input_tokens": 4, "output_tokens": 900, "latency_ms": 8_000, "tool_calls": 1,
+                              "model_returned": "claude-haiku-5-5", "stream_sha256": "2" * 64}, ts)  # fmt: skip
+
+
+def _ronde_conseil(g: Gen, ts: int, *, ouvre: bool) -> None:
+    """Une ronde du conseil : 8 avis (étape A, dont un absent), l'Avocat (B), puis la décision du Président (C)."""
+    t = ts + 50
+    kind = "rendezvous" if ouvre else "cadence"
+    g.add("round_data", {"portfolio": CONSEIL, "round": ts, "kind": kind, "trigger": "null", "sha256": "a" * 64, "message_sha256": "b" * 64,
+                         "path": SECRET, "council_config_sha256": "c" * 64, "budget_ceiling_uusd": 1_000_000}, t)  # fmt: skip
+    short = {"instrument": "PF_ETHUSD", "position": "short", "conviction": 65, "taille_pct": "250", "stop_pct": "2.5", "niveau_cle_usd": "3150"}
+    plat = {"instrument": "PF_ETHUSD", "position": "plat", "conviction": 40, "taille_pct": None, "stop_pct": None, "niveau_cle_usd": None}
+    membres = [("cartographe", "Le Cartographe"), ("suiveur", "Le Suiveur"), ("chasseur", "Le Chasseur de cassures"),
+               ("contrarien", "Le Contrarien"), ("carnet", "Le Lecteur de carnet"), ("tresorier", "Le Trésorier du levier"),
+               ("gardien", "Le Gardien du risque"), ("memorialiste", "Le Mémorialiste")]  # fmt: skip
+    for k, (m, n) in enumerate(membres):
+        if m == "carnet":
+            _avis(g, t, ts, m, n, "A", None, f"member crashed: OSError: {SECRET}")
+            continue
+        avis = [plat] if m == "contrarien" else [short]
+        _avis(g, t, ts, m, n, "A", {"avis": avis, "cible": None, "argument": ARG_CARTO if m == "cartographe" else f"Avis {k} sur ETH."})
+    _avis(g, t, ts, "avocat", "L'Avocat du diable", "B",
+          {"avis": [plat], "cible": {"instrument": "PF_ETHUSD", "sens": "short"}, "argument": ARG_AVOCAT})
+    for n, (m, tool) in enumerate([("cartographe", "indicateurs"), ("avocat", "derives"), ("president", "simuler_ordre")], 1):
+        g.add("tool_call", {"portfolio": CONSEIL, "round": ts, "member": m, "n": n, "tool": tool,
+                            "arguments": json.dumps({"instrument": "PF_ETHUSD", "intervalle": "4h"}), "response": SECRET,
+                            "response_sha256": "d" * 64, "is_error": False}, t)  # fmt: skip
+    actions = [_action("ETH-PERP", "open_short", "300", "3", "4", "reprise de 3 300 $"), _action("ETH-PERP", "open_short", "500", "15")] if ouvre else []
+    g.add("agent_decision", {
+        "portfolio": CONSEIL, "round": ts, "kind": kind, "model_requested": "claude-haiku-5-5", "model_returned": "claude-haiku-5-5",
+        "parsed": {"actions": actions, "justification": RAISON_PRESIDENT if ouvre else "Je garde le short.", "action_errors": []},
+        "parse_error": None, "cost_uusd": 24_849, "latency_ms": 41_000, "cli_version": "2.1.99-secret", "stderr_tail": SECRET,
+        "council": {"config_sha256": "c" * 64, "prompts_sha256": "e" * 64, "members_ok": 8, "members_failed": ["carnet"],
+                    "president_cost_uusd": 3_905, "president_latency_ms": 9_861, "president_tool_calls": 1},
+    }, t)  # fmt: skip
+    if ouvre:
+        _executer(g, CONSEIL, "ETH-PERP", "open_short", t, 0, True, qty=-qty_pour(3_000_000_000, "ETH-PERP", t), stop_pct=3, tp_pct=4)
+        _executer(g, CONSEIL, "ETH-PERP", "open_short", t, 1, False, ["MAX_LEVERAGE", "LIQUIDATION_BEFORE_STOP"])

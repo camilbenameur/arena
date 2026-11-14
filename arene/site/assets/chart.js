@@ -45,7 +45,7 @@
     return data.styles.map(function (st, i) {
       return {
         stroke: css(st.color), width: st.width, dash: st.dash, visible: st.visible,
-        isLlm: data.series[i].kind === "llm", focused: st.width >= 3
+        isLlm: data.series[i].kind === "llm" || data.series[i].kind === "conseil", focused: st.width >= 3
       };
     });
   }
@@ -119,7 +119,7 @@
       for (var k = 0; k < groupes.length; k++) {
         if (groupes[k].txt === txt && Math.abs(groupes[k].y - y) < 2 * r) { g = groupes[k]; break; }
       }
-      var llm = s.kind === "llm";
+      var llm = s.kind === "llm" || s.kind === "conseil";
       var c = llm ? css(data.styles[i].color) : css("--muted");
       if (g) { g.noms.push(data.short[i]); g.couleurs.push(c); g.llm = g.llm || llm; g.couleur = css("--text"); }
       else groupes.push({ txt: txt, y: y, noms: [data.short[i]], couleurs: [c], llm: llm, couleur: c });

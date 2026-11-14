@@ -29,6 +29,7 @@ ROUND_S = 4 * 3600
 ROUND_OFFSET_S = 2 * 3600  # rendez-vous à 02:00, 06:00, …, 22:00 UTC
 PAS_COURBE_S = 1_800  # un point toutes les 30 min sur la courbe (plus le dernier relevé)
 DECISIONS_MAX = 120
+DELIBERATIONS_MAX = 48  # avis du conseil publiés pour ses 48 dernières rondes (8 h à 10 min) ; les autres : le journal
 OPERATIONS_MAX = 60
 JUSTIFICATION_MAX = 1_200
 INVALIDATION_MAX = 200
@@ -37,22 +38,44 @@ NOTE_MAX = 160
 PANIER = "benchmark-perp:basket-1x"
 TENDANCE = "benchmark-perp:trend"
 ALEATOIRE = "benchmark-perp:random"
+CONSEIL = "council-perp:haiku"
 
 NOMS = {
     "llm-perp:claude-haiku-5-5": "Claude Haiku 5.5",
     "llm-perp:claude-sonnet-5-5": "Claude Sonnet 5.5",
     "llm-perp:claude-opus-5-5": "Claude Opus 5.5",
     "llm-perp:claude-fable-5-2": "Claude Fable 5.2",
+    CONSEIL: "Conseil Haiku",
     PANIER: "Témoin panier 1x",
     TENDANCE: "Témoin tendance",
     ALEATOIRE: "Témoin aléatoire",
 }
 ORDRE = list(NOMS)
 DESCRIPTIONS = {
+    CONSEIL: "Dix Claude Haiku 5.5 délibèrent à chaque ronde : huit avis indépendants, un avocat du diable, puis un président qui décide.",
     PANIER: "Acheteur à parts égales des 6 contrats, sans levier ni stop, rééquilibré chaque mois : acheter et garder.",
     TENDANCE: "Chaque jour, long sur un contrat qui a monté sur 20 jours, short sinon ; 1/6 du portefeuille par contrat, stop à 10 %.",
     ALEATOIRE: "Tire 0 à 2 décisions au hasard à chaque rendez-vous, avec exactement les mêmes règles de risque que les IA.",
 }
+
+# Le Conseil Haiku (docs/SPEC-PERP-CONSEIL-HAIKU.md) : une catégorie à part, jamais classée avec les 4 LLM neutres.
+MARQUE_CONSEIL = "agressif · levier ≤ 10x · objectif ×2"
+HORS_REGLE_CONSEIL = "Démonstration paper, hors de la règle des particuliers (2x) : ne pourrait pas passer au réel telle quelle."
+# Les membres dans l'ordre des étapes : A (8 avis sans se voir), B (l'Avocat lit A), C (le Président tranche).
+MEMBRES = {
+    "cartographe": ("Le Cartographe", "A", "le régime de chaque contrat"),
+    "suiveur": ("Le Suiveur", "A", "la tendance à suivre"),
+    "chasseur": ("Le Chasseur de cassures", "A", "le mouvement qui démarre"),
+    "contrarien": ("Le Contrarien", "A", "le consensus surchargé"),
+    "carnet": ("Le Lecteur de carnet", "A", "le carnet et le coût d’entrée"),
+    "tresorier": ("Le Trésorier du levier", "A", "la taille et le levier"),
+    "gardien": ("Le Gardien du risque", "A", "les stops et la distance à la ruine"),
+    "memorialiste": ("Le Mémorialiste", "A", "ce que le conseil a déjà raté ou réussi"),
+    "avocat": ("L’Avocat du diable", "B", "attaque le trade le plus soutenu"),
+    "president": ("Le Président", "C", "tranche et décide"),
+}
+ORDRE_MEMBRES = list(MEMBRES)
+ARGUMENT_MAX = 700
 
 ACTIONS = {"open_long": "Ouvre un long", "open_short": "Ouvre un short", "reduce": "Réduit", "close": "Ferme"}
 
@@ -129,7 +152,19 @@ CODES = {
     "INITIAL_MARGIN": "marge insuffisante après l’ordre",
     "MAX_TRADE_LOSS": "perte au stop au-delà de 3 % du portefeuille",
     "MAX_OPEN_RISK": "pertes cumulées aux stops au-delà de 7,5 %",
+    "LIQUIDATION_BEFORE_STOP": "liquidation atteinte avant le stop",
     "INTERNAL_ERROR": "erreur interne du garde-fou",
+}
+
+# Les mêmes codes, aux bornes de la politique du conseil (config/policy-perp-conseil.toml).
+CODES_CONSEIL = {
+    **CODES,
+    "DAILY_TRADES": "24 ouvertures déjà faites en 24 h",
+    "MAX_ORDER_SIZE": "ordre au-delà de 500 % du portefeuille",
+    "MAX_POSITION": "position au-delà de 1 000 % du portefeuille",
+    "MAX_LEVERAGE": "levier au-delà de 10",
+    "MAX_TRADE_LOSS": "perte au stop au-delà de 25 % du portefeuille",
+    "MAX_OPEN_RISK": "pertes cumulées aux stops au-delà de 60 %",
 }
 
 OUTILS = {
@@ -270,6 +305,66 @@ def _erreur_publique(parse_error: Any) -> str | None:
     if "timeout" in s or "timed out" in s:
         return "délai dépassé"
     return "échec de l’appel"
+
+
+def _absence_publique(error: Any) -> str:
+    """Pourquoi un membre du conseil n'a pas rendu d'avis, par catégorie (jamais le texte brut)."""
+    s = str(error or "").lower()
+    if "timeout" in s or "timed out" in s:
+        return "délai dépassé"
+    if "budget" in s:
+        return "plafond de coût atteint"
+    if "crash" in s:
+        return "erreur interne"
+    if "no opinion" in s or "no structured output" in s:
+        return "pas d’avis rendu"
+    if "expected" in s or "avis" in s or "unexpected" in s or "out of" in s or "not a number" in s:
+        return "avis invalide"
+    return "échec de l’appel"
+
+
+def _nombre(v: Any) -> float | None:
+    """Nombre décimal en texte (avis du conseil) ; None s'il est absent ou illisible."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        d = Decimal(str(v))
+    except InvalidOperation:
+        return None
+    if not d.is_finite() or abs(d) > 10**12:  # « 1e400 » : illisible, pas l'infini
+        return None
+    return float(d)
+
+
+def _avis_membre(p: Mapping[str, Any]) -> dict[str, Any]:
+    """Un `council_opinion` tel que le site le montre : position, conviction, taille, stop et niveau par contrat."""
+    key = str(p.get("member") or "")
+    nom_m, etape, role = MEMBRES.get(key, (_texte(p.get("name"), 60) or "Membre", str(p.get("stage") or "A"), None))
+    op = p.get("opinion") if isinstance(p.get("opinion"), Mapping) else None
+    out: dict[str, Any] = {
+        "membre": key, "nom": nom_m, "etape": etape, "role": role, "absent": op is None,
+        "erreur": _absence_publique(p.get("error")) if op is None else None,
+        "avis": [], "cible": None, "argument": None, "outils": [],
+    }  # fmt: skip
+    if op is None:
+        return out
+    avis = op.get("avis")
+    for a in avis if isinstance(avis, list) else []:
+        if not isinstance(a, Mapping) or a.get("position") not in ("long", "short", "plat"):
+            continue
+        conv = a.get("conviction")
+        niv = _nombre(a.get("niveau_cle_usd"))
+        out["avis"].append({
+            "instrument": court(a.get("instrument")), "position": a["position"],
+            "conviction": conv if isinstance(conv, int) and not isinstance(conv, bool) and 0 <= conv <= 100 else None,
+            "taille_pct": _nombre(a.get("taille_pct")), "stop_pct": _nombre(a.get("stop_pct")),
+            "niveau_uusd": round(niv * 1_000_000) if niv is not None else None,
+        })  # fmt: skip
+    c = op.get("cible")
+    if isinstance(c, Mapping) and c.get("sens") in ("long", "short"):
+        out["cible"] = {"instrument": court(c.get("instrument")), "sens": c["sens"]}
+    out["argument"] = _texte(op.get("argument"), ARGUMENT_MAX)
+    return out
 
 
 def _outil_args(tool: str, raw: Any) -> str:
@@ -419,7 +514,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                 "round": ts, "ts": ts, "kind": "ordre", "statut": "declenche", "saut": None,
                 "declencheur": {"type": "ordre", "instrument": el["instrument"], "condition": el["condition"], "prix_uusd": el["prix_uusd"]},
                 "justification": None, "actions": [action], "outils": [], "erreur": None, "cout_uusd": None,
-                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None,
+                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None, "conseil": None,
             }  # fmt: skip
             par_intent[oid] = action
         return declenches[oid]
@@ -429,9 +524,14 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             rondes[r] = {
                 "round": r, "ts": ts, "kind": "rendezvous", "declencheur": None, "statut": "en_cours", "saut": None,
                 "justification": None, "actions": [], "outils": [], "erreur": None, "cout_uusd": None,
-                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None,
+                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None, "conseil": None,
             }  # fmt: skip
         return rondes[r]
+
+    def conseil(d: dict[str, Any]) -> dict[str, Any]:
+        if d["conseil"] is None:
+            d["conseil"] = {"avis": [], "membres_ok": None, "membres_absents": None, "_outils": {}}
+        return d["conseil"]
 
     for e in events:
         t, p = e["type"], e["payload"]
@@ -445,7 +545,17 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             d = ronde(p["round"], e["ts"])
             tool = str(p.get("tool") or "").removeprefix("mcp__arene__")
             if tool in OUTILS:
-                d["outils"].append({"outil": tool, "args": _outil_args(tool, p.get("arguments")), "erreur": bool(p.get("is_error"))})
+                o = {"outil": tool, "args": _outil_args(tool, p.get("arguments")), "erreur": bool(p.get("is_error"))}
+                membre = p.get("member")
+                if membre and membre != "president":  # un membre du conseil : ses outils vont à son avis
+                    conseil(d)["_outils"].setdefault(str(membre), []).append(o)
+                else:
+                    d["outils"].append(o)
+        elif t == "council_opinion":
+            c = conseil(ronde(p["round"], e["ts"]))
+            a = _avis_membre(p)
+            # Un même membre rejoué dans la même ronde : le dernier avis compte, une seule fois.
+            c["avis"] = [x for x in c["avis"] if not (a["membre"] and x["membre"] == a["membre"])] + [a]
         elif t == "perp_llm_skipped":
             d = ronde(p["round"], e["ts"])
             reason = str(p.get("reason") or "")
@@ -454,7 +564,13 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             d = ronde(p["round"], e["ts"])
             d["kind"] = p.get("kind") or d["kind"]
             parsed = p.get("parsed") if isinstance(p.get("parsed"), Mapping) else None
-            d["cout_uusd"] = p.get("cost_uusd")
+            d["cout_uusd"] = p.get("cost_uusd")  # pour le conseil : ses 10 appels
+            cs = p.get("council")
+            if isinstance(cs, Mapping):
+                c = conseil(d)
+                c["membres_ok"] = cs.get("members_ok") if isinstance(cs.get("members_ok"), int) else None
+                mf = cs.get("members_failed")
+                c["membres_absents"] = len(mf) if isinstance(mf, list) else None
             d["latence_ms"] = p.get("latency_ms")
             d["jetons"] = (p.get("input_tokens") or 0) + (p.get("output_tokens") or 0) + (p.get("cache_read_tokens") or 0) + (p.get("cache_write_tokens") or 0)
             if parsed is None:
@@ -523,6 +639,12 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                 a["fills"].append({"prix_uusd": p["price_uusd"], "qty": p["qty"], "frais_ueur": p.get("fee_ueur") or 0, "raison": p.get("reason")})
     for d in rondes.values():
         d.pop("_libres", None)
+        c = d.get("conseil")
+        if c is not None:
+            outils = c.pop("_outils")
+            for a in c["avis"]:
+                a["outils"] = outils.get(a["membre"], [])
+            c["avis"].sort(key=lambda a: ORDRE_MEMBRES.index(a["membre"]) if a["membre"] in MEMBRES else 99)
     return sorted([*rondes.values(), *declenches.values()], key=lambda d: (d["ts"] if d["kind"] == "ordre" else d["round"]), reverse=True)
 
 
@@ -611,9 +733,9 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
                 "frais_ueur": p.get("fee_ueur") or 0, "raison": RAISONS_FILL.get(str(p.get("reason")), str(p.get("reason"))),
             })  # fmt: skip
         elif t == "portfolio_halted":
-            statut[pf] = {"etat": "arrete", "jusqu": None}
+            statut[pf] = {"etat": "arrete", "jusqu": None, "ts": e["ts"], "raison": p.get("reason")}
         elif t == "portfolio_frozen":
-            statut[pf] = {"etat": "gele", "jusqu": p.get("until_ts")}
+            statut[pf] = {"etat": "gele", "jusqu": p.get("until_ts"), "ts": e["ts"], "raison": p.get("reason")}
         elif t == "portfolio_resumed":
             statut.pop(pf, None)
 
@@ -622,11 +744,17 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
     except (LlmConfigError, OSError, ValueError):  # sans configuration lisible, ni quota ni cadence affichés
         ligue_llm = None
 
-    llm_ids = sorted((pf for pf, e in opened.items() if e["payload"].get("kind") == "llm"), key=lambda x: (ORDRE.index(x) if x in ORDRE else 99, x))
-    tem_ids = sorted((pf for pf, e in opened.items() if e["payload"].get("kind") != "llm"), key=lambda x: (ORDRE.index(x) if x in ORDRE else 99, x))
+    def rang(x: str) -> tuple[int, str]:
+        return (ORDRE.index(x) if x in ORDRE else 99, x)
+
+    def genre(o: Mapping[str, Any]) -> str:
+        return {"llm": "llm", "council": "conseil"}.get(str(o.get("kind")), "temoin")
+
+    par_genre = {g: sorted((pf for pf, e in opened.items() if genre(e["payload"]) == g), key=rang) for g in ("llm", "conseil", "temoin")}
+    llm_ids = par_genre["llm"]
 
     portfolios = []
-    for pf in llm_ids + tem_ids:
+    for pf in par_genre["llm"] + par_genre["conseil"] + par_genre["temoin"]:
         o = opened[pf]["payload"]
         capital = int(o["capital_ueur"])
         le = last_eq.get(pf)
@@ -636,7 +764,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         dd_max, dd = _drawdowns(series.get(pf, []))
         f = funding.get(pf, [])
         acc = accounts.get(pf)
-        kind = "llm" if o.get("kind") == "llm" else "temoin"
+        kind = genre(o)
         st = statut.get(pf)
         if st and st["etat"] == "gele" and (st["jusqu"] or 0) <= now:
             st = None
@@ -652,8 +780,17 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             "operations": list(reversed(fills.get(pf, [])))[:OPERATIONS_MAX], "decisions": [],
             "cout_uusd": None, "n_rondes": 0, "n_ordres": 0, "fx": list(fx) if fx else None,
         }  # fmt: skip
-        if kind == "llm":
+        if kind in ("llm", "conseil"):
             ds = _decisions_llm(events, pf)  # toutes : les totaux portent sur le journal entier
+            if kind == "conseil":
+                n_delib = 0
+                for d in ds:
+                    d["regles"] = "conseil"  # ses refus se lisent aux bornes de sa propre politique
+                    c = d.get("conseil")
+                    n_delib += 1 if c else 0
+                    if c and n_delib > DELIBERATIONS_MAX:  # la page reste légère : ~150 rondes par jour, 9 avis chacune
+                        c["avis_hors_page"], c["avis"] = len(c["avis"]), []
+                p_out["marque"], p_out["hors_regle"] = MARQUE_CONSEIL, HORS_REGLE_CONSEIL
             p_out["decisions"] = ds[:DECISIONS_MAX]
             p_out["n_decisions_total"] = len(ds)
             p_out["cout_uusd"] = sum(d["cout_uusd"] or 0 for d in ds)
@@ -689,7 +826,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
                 last = s[j][1]
                 j += 1
             vals.append(None if last is None else round(last / p_out["capital_ueur"] * 100, 4))
-        chart_series.append({"id": p_out["id"], "name": p_out["name"], "kind": "llm" if p_out["kind"] == "llm" else "temoin", "values": vals})
+        chart_series.append({"id": p_out["id"], "name": p_out["name"], "kind": p_out["kind"], "values": vals})
     debut = min((e["ts"] for e in opened.values()), default=None)
     chart = {"x": xs, "kinds": ["veille"] * len(xs), "series": chart_series}
 
