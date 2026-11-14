@@ -5,6 +5,10 @@ The four models decide at the same rendez-vous (D8): their round data are built 
 the `claude -p` calls run in parallel (at most `max_parallel`), then each decision is applied one by one, so
 the journal keeps a single writer. A model over its daily budget, or halted, skips the round; a portfolio whose
 round was interrupted after its `round_data` is never called again for that round (no second paid call).
+
+The Haiku council (`arene/perp/council.py`, docs/SPEC-PERP-CONSEIL-HAIKU.md) is one more player when its own
+configuration is loaded (`LlmLeague.council`): it plays with the models (`LlmLeague.players`), under its own
+policy (`policy_of`), and its ten calls run inside its one slot of the pool.
 """
 
 from __future__ import annotations
@@ -19,8 +23,9 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from arene.perp.agent import DEFAULT_WORKDIR, TIMEOUT_RC, AgentDecider, AgentResult
+from arene.perp.agent import DEFAULT_WORKDIR, TIMEOUT_RC, AgentDecider, AgentResult, stream_cost_uusd
 from arene.perp.agent_round import finish_agent_round, prepare_agent_round
+from arene.perp.council import CouncilConfig, CouncilDecider, council_record
 
 REPO = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LLM_CONFIG = REPO / "config" / "perp-llm.toml"
@@ -36,6 +41,7 @@ class LlmModel:
     portfolio: str
     model: str
     daily_budget_uusd: int
+    council: bool = False  # the Haiku council: ten calls per round, its own policy
 
 
 @dataclass(frozen=True)
@@ -50,6 +56,17 @@ class LlmLeague:
     effort: str | None
     models: tuple[LlmModel, ...]
     sha256: str
+    council: CouncilConfig | None = (
+        None  # loaded on its own (config/perp-conseil.toml): None when off or invalid
+    )
+
+    @property
+    def players(self) -> tuple[LlmModel, ...]:
+        """The models, then the council when it is on."""
+        c = self.council
+        if c is None or not c.enabled:
+            return self.models
+        return (*self.models, LlmModel(c.portfolio, c.model, c.daily_budget_uusd, council=True))
 
 
 def _usd_to_uusd(v: Any, key: str) -> int:
@@ -138,13 +155,30 @@ def charge_ceiling(res: AgentResult) -> bool:
 
 
 def spent_today_uusd(events: Sequence[Mapping[str, Any]], portfolio: str, now_ts: int) -> int:
+    """The decisions of the UTC day, plus what the rounds cut after their call cost (`perp_llm_skipped`, from
+    their streams), plus, for the council, the opinions of a round cut while its decision was being journaled
+    (its members were paid; the decision's cost would have included them)."""
     day = now_ts // 86_400
-    return sum(
-        call_cost_uusd(e["payload"])
+    decided = set()
+    total = 0
+    for e in events:
+        if e["type"] == "agent_decision" and e["payload"].get("portfolio") == portfolio:
+            decided.add(e["payload"].get("round"))
+            if e["ts"] // 86_400 == day:
+                total += call_cost_uusd(e["payload"])
+        elif (
+            e["type"] == "perp_llm_skipped"
+            and e["payload"].get("portfolio") == portfolio
+            and e["ts"] // 86_400 == day
+        ):
+            total += int(e["payload"].get("cost_uusd") or 0)
+    return total + sum(
+        int(e["payload"].get("cost_uusd") or 0)
         for e in events
-        if e["type"] == "agent_decision"
+        if e["type"] == "council_opinion"
         and e["payload"].get("portfolio") == portfolio
         and e["ts"] // 86_400 == day
+        and e["payload"].get("round") not in decided
     )
 
 
@@ -187,6 +221,7 @@ def run_llm_round(
     only: set[str] | None = None,
     triggers: Mapping[str, Mapping[str, Any]] | None = None,
     quota_of: Callable[[str], Mapping[str, int]] | None = None,
+    policy_of: Callable[[str], Any] | None = None,
 ) -> LlmRoundReport:
     """Plays the LLM part of one league round; every outcome is journaled (problems never stop the others).
 
@@ -198,13 +233,17 @@ def run_llm_round(
 
     `triggers`: in a private round, each portfolio's own trigger ({"kind": "alert" | "scheduled" | "cadence",
     ...}): its `kind` is the call type the model sees, and no model sees another's trigger. `quota_of(portfolio)`: its
-    rounds of the day, shown in its snapshot."""
+    rounds of the day, shown in its snapshot. `policy_of(portfolio)`: its risk policy (the council has its own);
+    `policy` for all without it."""
     rep = LlmRoundReport([])
     max_call = _usd_to_uusd(league.max_budget_usd, "max_budget_usd")
 
-    def make(m: LlmModel, ceiling: int) -> AgentDecider:
+    def make(m: LlmModel, ceiling: int) -> Any:
         if decider_factory is not None:
             d = decider_factory(m)
+        elif m.council:
+            assert league.council is not None
+            d = CouncilDecider(league.council, DEFAULT_WORKDIR, effort=league.effort)
         else:
             d = AgentDecider(
                 m.model, m.portfolio, DEFAULT_WORKDIR, timeout_s=float(league.timeout_s), effort=league.effort
@@ -212,8 +251,8 @@ def run_llm_round(
         d.max_budget_usd = _usd(ceiling)
         return d
 
-    for m in league.models:
-        sim.open_portfolio(m.portfolio, "llm", now_ts)
+    for m in league.players:
+        sim.open_portfolio(m.portfolio, "council" if m.council else "llm", now_ts)
     events = sim.journal.events()
     states = sim.states()
 
@@ -229,7 +268,7 @@ def run_llm_round(
         of_round("agent_decision"),
         of_round("perp_llm_skipped"),
     )
-    models = [m for m in league.models if only is None or m.portfolio in only]
+    models = [m for m in league.players if only is None or m.portfolio in only]
     for name in sorted(started - decided - skipped):
         # interrupted (power cut, kill): never called again, never executed late
         path = next(
@@ -238,7 +277,11 @@ def run_llm_round(
         )  # fmt: skip
         called = (var / path / "stream.jsonl").exists() if path else False
         reason = "interrupted_after_call" if called else "interrupted_before_call"
-        sim.append_event("perp_llm_skipped", {"portfolio": name, "round": round_id, "reason": reason}, now_ts)
+        skip: dict[str, Any] = {"portfolio": name, "round": round_id, "reason": reason}
+        if called:  # what the cut calls cost, as their streams say (the council: its members' streams)
+            members = sorted((var / path / "membres").glob("*/stream.jsonl"))
+            skip["cost_uusd"] = sum(stream_cost_uusd(f) for f in members or [var / path / "stream.jsonl"])
+        sim.append_event("perp_llm_skipped", skip, now_ts)
         rep.notes.append(f"{name}: {reason}, not replayed")
     played = started | skipped
     prepared = []
@@ -255,13 +298,19 @@ def run_llm_round(
             if reason is None:
                 ceiling = min(max_call, remaining)
                 own = triggers.get(m.portfolio) if triggers is not None else None
+                extra: dict[str, Any] = {"llm_config_sha256": league.sha256, "budget_ceiling_uusd": ceiling}
+                if m.council and league.council is not None:
+                    extra["council_config_sha256"] = league.council.sha256
                 ctx = prepare_agent_round(
                     var=var, sim=sim, store=store, decider=make(m, ceiling), view=view, specs=specs,
-                    policy=policy, config_sha256=config_sha256, round_id=round_id, now_ts=now_ts,
+                    policy=policy_of(m.portfolio) if policy_of is not None else policy,
+                    config_sha256=config_sha256, round_id=round_id, now_ts=now_ts,
                     kind=str(own["kind"]) if own else kind, trigger=own if triggers is not None else trigger,
-                    entries_blocked=entries_blocked,
-                    extra={"llm_config_sha256": league.sha256, "budget_ceiling_uusd": ceiling},
+                    entries_blocked=entries_blocked, extra=extra,
                     quota=quota_of(m.portfolio) if quota_of is not None else None,
+                    snapshot_extra=(
+                        {"bilan_du_conseil": council_record(events, m.portfolio, now_ts)} if m.council else None
+                    ),
                 )  # fmt: skip
                 if not isinstance(ctx, AgentResult):
                     prepared.append((ctx, ceiling))

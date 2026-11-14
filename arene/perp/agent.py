@@ -73,14 +73,14 @@ BOUNDS = {
 }
 
 
-def _num(name: str) -> dict[str, Any]:
-    lo, hi = BOUNDS[name]
-    return {"type": ["number", "null"], "minimum": lo, "maximum": hi}
+def _num(name: str, hi: int | None = None) -> dict[str, Any]:
+    lo, top = BOUNDS[name]
+    return {"type": ["number", "null"], "minimum": lo, "maximum": top if hi is None else hi}
 
 
-def _bounded(name: str) -> dict[str, Any]:
-    lo, hi = BOUNDS[name]
-    return {"type": "number", "minimum": lo, "maximum": hi}
+def _bounded(name: str, hi: int | None = None) -> dict[str, Any]:
+    lo, top = BOUNDS[name]
+    return {"type": "number", "minimum": lo, "maximum": top if hi is None else hi}
 
 
 _ORDER_COMMON = {
@@ -90,78 +90,88 @@ _ORDER_COMMON = {
     "expires_h": {"type": ["integer", "null"], "minimum": 1, "maximum": 24},
 }
 
-OUTPUT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": ["actions", "justification"],
-    "properties": {
-        "actions": {
-            "type": "array",
-            "maxItems": 2,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["instrument", "action"],
-                "properties": {
-                    "instrument": {"type": "string", "enum": list(INSTRUMENTS)},
-                    "action": {"type": "string", "enum": ["open_long", "open_short", "reduce", "close"]},
-                    "size_pct": _num("size_pct"),
-                    "stop_pct": _num("stop_pct"),
-                    "take_profit_pct": _num("take_profit_pct"),
-                    "horizon_h": {"type": ["integer", "null"], "minimum": 1, "maximum": 168},
-                    "expected_move_pct": _num("expected_move_pct"),
-                    "confidence_pct": _num("confidence_pct"),
-                    "invalidation": {"type": ["string", "null"], "maxLength": INVALIDATION_MAX},
+
+def output_schema(max_size_pct: int = 100) -> dict[str, Any]:
+    """The decision schema; `max_size_pct` bounds `size_pct` (100 for the LLM portfolios, more for the council,
+    whose policy allows entries above the equity)."""
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["actions", "justification"],
+        "properties": {
+            "actions": {
+                "type": "array",
+                "maxItems": 2,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["instrument", "action"],
+                    "properties": {
+                        "instrument": {"type": "string", "enum": list(INSTRUMENTS)},
+                        "action": {"type": "string", "enum": ["open_long", "open_short", "reduce", "close"]},
+                        "size_pct": _num("size_pct", max_size_pct),
+                        "stop_pct": _num("stop_pct"),
+                        "take_profit_pct": _num("take_profit_pct"),
+                        "horizon_h": {"type": ["integer", "null"], "minimum": 1, "maximum": 168},
+                        "expected_move_pct": _num("expected_move_pct"),
+                        "confidence_pct": _num("confidence_pct"),
+                        "invalidation": {"type": ["string", "null"], "maxLength": INVALIDATION_MAX},
+                    },
+                },
+            },
+            "justification": {"type": "string", "maxLength": JUSTIFICATION_MAX},
+            "next_wakeup_min": {
+                "type": ["integer", "null"],
+                "minimum": WAKEUP_MIN_MIN,
+                "maximum": WAKEUP_MAX_MIN,
+            },
+            "alerts": {
+                "type": "array",
+                "maxItems": MAX_ORDERS,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["instrument", "condition", "price_usd"],
+                    "properties": {
+                        **_ORDER_COMMON,
+                        "note": {"type": ["string", "null"], "maxLength": NOTE_MAX},
+                    },
+                },
+            },
+            "entry_orders": {
+                "type": "array",
+                "maxItems": MAX_ORDERS,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "instrument",
+                        "side",
+                        "condition",
+                        "price_usd",
+                        "size_pct",
+                        "stop_pct",
+                        "horizon_h",
+                        "expected_move_pct",
+                    ],
+                    "properties": {
+                        **_ORDER_COMMON,
+                        "side": {"type": "string", "enum": ["long", "short"]},
+                        "size_pct": _bounded("size_pct", max_size_pct),
+                        "stop_pct": _bounded("stop_pct"),
+                        "take_profit_pct": _num("take_profit_pct"),
+                        "horizon_h": {"type": "integer", "minimum": 1, "maximum": 168},
+                        "expected_move_pct": _bounded("expected_move_pct"),
+                        "confidence_pct": _num("confidence_pct"),
+                        "invalidation": {"type": ["string", "null"], "maxLength": INVALIDATION_MAX},
+                    },
                 },
             },
         },
-        "justification": {"type": "string", "maxLength": JUSTIFICATION_MAX},
-        "next_wakeup_min": {
-            "type": ["integer", "null"],
-            "minimum": WAKEUP_MIN_MIN,
-            "maximum": WAKEUP_MAX_MIN,
-        },
-        "alerts": {
-            "type": "array",
-            "maxItems": MAX_ORDERS,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["instrument", "condition", "price_usd"],
-                "properties": {**_ORDER_COMMON, "note": {"type": ["string", "null"], "maxLength": NOTE_MAX}},
-            },
-        },
-        "entry_orders": {
-            "type": "array",
-            "maxItems": MAX_ORDERS,
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": [
-                    "instrument",
-                    "side",
-                    "condition",
-                    "price_usd",
-                    "size_pct",
-                    "stop_pct",
-                    "horizon_h",
-                    "expected_move_pct",
-                ],
-                "properties": {
-                    **_ORDER_COMMON,
-                    "side": {"type": "string", "enum": ["long", "short"]},
-                    "size_pct": _bounded("size_pct"),
-                    "stop_pct": _bounded("stop_pct"),
-                    "take_profit_pct": _num("take_profit_pct"),
-                    "horizon_h": {"type": "integer", "minimum": 1, "maximum": 168},
-                    "expected_move_pct": _bounded("expected_move_pct"),
-                    "confidence_pct": _num("confidence_pct"),
-                    "invalidation": {"type": ["string", "null"], "maxLength": INVALIDATION_MAX},
-                },
-            },
-        },
-    },
-}
+    }
+
+
+OUTPUT_SCHEMA: dict[str, Any] = output_schema()
 
 
 def load_prompt() -> str:
@@ -193,6 +203,8 @@ class _Bounded(BaseModel):
     @classmethod
     def _bounds(cls, v: Decimal | None, info: Any) -> Decimal | None:
         lo, hi = BOUNDS[info.field_name]
+        if info.field_name == "size_pct" and info.context and info.context.get("max_size_pct"):
+            hi = info.context["max_size_pct"]  # the council (an entry may exceed the equity)
         if v is not None and (not v.is_finite() or v < lo or v > hi):
             raise ValueError(f"{info.field_name} hors bornes [{lo}, {hi}] : {v}")
         return v
@@ -298,7 +310,7 @@ def _order_id(portfolio: str, round_id: int, kind: str, k: int, content: Mapping
 
 
 def _parse_orders(
-    raw: Any, kind: str, portfolio: str, round_id: int
+    raw: Any, kind: str, portfolio: str, round_id: int, max_size_pct: int | None = None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(valid elements, errors) of `alerts` or `entry_orders`; each element is validated on its own.
     An element is {id, instrument, condition, price_uusd, ..., expires_h}: integers and strings only."""
@@ -306,7 +318,7 @@ def _parse_orders(
     out, errors = [], []
     for k, item in enumerate(raw):
         try:
-            o = model.model_validate(item)
+            o = model.model_validate(item, context={"max_size_pct": max_size_pct})
         except ValidationError as exc:
             errors.append({"kind": kind, "k": k, "error": str(exc)[:300]})
             continue
@@ -342,9 +354,11 @@ def _parse_orders(
 
 
 def parse_decision(
-    data: Any, portfolio: str, round_id: int, now_ts: int
+    data: Any, portfolio: str, round_id: int, now_ts: int, *, max_size_pct: int | None = None
 ) -> tuple[dict[str, Any] | None, str | None, list[PerpIntent]]:
     """(journalable parsed decision | None, error | None, intents). Never raises.
+
+    `max_size_pct`: the upper bound of `size_pct` when it is not 100 (the council); riskd judges the rest.
 
     Each action is validated on its own: an invalid action is dropped and its error kept in the parsed
     decision (`action_errors`), so one bad entry never discards a close in the same decision. The same holds
@@ -380,7 +394,7 @@ def parse_decision(
     intents, parsed_actions, errors = [], [], []
     for k, raw in enumerate(raw_actions):
         try:
-            a = ActionV3.model_validate(raw)
+            a = ActionV3.model_validate(raw, context={"max_size_pct": max_size_pct})
         except ValidationError as exc:
             errors.append({"k": k, "error": str(exc)[:300]})
             continue
@@ -406,7 +420,9 @@ def parse_decision(
             {k2: _dstr(v) if isinstance(v, Decimal) else v for k2, v in a.model_dump().items()}
         )
     alerts, alert_errors = _parse_orders(raw_orders["alerts"], "alert", portfolio, round_id)
-    entries, entry_errors = _parse_orders(raw_orders["entry_orders"], "entry", portfolio, round_id)
+    entries, entry_errors = _parse_orders(
+        raw_orders["entry_orders"], "entry", portfolio, round_id, max_size_pct
+    )
     wakeup, wakeup_errors = _parse_wakeup(data.get("next_wakeup_min"))
     parsed = {
         "actions": parsed_actions,
@@ -462,6 +478,7 @@ class ToolCall:
     arguments: str  # JSON text (never parsed into floats)
     response: str
     is_error: bool
+    member: str | None = None  # the council member who made the call (None: a single-model portfolio)
 
 
 @dataclass
@@ -486,6 +503,10 @@ class AgentResult:
     first_error: str | None = None  # the error of a first attempt that was retried
     stream_sha256: str | None = None
     tools_offered: list[str] = field(default_factory=list)  # from the init event
+    council: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # the council's opinions (council_opinion events)
+    extra: dict[str, Any] = field(default_factory=dict)  # more fields for the agent_decision event
 
 
 def _blocks(ev: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -564,6 +585,25 @@ def parse_stream(lines: Iterable[str]) -> AgentResult:
     return res
 
 
+def stream_cost_uusd(path: Path) -> int:
+    """The cost the CLI reported in a saved stream (every `result` event, every attempt); 0 without one. For the
+    rounds cut after their call, and the calls whose parsing failed: the money spent is still counted."""
+    total = 0
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return 0
+    for line in lines:
+        try:
+            ev = json.loads(line, parse_float=Decimal)
+            if isinstance(ev, dict) and ev.get("type") == "result":
+                cost = Decimal(str(ev.get("total_cost_usd") or 0)) * 1_000_000
+                total += max(0, int(cost.to_integral_value(rounding="ROUND_CEILING")))
+        except (ValueError, ArithmeticError):
+            continue
+    return total
+
+
 # ---------------------------------------------------------------------- the decider
 
 
@@ -634,6 +674,16 @@ class AgentDecider:
     max_budget_usd: str = MAX_BUDGET_USD
     effort: str | None = "low"  # None: the flag is not passed (a model may not support it)
 
+    def system_prompt(self) -> str:
+        return load_prompt()
+
+    def output_schema(self) -> dict[str, Any]:
+        return OUTPUT_SCHEMA
+
+    def prompt_digest(self) -> str:
+        """The sha256 journaled with the decision (`prompt_sha256`)."""
+        return prompt_sha256()
+
     def mcp_config(self, round_dir: Path) -> dict[str, Any]:
         return {
             "mcpServers": {
@@ -659,8 +709,8 @@ class AgentDecider:
             claude_bin(), "-p",
             "--model", self.model,
             "--output-format", "stream-json", "--verbose",
-            "--json-schema", json.dumps(OUTPUT_SCHEMA, separators=(",", ":")),
-            "--system-prompt", load_prompt(),
+            "--json-schema", json.dumps(self.output_schema(), separators=(",", ":")),
+            "--system-prompt", self.system_prompt(),
             "--tools", "",
             "--mcp-config", str(mcp_path), "--strict-mcp-config",
             "--allowedTools", f"{TOOL_PREFIX}*",

@@ -29,7 +29,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from arene.perp.agent import AgentDecider, AgentResult, cli_version, parse_decision, prompt_sha256
+from arene.perp.agent import AgentDecider, AgentResult, cli_version, parse_decision
 from arene.perp.agent_orders import pending_state, pending_wakeup, validate_levels
 from arene.perp.counters import counters_for
 from arene.perp.ledger import (
@@ -41,7 +41,7 @@ from arene.perp.ledger import (
     to_eur,
 )
 from arene.perp.mcp_server import eur, pct_e12_hour, qty, usd
-from arene.perp.policy import PerpPolicy
+from arene.perp.policy import AGGRESSIVE, PerpPolicy
 from arene.perp.riskd import PerpMarketView, evaluate_perp
 from arene.perp.round_data import build_round
 from arene.perp.sim import PerpSimulator
@@ -159,6 +159,29 @@ def orders_snapshot(view: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+STANDARD_RULES = (
+    "levier 2x max, stop obligatoire 1-15 %, perte au stop <= 3 % (tous stops <= 7,5 %), 4 ouvertures / 24 h"
+)
+
+
+def _pct_fr(bp: int) -> str:
+    return format((Decimal(bp) / 100).normalize(), "f").replace(".", ",")
+
+
+def rules_text(policy: Mapping[str, Any] | None) -> str:
+    """The rules line of the snapshot: the standard one, or the council's from its own policy."""
+    if not policy or policy.get("profile") != AGGRESSIVE:
+        return STANDARD_RULES
+    p = policy
+    return (
+        f"levier {p['max_leverage_bp'] // BP}x max (marges de Kraken), entrée <= {_pct_fr(p['max_order_bp'])} % "
+        f"de l'equity, position <= {_pct_fr(p['max_position_bp'])} %, stop obligatoire "
+        f"{_pct_fr(p['stop_bp_min'])}-{_pct_fr(p['stop_bp_max'])} % et avant la liquidation, perte au stop "
+        f"<= {_pct_fr(p['max_trade_loss_bp'])} % (tous stops <= {_pct_fr(p['max_open_risk_bp'])} %), "
+        f"{p['max_opens_per_day']} ouvertures / 24 h, arrêt à -{_pct_fr(p['drawdown_halt_bp'])} % du plus haut"
+    )
+
+
 def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | None) -> dict[str, Any]:
     """The first message: compact (the tools give the detail), with what the prompt promises: positions and
     their unrealized P&L, equity, leverage, open interest."""
@@ -233,7 +256,7 @@ def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | No
         },
         "marche": market,
         "tes_conditions_d_invalidation": invalidations,
-        "regles": "levier 2x max, stop obligatoire 1-15 %, perte au stop <= 3 % (tous stops <= 7,5 %), 4 ouvertures / 24 h",
+        "regles": rules_text(data.get("policy")),
     }
 
 
@@ -312,9 +335,12 @@ def prepare_agent_round(
     entries_blocked: bool | Callable[[], bool],
     extra: Mapping[str, Any] | None = None,
     quota: Mapping[str, int] | None = None,
+    snapshot_extra: Mapping[str, Any] | None = None,
 ) -> RoundContext | AgentResult:
     """Freezes and journals the round's data (`round_data`); an AgentResult with an error if this portfolio
-    already played this round. Thread-free: the caller may run `decider.decide` in parallel afterwards."""
+    already played this round. Thread-free: the caller may run `decider.decide` in parallel afterwards.
+
+    `snapshot_extra`: more top-level blocks of the snapshot (the council's record), in the message hashed."""
     name = decider.portfolio
     events = sim.journal.events()
     if any(
@@ -331,7 +357,7 @@ def prepare_agent_round(
         out_dir, store, events, view, acc, counters, specs, policy, sim.params, round_id, now_ts,
         config_sha256, _blocked(entries_blocked), quota=quota,
     )  # fmt: skip
-    snap = snapshot(data, kind, trigger)
+    snap = {**snapshot(data, kind, trigger), **dict(snapshot_extra or {})}
     message = decider.message(snap)
     sim.append_event(
         "round_data",
@@ -357,6 +383,8 @@ def finish_agent_round(
 ) -> None:
     """Journals the tool calls and the decision, then judges and executes each intent, in order."""
     sim, name, round_id, now_ts, view = ctx.sim, ctx.name, ctx.round_id, ctx.now_ts, ctx.view
+    for op in res.council:  # the council's members, before its decision (docs/SPEC-PERP-CONSEIL-HAIKU.md §3)
+        sim.append_event("council_opinion", {"portfolio": name, "round": round_id, **op}, now_ts)
     for call in res.tool_calls:
         sim.append_event(
             "tool_call",
@@ -369,12 +397,15 @@ def finish_agent_round(
                 "response": call.response[:20_000],
                 "response_sha256": hashlib.sha256(call.response.encode()).hexdigest(),
                 "is_error": call.is_error,
+                **({"member": call.member} if call.member is not None else {}),
             },
             now_ts,
         )
     parsed, perr, intents = (None, res.error, [])
     if res.decision is not None:
-        parsed, perr, intents = parse_decision(res.decision, name, round_id, now_ts)
+        parsed, perr, intents = parse_decision(
+            res.decision, name, round_id, now_ts, max_size_pct=getattr(ctx.decider, "max_size_pct", None)
+        )
     sim.append_event(
         "agent_decision",
         {
@@ -383,7 +414,7 @@ def finish_agent_round(
             "kind": ctx.kind,
             "model_requested": ctx.decider.model,
             "model_returned": res.model_returned,
-            "prompt_sha256": prompt_sha256(),
+            "prompt_sha256": ctx.decider.prompt_digest(),
             "parsed": parsed,
             "parse_error": perr,
             "tool_calls": len(res.tool_calls),
@@ -402,6 +433,7 @@ def finish_agent_round(
             "mcp_status": res.mcp_status,
             "tools_offered": res.tools_offered,
             "stream_sha256": res.stream_sha256,
+            **res.extra,
             **dict(extra or {}),
         },
         now_ts,

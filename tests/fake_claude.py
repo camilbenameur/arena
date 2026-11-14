@@ -3,6 +3,9 @@ calls tools through JSON-RPC, and prints a stream-json transcript like the CLI's
 
 FAKE_CLAUDE_MODE: normal | five_tools | no_result | mcp_failed
 FAKE_CLAUDE_EXTRA: JSON {<model> or "*": {fields merged into the decision, e.g. alerts, entry_orders, actions}}
+FAKE_CLAUDE_COUNCIL: JSON {"fail": [member keys with no result], "president": {fields merged into the
+President's decision}, "opinion": {fields merged into every opinion}}. A council member (its system prompt names
+its role) answers an opinion, and leaves its first message in `stdin.txt` of its round directory.
 """
 
 from __future__ import annotations
@@ -18,7 +21,19 @@ from pathlib import Path
 
 cfg = json.loads(Path(args[args.index("--mcp-config") + 1]).read_text())["mcpServers"]["arene"]
 model = args[args.index("--model") + 1]
-sys.stdin.read()
+stdin_text = sys.stdin.read()
+system = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
+ROLES = {
+    "le Cartographe": "cartographe", "le Suiveur": "suiveur", "le Chasseur de cassures": "chasseur",
+    "le Contrarien": "contrarien", "le Lecteur de carnet": "carnet", "le Trésorier du levier": "tresorier",
+    "l'Avocat du diable": "avocat", "le Gardien du risque": "gardien", "le Mémorialiste": "memorialiste",
+    "le Président": "president",
+}  # fmt: skip
+member = next((k for name, k in ROLES.items() if f"## Ton rôle : {name}\n" in system), None)
+council = json.loads(os.environ.get("FAKE_CLAUDE_COUNCIL") or "{}")
+if member is not None:
+    round_dir = Path(args[args.index("--mcp-config") + 1]).parent
+    (round_dir / "stdin.txt").write_text(stdin_text, encoding="utf-8")
 
 
 def out(obj):
@@ -116,6 +131,8 @@ for k, (name, a) in enumerate(calls):
     )
 srv.stdin.close()
 srv.wait()
+if member in council.get("fail", []):
+    sys.exit(1)  # no result event: a failed member
 decision = {"actions": [], "justification": "rien de convaincant"}
 if approved:
     decision = {
@@ -137,6 +154,23 @@ if approved:
 extra = json.loads(os.environ.get("FAKE_CLAUDE_EXTRA") or "{}")
 decision.update(extra.get("*", {}))
 decision.update(extra.get(model, {}))
+if member == "president":
+    decision.update(council.get("president", {}))
+elif member is not None:
+    decision = {
+        "avis": [
+            {
+                "instrument": "PF_XBTUSD",
+                "position": "long",
+                "conviction": 60,
+                "taille_pct": 300,
+                "stop_pct": 1.2,
+            }
+        ],
+        "cible": {"instrument": "PF_XBTUSD", "sens": "long"} if member == "avocat" else None,
+        "argument": f"{member}: funding faible",
+        **council.get("opinion", {}),
+    }
 out(
     {
         "type": "assistant",

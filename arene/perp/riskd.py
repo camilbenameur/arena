@@ -16,6 +16,11 @@ accepts. The same function serves the agents' `simulate_order` tool.
 Loss at a stop (MAX_TRADE_LOSS, MAX_OPEN_RISK) is the equity lost if the stop fills NOW: from the current
 mark (not the entry, so an unrealized gain given back counts), to a fill `stop_gap_bp` beyond the stop plus
 the simulator's slippage, plus the exit fee.
+
+The aggressive profile (the Haiku council, docs/SPEC-PERP-CONSEIL-HAIKU.md §5) changes three things only: the
+initial margin is Kraken's own schedule (`arene/perp/margin.py`) instead of the AMF 50 %; every stop must be
+reached before the liquidation (LIQUIDATION_BEFORE_STOP: the equity left at the stops, each alone and all
+together, covers Kraken's maintenance margin at those prices); a daily freeze or a fee budget set to 0 is off.
 """
 
 from __future__ import annotations
@@ -34,7 +39,8 @@ from arene.perp.ledger import (
     gross_exposure_ueur,
     notional_up,
 )
-from arene.perp.policy import PerpPolicy
+from arene.perp.margin import INITIAL, MAINTENANCE, margin_ueur
+from arene.perp.policy import AGGRESSIVE, PerpPolicy
 from arene.perp.sim import SimParams, buy_price, fee_ueur, sell_price, tick_down, tick_up
 from arene.perp.types import InstrumentSpec
 from arene.types import MICRO, QTY_SCALE, ceil_div
@@ -83,6 +89,7 @@ MAX_LEVERAGE = "MAX_LEVERAGE"
 INITIAL_MARGIN = "INITIAL_MARGIN"
 MAX_TRADE_LOSS = "MAX_TRADE_LOSS"
 MAX_OPEN_RISK = "MAX_OPEN_RISK"
+LIQUIDATION_BEFORE_STOP = "LIQUIDATION_BEFORE_STOP"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -228,8 +235,43 @@ def _freeze_halt(
     if (peak - equity) * BP >= policy.drawdown_halt_bp * peak:
         r.add(HALTED)
     ago = c.equity_24h_ago_ueur
-    if (ago - equity) * BP >= policy.daily_loss_freeze_bp * ago:
+    if policy.daily_loss_freeze_bp and (ago - equity) * BP >= policy.daily_loss_freeze_bp * ago:
         r.add(FROZEN)
+    return r
+
+
+def _kraken_margins(
+    after: MarginAccount,
+    marks: Mapping[str, int],
+    specs: Mapping[str, InstrumentSpec],
+    policy: PerpPolicy,
+    params: SimParams,
+    fx: tuple[int, int],
+    eq_after: int,
+    risks: Mapping[str, int],
+    inst: str,
+) -> set[str]:
+    """Kraken's initial margin after the order, and the liquidation never reached before the stops: the
+    equity left when the traded position's stop fills (the others at the mark), and when every stop fills
+    at once, covers the maintenance margin with the positions valued at those stop prices."""
+    r: set[str] = set()
+    levels = {i: specs[i].margin_levels for i in after.positions}
+    at_mark = {i: notional_up(p.qty, marks[i]) for i, p in after.positions.items()}
+    if eq_after < margin_ueur(at_mark, levels, INITIAL, *fx):
+        r.add(INITIAL_MARGIN)
+    at_stop = {}
+    for i, p in after.positions.items():
+        exit_px = (
+            marks[i]
+            if p.stop_uusd is None
+            else stop_exit_price(p.qty, p.stop_uusd, specs[i].tick_uusd, policy.stop_gap_bp, params)
+        )
+        at_stop[i] = notional_up(p.qty, exit_px)
+    alone = {**at_mark, inst: at_stop[inst]}
+    if eq_after - risks[inst] < margin_ueur(alone, levels, MAINTENANCE, *fx):
+        r.add(LIQUIDATION_BEFORE_STOP)
+    if eq_after - sum(risks.values()) < margin_ueur(at_stop, levels, MAINTENANCE, *fx):
+        r.add(LIQUIDATION_BEFORE_STOP)
     return r
 
 
@@ -487,7 +529,9 @@ def _evaluate_entry(
     fee = fee_ueur(qty, price, params.taker_fee_bp, *fx)
     exit_fee_est = fee_ueur(qty, price, params.taker_fee_bp, *fx)
     start = counters.equity_month_start_ueur
-    if (
+    if policy.monthly_fee_budget_bp == 0 and policy.profile == AGGRESSIVE:
+        pass  # no fee budget: the fees stay real and count in the result
+    elif (
         not _is_int(start)
         or start <= 0
         or (counters.fees_month_ueur + fee + exit_fee_est) * BP > policy.monthly_fee_budget_bp * start
@@ -546,7 +590,17 @@ def _evaluate_entry(
         r.add(NO_EQUITY)
     if gross_after * BP > policy.max_leverage_bp * eq_after:
         r.add(MAX_LEVERAGE)
-    if eq_after * BP < params.initial_margin_bp * gross_after:
+    if policy.profile == AGGRESSIVE:
+        r |= _kraken_margins(after, marks, specs, policy, params, fx, eq_after, risks, inst)
+        metrics.update(
+            initial_margin_ueur=margin_ueur(
+                {i: notional_up(p.qty, marks[i]) for i, p in after.positions.items()},
+                {i: specs[i].margin_levels for i in after.positions},
+                INITIAL,
+                *fx,
+            )
+        )
+    elif eq_after * BP < params.initial_margin_bp * gross_after:
         r.add(INITIAL_MARGIN)
     if inst_notional * BP > policy.max_position_bp * eq_after:
         r.add(MAX_POSITION)

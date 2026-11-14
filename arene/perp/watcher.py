@@ -25,7 +25,9 @@ Run every 5 minutes by `arene-perp-watcher.timer`, after the collector. One tick
    rebalanced once per month, the trend decides once per UTC day, each at the first rendez-vous able to.
    The LLM portfolios play the rendez-vous (and the market wake-ups once `wakeups = true`; their alerts, the wake-ups they ask for and the default cadence `cadence_min` in private rounds): their `claude -p` calls run
    in parallel inside the tick, which holds the watcher lock meanwhile (the next ticks skip, then catch up the
-   minutes in order). See `arene/perp/llm_league.py`.
+   minutes in order). See `arene/perp/llm_league.py`. The Haiku council (`arene/perp/council.py`) plays like
+   one more model, under its own policy (`policy_for`: leverage up to 10x, no daily freeze, halt at -90 %) and
+   with Kraken's margins in the simulator (`arene/perp/margin.py`).
 
 Everything is written to the league's own journal (`var-perp/journal/events.jsonl`). Exit codes: 0 fine,
 3 the tick had failures (listed in `perp_tick`), 1 crash (with a `panique` alert when possible).
@@ -36,6 +38,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import contextlib
+import dataclasses
 import fcntl
 import json
 import os
@@ -58,6 +61,7 @@ from arene.perp.agent import AgentDecider
 from arene.perp.agent_round import _close_unprotected, _execute
 from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
+from arene.perp.council import CouncilConfigError, load_council
 from arene.perp.counters import counters_for
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
@@ -69,6 +73,7 @@ from arene.perp.llm_league import (
     load_llm_league,
     run_llm_round,
 )
+from arene.perp.margin import leveraged
 from arene.perp.market import market_view, worst_half_spread_bp
 from arene.perp.mcp_server import usd
 from arene.perp.policy import PerpPolicy, load_perp_policy
@@ -187,7 +192,12 @@ class PerpWatcher:
         self.symbols = [i.kraken_symbol for i in cfg.instruments]
         self.store = PerpDataStore(data_root(var))
         self.journal = Journal(var / "journal" / "events.jsonl")
-        self.sim = PerpSimulator(self.journal, {s: specs[s].tick_uusd for s in self.symbols}, cfg.simulation)
+        self.sim = PerpSimulator(
+            self.journal,
+            {s: specs[s].tick_uusd for s in self.symbols},
+            cfg.simulation,
+            margin_levels={s: specs[s].margin_levels for s in self.symbols},
+        )
         self.spot_paths = spot_paths or Paths.from_env()
         self.notifier = notifier
         self.llm = llm
@@ -196,6 +206,15 @@ class PerpWatcher:
         self._deferred: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ helpers
+
+    def policy_for(self, portfolio: str) -> PerpPolicy:
+        """The council's own policy for the council (docs/SPEC-PERP-CONSEIL-HAIKU.md §5), the league's for every
+        other portfolio. A council whose configuration did not load keeps the league's policy (2x, halt at
+        -15 %): stricter, never looser."""
+        c = self.llm.council if self.llm is not None else None
+        if c is not None and portfolio == c.portfolio and leveraged(portfolio):
+            return c.policy
+        return self.policy
 
     def _append(self, type_: str, payload: dict[str, Any], ts: int) -> None:
         self.sim.append_event(type_, payload, ts)
@@ -345,7 +364,8 @@ class PerpWatcher:
         try:
             res = run_llm_round(
                 league=self.llm, var=self.var, sim=self.sim, store=self.store, view=view, specs=self.specs,
-                policy=self.policy, config_sha256=self.cfg.sha256, round_id=round_id, now_ts=now_ts, kind=kind,
+                policy=self.policy, policy_of=self.policy_for, config_sha256=self.cfg.sha256, round_id=round_id,
+                now_ts=now_ts, kind=kind,
                 trigger=trigger, entries_blocked=lambda: blocked or self._kill_active(),
                 decider_factory=self.decider_factory, refresh=refresh,
                 only=None if portfolios is None else set(portfolios), triggers=triggers,
@@ -461,7 +481,7 @@ class PerpWatcher:
             p = e["payload"]
             if (p["portfolio"], p["minute"]) in done:
                 continue
-            until = p["minute"] + self.policy.freeze_duration_s
+            until = p["minute"] + self.policy_for(p["portfolio"]).freeze_duration_s
             self._append(
                 "portfolio_frozen",
                 {
@@ -562,7 +582,8 @@ class PerpWatcher:
                 eq = equity_ueur(acc, marks, *fx)
                 c = counters_for(events, name, now_ts)
                 peak = max(c.equity_peak_ueur, acc.capital_ueur, eq)
-                if not acc.halted and (peak - eq) * BP >= self.policy.drawdown_halt_bp * peak:
+                pol = self.policy_for(name)
+                if not acc.halted and (peak - eq) * BP >= pol.drawdown_halt_bp * peak:
                     self.sim.flatten(name, now_ts, quotes, fx, "halt")
                     self._append(
                         "portfolio_halted", {"portfolio": name, "reason": "drawdown", "until_ts": 0}, now_ts
@@ -585,9 +606,10 @@ class PerpWatcher:
                     and acc.frozen_until_ts <= now_ts
                     and now_ts - last_freeze_end >= 86_400  # the same loss does not re-arm a freeze
                     and ago > 0
-                    and (ago - eq) * BP >= self.policy.daily_loss_freeze_bp * ago
+                    and pol.daily_loss_freeze_bp > 0  # 0: no daily freeze (the council)
+                    and (ago - eq) * BP >= pol.daily_loss_freeze_bp * ago
                 ):
-                    until = now_ts + self.policy.freeze_duration_s
+                    until = now_ts + pol.freeze_duration_s
                     self._append(
                         "portfolio_frozen",
                         {"portfolio": name, "reason": "daily_loss", "until_ts": until},
@@ -775,7 +797,15 @@ class PerpWatcher:
         )  # fmt: skip
         counters = counters_for(events, name, now_ts)
         v = evaluate_perp(
-            intent, acc, view, self.specs, counters, self.policy, self.cfg.simulation, now_ts, blocked
+            intent,
+            acc,
+            view,
+            self.specs,
+            counters,
+            self.policy_for(name),
+            self.cfg.simulation,
+            now_ts,
+            blocked,
         )
         if oid not in st.verdicts:
             self._append(
@@ -907,7 +937,7 @@ class PerpWatcher:
             states = self.sim.states()
             eligible = [
                 m.portfolio
-                for m in self.llm.models
+                for m in self.llm.players
                 if m.portfolio in states
                 and not states[m.portfolio].halted
                 and has_budget(m, events, now_ts)
@@ -915,7 +945,7 @@ class PerpWatcher:
             ]
             if not eligible:
                 return False
-            if len(eligible) < len(self.llm.models):
+            if len(eligible) < len(self.llm.players):
                 portfolios = eligible
         if not may_start():
             return False
@@ -972,7 +1002,7 @@ class PerpWatcher:
                     "note": a["note"],
                 },
             )
-        for m in self.llm.models:
+        for m in self.llm.players:
             asked = AO.pending_wakeup(events, m.portfolio)
             if asked is None or asked["due_ts"] - now_ts > ASKED_EARLY_S:
                 continue
@@ -990,7 +1020,7 @@ class PerpWatcher:
             # the cadence (the owner, 13/11 and 14/11): every model is called again at most `cadence_min` after its
             # last round, whatever that round was (a failed one included). A wake-up it asked for can only bring
             # that call forward: one asked for later than the cadence does not delay it.
-            for m in self.llm.models:
+            for m in self.llm.players:
                 if m.portfolio in triggers:
                     continue
                 last = RQ.last_played(events, m.portfolio)
@@ -1007,7 +1037,7 @@ class PerpWatcher:
                     "every_min": self.llm.cadence_min,
                     "last_round_ts": last,
                 }
-        models = {m.portfolio: m for m in self.llm.models}
+        models = {m.portfolio: m for m in self.llm.players}
         served = {
             p: t
             for p, t in triggers.items()
@@ -1294,6 +1324,18 @@ def main(argv: list[str] | None = None) -> int:
                 {"level": "action", "code": "perp_llm_config_invalid", "message": str(exc)[:1000]},
                 now_ts,
             )
+        if llm is not None:
+            try:  # a bad council config disables the council only
+                llm = dataclasses.replace(llm, council=load_council())
+            except CouncilConfigError as exc:
+                notifier.send(
+                    "action", "perp_council_config_invalid", f"council config invalid, off: {exc}"[:900]
+                )
+                journal.append(
+                    "alert",
+                    {"level": "action", "code": "perp_council_config_invalid", "message": str(exc)[:1000]},
+                    now_ts,
+                )
         w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm)
         rep = w.tick(now_ts)
     except Exception as exc:

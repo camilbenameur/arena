@@ -35,6 +35,8 @@ from arene.perp.ledger import (
     qty_seconds,
     unrealized_ueur,
 )
+from arene.perp.margin import INITIAL, MAINTENANCE, leveraged, margin_ueur
+from arene.perp.types import MarginLevel
 from arene.types import ceil_div
 
 FILL_MODEL_VERSION = "pessimiste-perp-v1"
@@ -113,8 +115,13 @@ class PerpSimulator:
         params: SimParams | None = None,
         *,
         exclusive: bool = False,
+        margin_levels: Mapping[str, tuple[MarginLevel, ...]] | None = None,
     ) -> None:
-        """`exclusive=True`: the caller guarantees no other writer (offline replays): no lock, no re-sync."""
+        """`exclusive=True`: the caller guarantees no other writer (offline replays): no lock, no re-sync.
+
+        `margin_levels`: Kraken's margin schedule per instrument, for the leveraged portfolios
+        (`arene/perp/margin.py`): their entries need Kraken's initial margin and their close-out comes when the
+        equity falls under Kraken's maintenance margin. Without it, a leveraged portfolio is margined at 100 %."""
         for inst, tick in ticks.items():
             if type(tick) is not int or tick <= 0:
                 raise ValueError(f"tick of {inst} must be a positive integer")
@@ -126,6 +133,7 @@ class PerpSimulator:
         self._lock_fd: int | None = None
         self.exclusive = exclusive
         self._synced = False
+        self.margin_levels = dict(margin_levels or {})
 
     # ------------------------------------------------------------------ journal, lock, cache
 
@@ -307,11 +315,24 @@ class PerpSimulator:
         apply_fill(after, probe, ts, self._book.last_seq + 1)
         equity = equity_ueur(after, values, *fx)
         gross = gross_exposure_ueur(after, values, *fx)
-        if equity * BP < self.params.initial_margin_bp * gross:
+        if leveraged(acc.portfolio):
+            need = self._kraken_margin(after, values, INITIAL, fx)
+            if equity < need:
+                raise PerpLedgerError(
+                    f"{acc.portfolio}: Kraken initial margin not covered after the order "
+                    f"(equity {equity} µEUR, {need} µEUR required)"
+                )
+        elif equity * BP < self.params.initial_margin_bp * gross:
             raise PerpLedgerError(
                 f"{acc.portfolio}: initial margin not covered after the order "
                 f"(equity {equity} µEUR, gross {gross} µEUR, {self.params.initial_margin_bp} bp required)"
             )
+
+    def _kraken_margin(
+        self, acc: MarginAccount, values: Mapping[str, int], kind: str, fx: tuple[int, int]
+    ) -> int:
+        notionals = {i: notional_up(p.qty, values[i]) for i, p in acc.positions.items()}
+        return margin_ueur(notionals, {i: self.margin_levels.get(i, ()) for i in notionals}, kind, *fx)
 
     def set_conditional(
         self, portfolio: str, instrument: str, kind: str, price_uusd: int | None, ts: int
@@ -435,12 +456,13 @@ class PerpSimulator:
         else:
             equity = equity_ueur(acc, worst, *fx)
             gross = gross_exposure_ueur(acc, worst, *fx)
-            if equity * BP < self.params.closeout_margin_bp * gross:
-                summary = {
-                    "equity_ueur": equity,
-                    "threshold_ueur": ceil_div(self.params.closeout_margin_bp * gross, BP),
-                    "gross_ueur": gross,
-                }
+            threshold = (
+                self._kraken_margin(acc, worst, MAINTENANCE, fx)
+                if leveraged(name)
+                else ceil_div(self.params.closeout_margin_bp * gross, BP)
+            )
+            if equity < threshold:
+                summary = {"equity_ueur": equity, "threshold_ueur": threshold, "gross_ueur": gross}
                 self._finish_closeout(name, minute_ts, candles, fallback, fx, extra, fills, fill_ts, summary)
                 return
         for inst in sorted(acc.positions):
