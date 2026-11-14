@@ -364,6 +364,16 @@ def test_conseil_prix_en_direct(site):
     assert "council-perp-haiku" in re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', lire(site, "index.html")).group(1)
 
 
+def test_courbe_relie_le_direct_aux_series(site):
+    """direct.js nomme chaque portefeuille par son slug, que porte sa série : la courbe peut ajouter son point en direct."""
+    import json
+
+    page = lire(site, "index.html")
+    direct = json.loads(html.unescape(re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)))
+    courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
+    assert direct["pf"] and set(direct["pf"]) <= {s.get("slug") for s in courbe["series"]}
+
+
 def test_conseil_arrete_le_dit(tmp_path):
     spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
     perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", ruine=True)

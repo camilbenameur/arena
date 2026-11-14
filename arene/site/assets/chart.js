@@ -32,10 +32,12 @@
   function jour(d) { return d.getUTCDate() + " " + MOIS[d.getUTCMonth()]; }
   function heure(d) { return d.getUTCHours() + " h"; }
   var KINDS = data.kinds || [];
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
   function hm(d) { var m = d.getUTCMinutes(); return d.getUTCHours() + ":" + (m < 10 ? "0" : "") + m; }
   function quand(i) {
     if (i === 0 && KINDS[0] === "depart") return "Départ";
     var d = new Date(data.x[i] * 1000);
+    if (KINDS[i] === "direct") return "En direct, prix Kraken de " + hm(d) + ":" + pad(d.getUTCSeconds()) + " UTC";
     if (KINDS[i] === "veille") return (i === LAST ? (data.dernier || "En direct") + " : " : "Relevé du ") + jour(d) + ", " + hm(d) + " UTC";
     return (i === LAST ? "Dernier cycle : " : "Cycle du ") + jour(d) + ", " + heure(d) + " UTC";
   }
@@ -249,6 +251,30 @@
     plot = new uPlot(opts, columns, host);
     afficherValeurs(LAST);
   }
+
+  /* Point en direct (direct.js) : un dernier point au prix Kraken du moment, retiré quand le flux se tait.
+     Une série sans estimation garde sa dernière valeur publiée. */
+  var vif = false;
+  function columnsActuelles() { return [data.x].concat(data.series.map(function (s) { return s.values; })); }
+  document.addEventListener("arene:direct", function (ev) {
+    var d = ev.detail, avant = vif ? data.x[LAST] + "|" + data.series.map(function (s) { return s.values[LAST]; }).join(",") : "";
+    if (vif) { data.x.pop(); KINDS.pop(); data.series.forEach(function (s) { s.values.pop(); }); vif = false; }
+    if (d && d.v && d.t > data.x[data.x.length - 1]) {
+      data.x.push(d.t); KINDS.push("direct");
+      data.series.forEach(function (s) {
+        var v = s.slug ? d.v[s.slug] : undefined, j = s.values.length - 1;
+        while (j >= 0 && s.values[j] == null) j--;
+        s.values.push(typeof v === "number" && isFinite(v) ? v : (j >= 0 ? s.values[j] : null));
+      });
+      vif = true;
+    }
+    LAST = data.x.length - 1;
+    var apres = vif ? data.x[LAST] + "|" + data.series.map(function (s) { return s.values[LAST]; }).join(",") : "";
+    if (apres === avant || !plot) return;
+    var survol = plot.cursor.idx;
+    plot.setData(columnsActuelles());
+    if (survol == null) afficherValeurs(LAST);
+  });
 
   brancherLegende();
   build();

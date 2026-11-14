@@ -795,6 +795,10 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         alertes = f'<p class="alerte warn">Portefeuille gelé{cause}{jusqu} : aucune nouvelle ouverture.</p>'
     chart = _ref_chart(data["perp"], p["id"])
     direct_pfs = [p] if _direct_pf(p) else []
+    # Le panier, seule autre courbe de la page, suit lui aussi le prix du moment (il n'a pas de chiffre ici).
+    panier = next((x for x in data["perp"]["portfolios"] if x["id"] == P.PANIER and x is not p), None)
+    if direct_pfs and courbe_visible(chart) and panier and _direct_pf(panier):
+        direct_pfs.append(panier)
     direct_etat = '<p class="direct-etat" data-direct-etat hidden></p>' if direct_pfs else ""
     decs = _decisions_groupees(p["decisions"])
     if llm or p["id"] == P.ALEATOIRE:

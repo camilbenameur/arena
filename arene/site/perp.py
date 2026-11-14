@@ -826,7 +826,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
                 last = s[j][1]
                 j += 1
             vals.append(None if last is None else round(last / p_out["capital_ueur"] * 100, 4))
-        chart_series.append({"id": p_out["id"], "name": p_out["name"], "kind": p_out["kind"], "values": vals})
+        chart_series.append({"id": p_out["id"], "slug": p_out["slug"], "name": p_out["name"], "kind": p_out["kind"], "values": vals})
     debut = min((e["ts"] for e in opened.values()), default=None)
     chart = {"x": xs, "kinds": ["veille"] * len(xs), "series": chart_series}
 

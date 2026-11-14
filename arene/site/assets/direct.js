@@ -102,6 +102,14 @@
       }
     }
     if (mot) mot.textContent = actif && dernier ? "Chiffres officiels de" : motOriginal;
+    // La courbe (chart.js) ajoute un dernier point en direct : rendement en base 100 au capital, par série.
+    var vals = {}, n = 0;
+    Object.keys(ests).forEach(function (slug) {
+      if (ests[slug]) { vals[slug] = Math.round(ests[slug].eq / D.pf[slug].c * 1e6) / 1e4; n++; }
+    });
+    try {
+      document.dispatchEvent(new CustomEvent("arene:direct", {detail: n && dernier ? {t: Math.floor(dernier / 1000), v: vals} : null}));
+    } catch (err) { /* navigateur sans CustomEvent : la courbe garde le dernier relevé */ }
   }
 
   function surMessage(m) {
