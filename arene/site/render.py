@@ -42,6 +42,9 @@ CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'none'; "
     "connect-src 'none'; base-uri 'none'; form-action 'none'"
 )
+# Pages dérivés avec prix en direct : le navigateur lit le flux public de Kraken Futures, rien d'autre.
+FLUX_DIRECT = "wss://futures.kraken.com/ws/v1"
+CSP_DIRECT = CSP.replace("connect-src 'none'", "connect-src wss://futures.kraken.com")
 
 
 def e(x: Any) -> str:
@@ -184,7 +187,8 @@ NON_APPLICABLE = '<span class="muted" aria-hidden="true">—</span><span class="
 
 
 def layout(
-    *, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "", ligue: str = "spot"
+    *, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "", ligue: str = "spot",
+    direct: bool = False,
 ) -> str:
     """`ligue` choisit la rangée de portefeuilles de l'en-tête : « perp » (ligue dérivés) ou « spot » (comptant)."""
     perp = data.get("perp")
@@ -238,7 +242,7 @@ def layout(
 <meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="{CSP}">
+<meta http-equiv="Content-Security-Policy" content="{CSP_DIRECT if direct else CSP}">
 <title>{e(title)} · Arène de trading</title>
 <meta name="description" content="{e(description(data))}">
 <link rel="preload" href="{root}fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
@@ -364,11 +368,14 @@ def _legende(chart: dict[str, Any], focus: str | None) -> str:
     return f'<p class="legende-quand" id="legende-quand">{e(quand_txt)}</p><ul class="legende" id="legende" aria-label="Courbes affichées">{"".join(items)}</ul>'
 
 
-def _chart_scripts(root: str, chart: dict[str, Any], focus: str | None) -> str:
+def _chart_scripts(root: str, chart: dict[str, Any], focus: str | None, *, dernier: str | None = None) -> str:
+    """`dernier` : libellé du dernier relevé dans la légende (« En direct » par défaut)."""
     payload = {
         "x": chart["x"], "kinds": chart.get("kinds") or [], "series": chart["series"], "styles": _styles(chart, focus),
         "short": [nom_court(s["name"]) for s in chart["series"]],
     }
+    if dernier:
+        payload["dernier"] = dernier
     return (
         f'<script id="equity-data" type="application/json">{json_inline(payload)}</script>\n'
         f'<script src="{root}vendor/uPlot.iife.min.js"></script>\n'

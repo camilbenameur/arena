@@ -139,6 +139,9 @@ OUTILS = {
     "historique": "ses décisions passées",
 }
 
+# Les 6 contrats, tels que le flux public de Kraken Futures les nomme (prix en direct côté navigateur).
+PRODUITS = ("PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD", "PF_XRPUSD", "PF_LINKUSD", "PF_LTCUSD")
+
 _SYM = re.compile(r"^(?:PF_)?([A-Z0-9]+?)(?:USD)?(?:-PERP)?$")
 
 
@@ -154,6 +157,13 @@ def court(instrument: str | None) -> str:
         base = m.group(1) if m else s
         base = base.removeprefix("PF_")
     return "BTC" if base == "XBT" else base
+
+
+def produit(instrument: str | None) -> str | None:
+    """Le nom du contrat dans le flux public de Kraken Futures (« BTC-PERP » → « PF_XBTUSD »), ou None."""
+    c = court(instrument)
+    pid = f"PF_{'XBT' if c == 'BTC' else c}USD"
+    return pid if pid in PRODUITS else None
 
 
 def nom(portfolio: str) -> str:
@@ -310,6 +320,7 @@ def _positions(acc: MarginAccount | None, marks: Mapping[str, int], fx: tuple[in
             "entree_uusd": pos.entry_uusd, "mark_uusd": mark if isinstance(mark, int) else None,
             "stop_uusd": pos.stop_uusd, "objectif_uusd": pos.take_profit_uusd,
             "latent_ueur": latent, "notionnel_ueur": notionnel, "depuis_ts": pos.opened_ts,
+            "produit": produit(inst), "qty_signee": pos.qty,
         })  # fmt: skip
     return out
 
@@ -600,7 +611,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             "funding_paye_ueur": sum(x for x in f if x > 0), "funding_recu_ueur": -sum(x for x in f if x < 0),
             "funding_net_ueur": sum(f), "n_operations": len(fills.get(pf, [])), "statut": st,
             "operations": list(reversed(fills.get(pf, [])))[:OPERATIONS_MAX], "decisions": [],
-            "cout_uusd": None, "n_rondes": 0, "n_ordres": 0,
+            "cout_uusd": None, "n_rondes": 0, "n_ordres": 0, "fx": list(fx) if fx else None,
         }  # fmt: skip
         if kind == "llm":
             ds = _decisions_llm(events, pf)  # toutes : les totaux portent sur le journal entier

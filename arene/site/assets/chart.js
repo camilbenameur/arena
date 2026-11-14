@@ -36,7 +36,7 @@
   function quand(i) {
     if (i === 0 && KINDS[0] === "depart") return "Départ";
     var d = new Date(data.x[i] * 1000);
-    if (KINDS[i] === "veille") return (i === LAST ? "En direct : " : "Relevé du ") + jour(d) + ", " + hm(d) + " UTC";
+    if (KINDS[i] === "veille") return (i === LAST ? (data.dernier || "En direct") + " : " : "Relevé du ") + jour(d) + ", " + hm(d) + " UTC";
     return (i === LAST ? "Dernier cycle : " : "Cycle du ") + jour(d) + ", " + heure(d) + " UTC";
   }
 

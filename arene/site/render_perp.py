@@ -11,6 +11,7 @@ from typing import Any
 
 from arene.site import perp as P
 from arene.site.render import (
+    FLUX_DIRECT,
     MINUS,
     NBSP,
     NNBSP,
@@ -23,6 +24,7 @@ from arene.site.render import (
     eur,
     heure,
     iso,
+    json_inline,
     layout,
     pct,
     pluriel,
@@ -187,6 +189,49 @@ def _funding_cell(p: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Prix en direct (assets/direct.js)
+# ---------------------------------------------------------------------------
+
+
+def _pos_direct(x: dict[str, Any]) -> bool:
+    return bool(x.get("produit")) and isinstance(x.get("mark_uusd"), int) and isinstance(x.get("latent_ueur"), int)
+
+
+def _direct_pf(p: dict[str, Any]) -> bool:
+    """Un portefeuille se revalorise en direct s'il a une position chiffrée et un cours euro-dollar publié."""
+    return bool(p.get("fx")) and any(_pos_direct(x) for x in p["positions"])
+
+
+def _crochet(p: dict[str, Any], quoi: str, x: dict[str, Any] | None = None) -> str:
+    """Attributs qui désignent un chiffre à revaloriser en direct ; rien si le portefeuille ne s'y prête pas."""
+    if not _direct_pf(p) or (x is not None and not _pos_direct(x)):
+        return ""
+    out = f' data-direct="{quoi}" data-pf="{e(p["slug"])}"'
+    return out + (f' data-p="{e(x["produit"])}"' if x is not None else "")
+
+
+def _direct_scripts(root: str, perp: dict[str, Any], pfs: list[dict[str, Any]]) -> str:
+    """Les positions publiées (quantité, prix d'entrée, latent officiel) que direct.js revalorise au mark du moment."""
+    if not pfs:
+        return ""
+    ref: dict[str, int] = {}
+    out: dict[str, Any] = {}
+    for p in pfs:
+        pos = [x for x in p["positions"] if _pos_direct(x)]
+        for x in pos:
+            ref[x["produit"]] = x["mark_uusd"]
+        out[p["slug"]] = {
+            "c": p["capital_ueur"], "eq": p["equity_ueur"], "fx": p["fx"],
+            "pos": [{"p": x["produit"], "q": x["qty_signee"], "e": x["entree_uusd"], "l": x["latent_ueur"]} for x in pos],
+        }  # fmt: skip
+    payload = {
+        "flux": FLUX_DIRECT, "produits": sorted(ref), "ref": ref, "pf": out,
+        "releve": heure(perp["live_ts"]) if perp.get("live_ts") else "",
+    }  # fmt: skip
+    return f'\n<script id="direct-data" type="application/json">{json_inline(payload)}</script>\n<script src="{root}assets/direct.js"></script>'
+
+
+# ---------------------------------------------------------------------------
 # Courbe
 # ---------------------------------------------------------------------------
 
@@ -218,7 +263,8 @@ def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name:
         '<figure class="graphique">'
         f'<div id="chart" class="graphique-zone" role="img" aria-label="{e(label)}">'
         '<noscript><p class="vide">Graphique : JavaScript requis. Valeurs dans le tableau.</p></noscript></div>'
-        f"{_legende(chart, focus)}</figure>"
+        # La courbe est celle du journal : sa légende date le relevé, l'estimation en direct est ailleurs.
+        f'{_legende(chart, focus).replace(">En direct : ", ">Dernier relevé : ", 1)}</figure>'
     )
 
 
@@ -235,8 +281,8 @@ def _tableau(perp: dict[str, Any]) -> str:
     def ligne(p: dict[str, Any]) -> str:
         return (
             f'<tr class="{e(p["kind"])}"><th scope="row"><a href="derives/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{_depuis(perp, p)}</th>'
-            f'<td class="n cle"><span class="{tone(p["rendement"])}">{pct(p["rendement"])}</span>{_svg_barre(p["rendement"], vmax)}</td>'
-            f'<td class="n">{eur(p["equity_ueur"])}</td>'
+            f'<td class="n cle"><span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>{_svg_barre(p["rendement"], vmax)}</td>'
+            f'<td class="n"><span{_crochet(p, "val")}>{eur(p["equity_ueur"])}</span></td>'
             f'<td class="n">{levier(p["levier"])}</td>'
             f'<td class="n">{pct(-p["drawdown_max"]) if p["drawdown_max"] else "0,00" + NBSP + "%"}</td>'
             f'<td class="positions-cell">{_positions_cell(p)}</td></tr>'
@@ -309,20 +355,23 @@ def index_page(data: dict[str, Any]) -> str:
     panier = next((p for p in pfs if p["id"] == P.PANIER), None)
     if llms and any(d["statut"] == "decidee" for p in llms for d in p["decisions"]):
         best = max(llms, key=lambda p: p["rendement"] or 0.0)
-        verdict = f"En tête des IA : {best['name']} {pct(best['rendement'])}"
+        verdict = f'En tête des IA : {e(best["name"])} <span{_crochet(best, "rend")}>{pct(best["rendement"])}</span>'
         if panier:
-            verdict += f" · référence sans IA (panier) {pct(panier['rendement'])}"
+            verdict += f' · référence sans IA (panier) <span{_crochet(panier, "rend")}>{pct(panier["rendement"])}</span>'
     elif llms:
-        verdict = f"Les {len(llms)}{NBSP}IA décident à partir du rendez-vous de {heure(perp['prochain_rdv_ts'])}"
+        verdict = e(f"Les {len(llms)}{NBSP}IA décident à partir du rendez-vous de {heure(perp['prochain_rdv_ts'])}")
     else:
-        verdict = f"Témoins seuls pour l’instant · les 4{NBSP}IA entrent au rendez-vous de {heure(perp['prochain_rdv_ts'])}"
+        verdict = e(f"Témoins seuls pour l’instant · les 4{NBSP}IA entrent au rendez-vous de {heure(perp['prochain_rdv_ts'])}")
     qui = f"{len(llms)}{NBSP}IA et {n_tem}{NBSP}témoins sans IA" if llms else f"{n_tem}{NBSP}témoins sans IA"
+    direct_pfs = [p for p in pfs if _direct_pf(p)]
     items = [f'<li>Prochain rendez-vous <time datetime="{iso(perp["prochain_rdv_ts"])}">{heure(perp["prochain_rdv_ts"])}</time></li>']
     if perp["live_ts"]:
         frais = data["generated_ts"] - perp["live_ts"] <= 1_800
         mot = "Valeurs en direct" if frais else "Dernières valeurs du"
         quand_txt = heure(perp["live_ts"]) if frais else when(perp["live_ts"], annee=False)
-        items.append(f'<li>{mot} <time datetime="{iso(perp["live_ts"])}">{e(quand_txt)}</time></li>')
+        items.append(f'<li><span data-direct-mot>{mot}</span> <time datetime="{iso(perp["live_ts"])}">{e(quand_txt)}</time></li>')
+        if direct_pfs:
+            items.append('<li class="direct-etat" data-direct-etat data-court hidden></li>')
     if perp["journal"]["verify_ok"]:
         items.append('<li><a href="methode.html#m-derives">Journal vérifié</a></li>')
     else:
@@ -332,7 +381,7 @@ def index_page(data: dict[str, Any]) -> str:
 <h1 class="visuellement-cache">Ligue dérivés : des IA gèrent chacune {eur(capital, decimals=0)} fictifs en contrats perpétuels, face à des témoins sans IA</h1>
 <section class="etat" aria-label="État de la ligue dérivés">
   <p class="saison"><strong>Ligue dérivés</strong> · {qui} · {eur(capital, decimals=0)} fictifs chacun, à la hausse ou à la baisse</p>
-  <p class="avancee"><strong>{e(verdict)}</strong></p>
+  <p class="avancee"><strong>{verdict}</strong></p>
   <ul class="releve">{"".join(items)}</ul>
 </section>
 <section class="courbes" aria-labelledby="titre-courbes">
@@ -354,7 +403,8 @@ def index_page(data: dict[str, Any]) -> str:
     ch = perp["chart"]
     return layout(
         title="Ligue dérivés", body=body, root="", active="index", data=data, ligue="perp",
-        scripts=_chart_scripts("", ch, None) if courbe_visible(ch) else "",
+        scripts=(_chart_scripts("", ch, None, dernier="Dernier relevé") if courbe_visible(ch) else "") + _direct_scripts("", perp, direct_pfs),
+        direct=bool(direct_pfs),
     )  # fmt: skip
 
 
@@ -371,10 +421,10 @@ def _positions(p: dict[str, Any]) -> str:
     rows = "".join(
         f'<tr><th scope="row">{e(x["instrument"])}</th><td><span class="sens sens-{x["sens"]}">{x["sens"]}</span></td>'
         f'<td class="n">{eur(x["notionnel_ueur"])}<small class="sous">{e(quantite(x["qty"]))} {e(x["instrument"])}</small></td>'
-        f'<td class="n">{usd_prix(x["entree_uusd"])}</td><td class="n">{usd_prix(x["mark_uusd"])}</td>'
+        f'<td class="n">{usd_prix(x["entree_uusd"])}</td><td class="n"><span{_crochet(p, "mark", x)}>{usd_prix(x["mark_uusd"])}</span></td>'
         + (f'<td class="n">{usd_prix(x["stop_uusd"])}</td>' if stop else "")
         + (f'<td class="n">{usd_prix(x["objectif_uusd"])}</td>' if obj else "")
-        + f'<td class="n {tone(x["latent_ueur"])}">{eur(x["latent_ueur"], signed=True)}</td></tr>'
+        + f'<td class="n"><span class="{tone(x["latent_ueur"])}"{_crochet(p, "lat", x)}>{eur(x["latent_ueur"], signed=True)}</span></td></tr>'
         for x in p["positions"]
     )
     return empiler(
@@ -549,8 +599,8 @@ def _operations(p: dict[str, Any]) -> str:
 def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     llm = p["kind"] == "llm"
     stats = [
-        _stat("Rendement net", pct(p["rendement"]), cls=f"grand {tone(p['rendement'])}", carte="cle"),
-        _stat("Valeur", eur(p["equity_ueur"]), f'<small class="sous">départ {eur(p["capital_ueur"], decimals=0)}</small>'),
+        _stat("Rendement net", f'<span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>', cls="grand", carte="cle"),
+        _stat("Valeur", f'<span{_crochet(p, "val")}>{eur(p["equity_ueur"])}</span>', f'<small class="sous">départ {eur(p["capital_ueur"], decimals=0)}</small>'),
         _stat("Levier", levier(p["levier"]), f'<small class="sous">exposition {eur(p["expo_ueur"], decimals=0)}</small>'),
         _stat("Pire baisse", pct(-p["drawdown_max"]) if p["drawdown_max"] else f"0,00{NBSP}%"),
         _stat(
@@ -574,6 +624,8 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         jusqu = f" jusqu’au {quand(st['jusqu'])}" if st.get("jusqu") else ""
         alertes = f'<p class="alerte warn">Portefeuille gelé{jusqu} : aucune nouvelle ouverture.</p>'
     chart = _ref_chart(data["perp"], p["id"])
+    direct_pfs = [p] if _direct_pf(p) else []
+    direct_etat = '<p class="direct-etat" data-direct-etat hidden></p>' if direct_pfs else ""
     decs = "".join(_decision(d) for d in p["decisions"])
     if llm or p["id"] == P.ALEATOIRE:
         vide = "Pas encore de décision : la première arrive au prochain rendez-vous." if llm else "Aucun tirage pour l’instant."
@@ -595,14 +647,15 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 {alertes}
 <dl class="stats">{"".join(stats)}</dl>
 <section aria-labelledby="titre-courbe"><h2 id="titre-courbe">Rendement net <span class="h-note">frais et funding compris</span></h2>{_chart_block(chart, focus=p["id"], focus_name=p["name"])}</section>
-<section aria-labelledby="titre-positions"><h2 id="titre-positions">Positions <span class="h-note">fictives, prix en dollars</span></h2>{_positions(p)}</section>
+<section aria-labelledby="titre-positions"><h2 id="titre-positions">Positions <span class="h-note">fictives, prix en dollars</span></h2>{direct_etat}{_positions(p)}</section>
 {_attente(p) if llm else ""}
 {decisions}
 {operations}
 """
     return layout(
         title=f"{p['name']} · dérivés", body=body, root="../", active=p["id"], data=data, ligue="perp",
-        scripts=_chart_scripts("../", chart, p["id"]) if courbe_visible(chart) else "",
+        scripts=(_chart_scripts("../", chart, p["id"], dernier="Dernier relevé") if courbe_visible(chart) else "") + _direct_scripts("../", data["perp"], direct_pfs),
+        direct=bool(direct_pfs),
     )  # fmt: skip
 
 
@@ -630,7 +683,7 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 <div><dt>Stop</dt><dd>Obligatoire à chaque ouverture, entre 1 et 15{NBSP}% ; perte au stop de 3{NBSP}% du portefeuille au plus, 7,5{NBSP}% pour tous les stops réunis.</dd></div>
 <div><dt>Garde-fous</dt><dd>Gel de 24{NBSP}h après une perte de 5{NBSP}% en un jour ; arrêt définitif après une baisse de 15{NBSP}% depuis le sommet ; position fermée après 7{NBSP}jours.</dd></div>
 <div><dt>Coûts</dt><dd>Frais de 0,07{NBSP}% et glissement de 0,05{NBSP}% par ordre, arrondis défavorables ; funding horaire réel de Kraken ; clôture forcée si la marge tombe sous 25{NBSP}% de l’exposition.</dd></div>
-<div><dt>Prix</dt><dd>En dollars, convertis en euros au cours EUR/USD du moment.</dd></div>
+<div><dt>Prix</dt><dd>En dollars, convertis en euros au cours EUR/USD du moment. Sur ce site, les positions sont aussi revalorisées en direct au prix public de Kraken (chiffres soulignés en pointillé) : une estimation, le chiffre officiel reste celui du relevé.</dd></div>
 </dl>
 <h3>Les témoins</h3>
 <dl class="regles">{temoins}</dl>

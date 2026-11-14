@@ -347,3 +347,11 @@ details.lecture > summary .h2-inline { font-family: var(--serif); font-size: 1.3
 .attente .issue { display: inline-flex; gap: 6px; align-items: baseline; }
 .attente + details { margin-top: 12px; }
 .lecture.precedents { max-width: none; }
+
+/* Prix en direct (direct.js) : chiffres revalorisés au mark du moment, soulignés en pointillé ; un point fixe, sans boucle. */
+.est { text-decoration: underline dotted 1px; text-decoration-color: var(--muted); text-underline-offset: 3px; }
+.direct-etat { color: var(--muted); font-size: .86rem; }
+p.direct-etat { margin: -6px 0 12px; max-width: none; }
+.direct-etat::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--gain); vertical-align: .08em; }
+.direct-etat[hidden] { display: none; }
+@media print { .direct-etat { display: none; } }

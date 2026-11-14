@@ -221,3 +221,42 @@ def test_page_montre_reveil_prive_pose_et_attente(site):
     # Les autres IA n'ont rien laissé : section « Rien en attente ».
     assert "Rien en attente" in texte(lire(site, "derives/llm-perp-claude-haiku-5-5.html"))
     assert "Entre deux rendez-vous" in texte(lire(site, "methode.html"))
+
+
+def test_prix_en_direct_estimation_cote_navigateur(site):
+    """Demande du propriétaire du 14/11 : prix à quelques secondes. Le navigateur lit le flux public de Kraken et
+    revalorise les positions publiées ; la CSP n'ouvre ce flux que sur les pages dérivés qui en ont besoin."""
+    import json
+
+    from arene.site.render import CSP, CSP_DIRECT
+
+    idx = lire(site, "index.html")
+    assert f'content="{CSP_DIRECT}"' in idx and "connect-src wss://futures.kraken.com" in CSP_DIRECT
+    assert (site / "assets" / "direct.js").exists() and 'assets/direct.js"></script>' in idx
+    data = json.loads(re.search(r'<script id="direct-data" type="application/json">(.*?)</script>', idx).group(1))
+    assert data["flux"] == "wss://futures.kraken.com/ws/v1"
+    assert set(data["produits"]) <= set(P.PRODUITS) and data["produits"]
+    for slug, pf in data["pf"].items():
+        assert f'data-direct="rend" data-pf="{slug}"' in idx and f'data-direct="val" data-pf="{slug}"' in idx
+        assert len(pf["fx"]) == 2 and pf["pos"]
+        for x in pf["pos"]:
+            assert set(x) == {"p", "q", "e", "l"} and x["q"] != 0
+    # Rien du journal au-delà des chiffres publiés (ni id d'ordre, ni portefeuille brut).
+    assert "llm-perp:" not in json.dumps(data) and "intent" not in json.dumps(data)
+    assert 'data-direct-etat data-court hidden' in idx and "<span data-direct-mot>" in idx
+    # Page d'un portefeuille avec positions : prix actuel et latent revalorisés, état sous « Positions ».
+    pages = {f.name: f.read_text(encoding="utf-8") for f in (site / "derives").glob("*.html")}
+    avec = [n for n, h in pages.items() if 'data-direct="mark"' in h]
+    assert avec, "aucune page de portefeuille revalorisée en direct"
+    for n, h in pages.items():
+        if n in avec:
+            assert 'data-direct="lat"' in h and '<p class="direct-etat" data-direct-etat hidden></p>' in h
+            assert f'content="{CSP_DIRECT}"' in h and "direct.js" in h
+        else:  # sans position : ni script, ni connexion
+            assert f'content="{CSP}"' in h and "direct.js" not in h
+    # La courbe reste celle du journal : son dernier point est un relevé, pas « en direct ».
+    assert '"dernier":"Dernier relevé"' in idx
+    # Le comptant et la méthode n'ouvrent aucune connexion.
+    for nom_page in ("comptant.html", "methode.html"):
+        html = lire(site, nom_page)
+        assert f'content="{CSP}"' in html and "direct.js" not in html
