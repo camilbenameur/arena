@@ -94,7 +94,13 @@ def declencheur(d: dict[str, Any] | None) -> str:
 
 
 def _pastille_ronde(d: dict[str, Any]) -> str:
-    if d.get("kind") not in ("wakeup", "alert", "ordre"):
+    """Pourquoi l'IA a été appelée hors rendez-vous. L'appel régulier, de loin le plus fréquent, reste discret."""
+    k = d.get("kind")
+    if k == "cadence":
+        return '<span class="pastille discret">appel régulier</span> '
+    if k == "scheduled":
+        return '<span class="pastille neutre">à sa demande</span> '
+    if k not in ("wakeup", "alert", "ordre"):
         return ""
     return f'<span class="pastille reveil">{e(declencheur(d.get("declencheur")))}</span> '
 
@@ -141,15 +147,19 @@ def _pose_resume(d: dict[str, Any]) -> str:
     na = sum(1 for x in els if x["type"] == "alerte")
     no = len(els) - na
     mots = [m for m in (pluriel(na, "alerte posée", "alertes posées") if na else "", pluriel(no, "ordre d’entrée posé", "ordres d’entrée posés") if no else "") if m]
+    if d.get("rappel_ts"):
+        mots.append(f"rappel à {heure(d['rappel_ts'])}")
     return " et ".join(mots)
 
 
 def _pose(d: dict[str, Any]) -> str:
     pose = d.get("pose") or {}
     els, refus = pose.get("elements") or [], pose.get("refus") or []
-    if not els and not refus:
+    if not els and not refus and not d.get("rappel_ts"):
         return ""
     items = "".join(f"<li>{element(x)}</li>" for x in els)
+    if d.get("rappel_ts"):
+        items += f"<li><strong>Rappel</strong> demandé pour {heure(d['rappel_ts'])}</li>"
     if refus:
         motifs = sorted({r["motif"] for r in refus})
         items += f'<li class="muted">{pluriel(len(refus), "refusé", "refusés")} à la création : {e(", ".join(motifs))}</li>'
@@ -541,14 +551,57 @@ def _decision(d: dict[str, Any]) -> str:
     return f'<li class="decision"><article><header><h3>{quand(d["ts"])}</h3>{tete}{_meta(d)}</header>{corps}</article></li>'
 
 
+GROUPE_MIN = 3  # à partir de 3 décisions calmes d'affilée, une seule ligne repliée
+
+
+def _calme(d: dict[str, Any]) -> bool:
+    """Une décision sans ordre (ni échec, ni saut) : le cas courant des appels réguliers."""
+    return d["statut"] == "decidee" and not d["actions"] and d["kind"] != "ordre"
+
+
+def _decisions_groupees(ds: list[dict[str, Any]]) -> str:
+    """La chronologie, où chaque suite d'au moins GROUPE_MIN décisions sans ordre tient sur une ligne dépliable."""
+    out, i = [], 0
+    while i < len(ds):
+        j = i
+        while j < len(ds) and _calme(ds[j]):
+            j += 1
+        if j - i >= GROUPE_MIN:
+            run = ds[i:j]
+            n_pose = sum(1 for d in run if (d.get("pose") or {}).get("elements"))
+            note = f" · {pluriel(n_pose, 'pose des alertes ou ordres', 'posent des alertes ou ordres')}" if n_pose else ""
+            resume = (
+                f'<span class="quand">{quand(run[-1]["ts"], annee=False)} → {heure(run[0]["ts"])}</span>'
+                f'<span class="muted">{pluriel(len(run), "décision sans ordre", "décisions sans ordre")}{e(note)}</span>'
+            )
+            out.append(f'<li class="ligne groupe-calme"><details><summary>{resume}</summary><ol class="decisions">{"".join(_decision(d) for d in run)}</ol></details></li>')
+            i = j
+        elif j > i:
+            out.extend(_decision(d) for d in ds[i:j])
+            i = j
+        else:
+            out.append(_decision(ds[i]))
+            i += 1
+    return "".join(out)
+
+
 def _attente(p: dict[str, Any]) -> str:
     """Alertes et ordres d'entrée en attente, puis ce qu'il est advenu des précédents (replié)."""
     at = p.get("attente")
     if not at:
         return ""
     en_cours = at["alertes"] + at["ordres"]
-    if en_cours:
-        corps = '<ul class="decisions attente">' + "".join(
+    ry = p.get("rythme") or {}
+    lignes = []
+    if ry.get("reveil_ts"):
+        lignes.append(f'<li class="ligne"><span class="el"><strong>Rappel</strong> qu’elle a demandé</span><span class="muted">à {heure(ry["reveil_ts"])}</span></li>')
+    if ry.get("prochain_ts"):
+        lignes.append(
+            f'<li class="ligne"><span class="el"><strong>Appel régulier</strong> <span class="muted">toutes les {ry["cadence_min"]}{NBSP}min au moins</span></span>'
+            f'<span class="muted">au plus tard à {heure(ry["prochain_ts"])}</span></li>'
+        )
+    if en_cours or lignes:
+        corps = '<ul class="decisions attente">' + "".join(lignes) + "".join(
             f'<li class="ligne"><span class="el">{element(x)}</span><span class="muted">jusqu’au {quand(x["expire_ts"], annee=False) if x.get("expire_ts") else "—"}</span></li>'
             for x in en_cours
         ) + "</ul>"
@@ -568,7 +621,7 @@ def _attente(p: dict[str, Any]) -> str:
         )
         histo = f'<details class="lecture precedents"><summary>Les précédents</summary><ul class="decisions attente">{rows}</ul></details>'
     return (
-        '<section aria-labelledby="titre-attente"><h2 id="titre-attente">En attente <span class="h-note">alertes et ordres d’entrée qu’elle a laissés</span></h2>'
+        '<section aria-labelledby="titre-attente"><h2 id="titre-attente">En attente <span class="h-note">prochain appel, alertes et ordres d’entrée</span></h2>'
         f"{corps}{histo}</section>"
     )
 
@@ -612,7 +665,9 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     ]  # fmt: skip
     if llm:
         stats.append(_stat("Coût IA", usd(p["cout_uusd"]), '<small class="sous">équivalent API</small>'))
-        stats.append(_stat("Décisions", str(p["n_rondes"]), f'<small class="sous">{pluriel(p["n_ordres"], "avec ordre", "avec ordres")}</small>'))
+        q = (p.get("rythme") or {}).get("quota")
+        jour = f'<small class="sous">{q["played_today"]} appels aujourd’hui, {q["per_day"]} au plus</small>' if q else ""
+        stats.append(_stat("Décisions", str(p["n_rondes"]), f'<small class="sous">{pluriel(p["n_ordres"], "avec ordre", "avec ordres")}</small>{jour}'))
     else:
         stats.append(_stat("Positions", str(len(p["positions"])), '<small class="sous">ouvertes</small>'))
         stats.append(_stat("Opérations", str(p["n_operations"])))
@@ -626,7 +681,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     chart = _ref_chart(data["perp"], p["id"])
     direct_pfs = [p] if _direct_pf(p) else []
     direct_etat = '<p class="direct-etat" data-direct-etat hidden></p>' if direct_pfs else ""
-    decs = "".join(_decision(d) for d in p["decisions"])
+    decs = _decisions_groupees(p["decisions"])
     if llm or p["id"] == P.ALEATOIRE:
         vide = "Pas encore de décision : la première arrive au prochain rendez-vous." if llm else "Aucun tirage pour l’instant."
         decs_html = f'<ol class="decisions">{decs}</ol>' if decs else f'<p class="vide">{vide}</p>'
@@ -671,6 +726,10 @@ def methode_section(data: dict[str, Any]) -> str:
     j = perp["journal"]
     ok = j["verify_ok"]
     outils = "".join(f"<li><strong>{e(k)}</strong> : {e(v)}</li>" for k, v in P.OUTILS.items())
+    cad = perp.get("cadence_min") or 0
+    cadence = f"<li><strong>Appel régulier</strong> : chaque IA est rappelée au plus tard {cad}{NBSP}min après sa dernière ronde.</li>\n" if cad else ""
+    if perp.get("rondes_par_jour"):
+        cadence += f"<li><strong>Plafond</strong> : {perp['rondes_par_jour']} appels par IA et par jour, rendez-vous compris.</li>\n"
     temoins = "".join(
         f'<div><dt>{e(P.NOMS[k].removeprefix("Témoin "))}</dt><dd>{e(v)}</dd></div>' for k, v in P.DESCRIPTIONS.items()
     )
@@ -693,7 +752,8 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 <p>Chaque décision donne une justification et, pour chaque ordre, une condition d’invalidation. Le garde-fou la juge, puis l’exécution est simulée.</p>
 <h3>Entre deux rendez-vous</h3>
 <ul class="liste-simple">
-<li><strong>Réveil de marché</strong> : un mouvement de 3{NBSP}% en 1{NBSP}h sur un contrat réveille les 4{NBSP}IA.</li>
+{cadence}<li><strong>Rappel demandé</strong> : à chaque décision, une IA peut demander à être rappelée dans 5 à 60{NBSP}min.</li>
+<li><strong>Réveil de marché</strong> : un mouvement de 2{NBSP}% en 1{NBSP}h sur un contrat réveille les IA, 15{NBSP}min au moins entre deux réveils.</li>
 <li><strong>Alerte</strong> : à chaque décision, une IA peut laisser 3 alertes de prix au plus. Une alerte franchie ne réveille qu’elle.</li>
 <li><strong>Ordre d’entrée</strong> : 3 au plus, à un niveau de prix. Franchi, il passe le garde-fou puis s’exécute, sans rappeler l’IA. Chaque décision remplace ce qui était en attente.</li>
 </ul>

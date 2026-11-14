@@ -21,7 +21,9 @@ from typing import Any
 
 from arene.journal import Journal, verify
 from arene.perp import agent_orders as AO
+from arene.perp import round_quota
 from arene.perp.ledger import MarginAccount, PerpLedgerError, price_pnl_uusd, replay, to_eur
+from arene.perp.llm_league import LlmConfigError, load_llm_league
 
 ROUND_S = 4 * 3600
 ROUND_OFFSET_S = 2 * 3600  # rendez-vous à 02:00, 06:00, …, 22:00 UTC
@@ -210,8 +212,10 @@ def _prix_uusd(v: Any) -> int | None:
     return int(d.scaleb(6)) if d.is_finite() and d > 0 else None
 
 
-def _rejet_public(error: Any) -> str:
+def _rejet_public(error: Any, kind: Any = None) -> str:
     """Catégorie fixe d'un élément refusé à la création (le texte brut n'est pas publié)."""
+    if kind == "wakeup":
+        return "réveil demandé invalide"
     s = str(error or "").lower()
     if "25 %" in s or "away from the mark" in s:
         return "niveau à plus de 25 % du prix"
@@ -231,6 +235,11 @@ def _declencheur(raw: Any, kind: str = "wakeup") -> dict[str, Any] | None:
             return None
     if not isinstance(d, Mapping):
         return None
+    if kind == "scheduled":
+        due = d.get("due_ts")
+        return {"type": "demande", "due_ts": due if isinstance(due, int) and not isinstance(due, bool) else None}
+    if kind == "cadence":
+        return {"type": "cadence"}
     if kind == "alert":
         cond = d.get("condition")
         return {
@@ -410,7 +419,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                 "round": ts, "ts": ts, "kind": "ordre", "statut": "declenche", "saut": None,
                 "declencheur": {"type": "ordre", "instrument": el["instrument"], "condition": el["condition"], "prix_uusd": el["prix_uusd"]},
                 "justification": None, "actions": [action], "outils": [], "erreur": None, "cout_uusd": None,
-                "latence_ms": None, "jetons": None, "pose": None,
+                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None,
             }  # fmt: skip
             par_intent[oid] = action
         return declenches[oid]
@@ -420,7 +429,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             rondes[r] = {
                 "round": r, "ts": ts, "kind": "rendezvous", "declencheur": None, "statut": "en_cours", "saut": None,
                 "justification": None, "actions": [], "outils": [], "erreur": None, "cout_uusd": None,
-                "latence_ms": None, "jetons": None, "pose": None,
+                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None,
             }  # fmt: skip
         return rondes[r]
 
@@ -431,7 +440,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
         if t == "round_data":
             d = ronde(p["round"], e["ts"])
             d["kind"] = p.get("kind") or "rendezvous"
-            d["declencheur"] = _declencheur(p.get("trigger"), d["kind"]) if d["kind"] in ("wakeup", "alert") else None
+            d["declencheur"] = _declencheur(p.get("trigger"), d["kind"]) if d["kind"] in ("wakeup", "alert", "scheduled", "cadence") else None
         elif t == "tool_call":
             d = ronde(p["round"], e["ts"])
             tool = str(p.get("tool") or "").removeprefix("mcp__arene__")
@@ -479,8 +488,12 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             rej = [x for x in p.get("rejected") or [] if isinstance(x, Mapping)]
             d["pose"] = {
                 "elements": [_element("alert", x) for x in al] + [_element("entry", x) for x in en],
-                "refus": [{"type": "alerte" if x.get("kind") == "alert" else "ordre", "motif": _rejet_public(x.get("error"))} for x in rej],
+                "refus": [{"type": {"alert": "alerte", "wakeup": "reveil"}.get(str(x.get("kind")), "ordre"), "motif": _rejet_public(x.get("error"), x.get("kind"))} for x in rej],
             }  # fmt: skip
+        elif t == "agent_wakeup_set":
+            d = ronde(p["round"], e["ts"])
+            due = p.get("due_ts")
+            d["rappel_ts"] = due if isinstance(due, int) and not isinstance(due, bool) else None
         elif t == "agent_entry_triggered" and str(p.get("id")) in ordres:
             declenche(str(p["id"]), e["ts"], p)
         elif t == "perp_verdict" and str(p.get("intent_id")) in ordres:
@@ -511,6 +524,27 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
     for d in rondes.values():
         d.pop("_libres", None)
     return sorted([*rondes.values(), *declenches.values()], key=lambda d: (d["ts"] if d["kind"] == "ordre" else d["round"]), reverse=True)
+
+
+def _rythme(
+    events: list[dict[str, Any]], pf: str, now: int, ds: list[dict[str, Any]], ligue: Any, st: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Quand l'IA sera rappelée : le réveil qu'elle a demandé (calcul du moteur), l'appel régulier au plus tard
+    (cadence après sa dernière ronde), et ses rondes du jour face au quota."""
+    if ligue is None:
+        return None
+    out: dict[str, Any] = {"cadence_min": ligue.cadence_min, "reveil_ts": None, "prochain_ts": None, "quota": None}
+    try:
+        w = AO.pending_wakeup(events, pf, now)
+        out["reveil_ts"] = w["due_ts"] if w else None
+        out["quota"] = round_quota.quota(events, pf, now, ligue.rounds_per_day, ROUND_OFFSET_S)
+    except (KeyError, TypeError, ValueError):
+        pass
+    arrete = bool(st and st["etat"] == "arrete")
+    derniere = max((d["ts"] for d in ds if d["kind"] != "ordre"), default=None)
+    if ligue.enabled and ligue.cadence_min > 0 and derniere is not None and not arrete:
+        out["prochain_ts"] = derniere + ligue.cadence_min * 60
+    return out
 
 
 def _decisions_aleatoire(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -583,6 +617,11 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         elif t == "portfolio_resumed":
             statut.pop(pf, None)
 
+    try:
+        ligue_llm = load_llm_league()
+    except (LlmConfigError, OSError, ValueError):  # sans configuration lisible, ni quota ni cadence affichés
+        ligue_llm = None
+
     llm_ids = sorted((pf for pf, e in opened.items() if e["payload"].get("kind") == "llm"), key=lambda x: (ORDRE.index(x) if x in ORDRE else 99, x))
     tem_ids = sorted((pf for pf, e in opened.items() if e["payload"].get("kind") != "llm"), key=lambda x: (ORDRE.index(x) if x in ORDRE else 99, x))
 
@@ -625,6 +664,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             except (KeyError, TypeError, ValueError):  # un événement mal formé ne casse pas la page
                 p_out["attente"] = None
             p_out["n_ordres"] = sum(1 for d in ds for a in d["actions"] if a["fills"])
+            p_out["rythme"] = _rythme(events, pf, now, ds, ligue_llm, st)
         elif pf == ALEATOIRE:
             p_out["decisions"] = _decisions_aleatoire(events)
         portfolios.append(p_out)
@@ -662,4 +702,6 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         "n_rondes": len(done), "derniere_ronde_ts": max((e["payload"]["round"] for e in rounds), default=None),
         "llm_presents": bool(llm_ids), "portfolios": portfolios, "chart": chart,
         "journal": {"verify_ok": report.ok, "n_records": report.n_records},
+        "cadence_min": ligue_llm.cadence_min if ligue_llm and ligue_llm.enabled else 0,
+        "rondes_par_jour": ligue_llm.rounds_per_day if ligue_llm else None,
     }

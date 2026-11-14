@@ -218,8 +218,9 @@ def test_page_montre_reveil_prive_pose_et_attente(site):
     assert "A laissé pour la suite" in t and F.NOTE_ALERTE in t and F.INVAL_ORDRE in t
     assert "refusé à la création : niveau à plus de 25 % du prix" in t
     assert "away from the mark" not in t  # le texte technique du refus ne sort pas
-    # Les autres IA n'ont rien laissé : section « Rien en attente ».
-    assert "Rien en attente" in texte(lire(site, "derives/llm-perp-claude-haiku-5-5.html"))
+    # Haiku n'a rien laissé : seul son prochain appel régulier est en attente.
+    att = re.search(r'<section aria-labelledby="titre-attente">(.*?)</section>', lire(site, "derives/llm-perp-claude-haiku-5-5.html")).group(1)
+    assert "Appel régulier" in texte(att) and "<strong>Alerte</strong>" not in att and "<strong>Ordre" not in att
     assert "Entre deux rendez-vous" in texte(lire(site, "methode.html"))
 
 
@@ -260,3 +261,20 @@ def test_prix_en_direct_estimation_cote_navigateur(site):
     for nom_page in ("comptant.html", "methode.html"):
         html = lire(site, nom_page)
         assert f'content="{CSP}"' in html and "direct.js" not in html
+
+
+def test_appels_reguliers_groupes_rappel_et_quota(site):
+    """Rondes `cadence` et `scheduled` (≈ 6 par heure) : pastille discrète, suites sans ordre repliées en une ligne,
+    rappel demandé en attente, appels du jour face au plafond (docs/COORDINATION-dashboard.md, 13 et 14/11)."""
+    page = lire(site, f"derives/{P.slug(F.LLMS[1])}.html")
+    t = texte(page)
+    assert '<span class="pastille discret">appel régulier</span>' in page
+    assert '<span class="pastille neutre">à sa demande</span>' in page
+    groupe = re.search(r'<li class="ligne groupe-calme"><details><summary>(.*?)</summary>', page)
+    assert groupe and "4 décisions sans ordre" in texte(groupe.group(1))
+    # Le rappel demandé (encore à venir) est en attente, et dans ce qu'elle a laissé à chaque décision.
+    assert "Rappel qu’elle a demandé" in t and "Rappel demandé pour" in t
+    assert "réveil demandé invalide" in t and F.SECRET not in page
+    assert "appels aujourd’hui," in t and "Appel régulier" in t and "au plus tard à" in t
+    meth = texte(lire(site, "methode.html"))
+    assert "Appel régulier" in meth and "Rappel demandé" in meth and "2 % en 1 h" in meth.replace(" ", " ")

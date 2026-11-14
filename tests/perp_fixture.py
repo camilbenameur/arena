@@ -112,6 +112,8 @@ def build(path: Path) -> Path:
             if "BTC-PERP" in acc.positions:
                 g.fill("llm-perp:claude-sonnet-5-5", "BTC-PERP", -acc.positions["BTC-PERP"].qty, ts + 59, "stop",
                        f"stop:llm-perp:claude-sonnet-5-5:BTC-PERP:1:{ts}")  # fmt: skip
+        if rdvs[11] < ts <= rdvs[11] + 2_400 and ts % 600 == 0:  # appels réguliers de Sonnet, sans ordre
+            _appel_sonnet(g, ts, fin)
         if ts == rdvs[3] + 600:
             g.add("portfolio_frozen", {"portfolio": "llm-perp:claude-opus-5-5", "reason": "daily_loss", "until_ts": ts + 86_400 * 30}, ts)
             g.add("alert", {"level": "action", "code": "perp_llm_round_failed", "message": f"OSError: {SECRET} the host"}, ts)
@@ -179,6 +181,17 @@ def _ordre_declenche(g: Gen, ts: int) -> None:
     g.cond(fable, "SOL-PERP", "take_profit", px * 108 // 100, ts)
     g.add("perp_execution", {"intent_id": ORDRE_SOL, "portfolio": fable, "instrument": "PF_SOLUSD", "status": "filled", "error": None}, ts)
     g.add("agent_order_ended", {"portfolio": fable, "id": ALERTE_LTC, "kind": "alert", "reason": "expired"}, ts)
+
+
+def _appel_sonnet(g: Gen, ts: int, fin: int) -> None:
+    """Un appel régulier (ou rappel demandé) de Sonnet après le dernier rendez-vous : aucune action. Le dernier
+    demande un rappel encore à venir au moment de la construction du site, et un rappel invalide est refusé."""
+    sonnet = LLMS[1]
+    kind = "scheduled" if ts % 1_800 == 0 else "cadence"
+    _decision(g, sonnet, ts, ts + 10, kind, [], f"Rien à faire à {ts % 86_400 // 60} min : marché calme.", [])
+    g.add("agent_orders_set", {"portfolio": sonnet, "round": ts, "created_ts": ts + 10, "alerts": [], "entry_orders": [],
+                               "rejected": [{"kind": "wakeup", "k": 0, "error": f"next_wakeup_min out of range {SECRET}"}]}, ts + 10)  # fmt: skip
+    g.add("agent_wakeup_set", {"portfolio": sonnet, "round": ts, "minutes": 30, "due_ts": fin + 1_500}, ts + 11)
 
 
 def _alerte_et_ronde_privee(g: Gen, ts: int) -> None:
