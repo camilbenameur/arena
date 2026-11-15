@@ -27,7 +27,7 @@ def pastille(st: dict[str, Any] | None) -> str:
 def _ex_aequo(rows: list[dict[str, Any]]) -> None:
     """Rangs ex æquo : deux rendements égaux (au centième de pour cent affiché) ont le même rang."""
     prec, rang = None, 0
-    for i, r in enumerate((r for r in rows if r.get("rang")), 1):
+    for i, r in enumerate(rows, 1):
         v = None if r.get("rend") is None else round(r["rend"] * 10_000)
         if v != prec:
             rang, prec = i, v
@@ -39,10 +39,9 @@ def scores(rows: list[dict[str, Any]], *, label: str, mini: bool = False) -> str
 
     Chaque ligne : {nom, href, sous, rend (fraction ou None), st (style de courbe), rang (int ou None), attrs (crochets
     du direct), valeur (texte facultatif)}. Le rang absent (référence, arrivé en cours de route) s'écrit « réf. » ou «—»."""
-    _ex_aequo(rows)
     items = []
     for r in rows:
-        rang = str(r["rang"]) if r.get("rang") else ("réf." if r.get("ref") else "—")
+        rang = str(r["rang"]) if r.get("rang") else "—"
         sous = f'<span class="sc-sous">{e(r["sous"])}</span>' if r.get("sous") else ""
         val = f'<span class="sc-eur">{r["valeur"]}</span>' if r.get("valeur") else ""
         items.append(
@@ -93,57 +92,63 @@ def sparkline(chart: dict[str, Any], ids: list[str]) -> str:
     return f'<svg class="spark" viewBox="0 0 {w} {h}" preserveAspectRatio="none" aria-hidden="true">{"".join(lignes)}</svg>'
 
 
-def _perp_rows(ligue: dict[str, Any], dossier_conseil: bool = False) -> list[dict[str, Any]]:
-    from arene.site import perp as P
+SOUS_TEMOINS = {
+    "benchmark-perp:basket-1x": "sans IA · achète et garde les 6 cryptos",
+    "benchmark-perp:trend": "sans IA · suit la tendance de 20 jours",
+    "benchmark-perp:random": "sans IA · décide au hasard",
+    "temoin:panier": "sans IA · achète et garde les 6 cryptos",
+    "temoin:6040": "sans IA · 60 % bitcoin, 40 % euros",
+    "temoin:e0065": "sans IA · règle fixe sur la pression acheteuse",
+    "temoin:aleatoire": "sans IA · décide au hasard",
+}
+
+
+def _classer(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Un seul classement, IA et témoins mêlés : si une règle sans IA mène, ça se voit (rien de caché)."""
+    rows.sort(key=lambda r: -(r["rend"] if r["rend"] is not None else -9.0))
+    _ex_aequo(rows)
+    return rows
+
+
+def _perp_rows(ligue: dict[str, Any]) -> list[dict[str, Any]]:
     from arene.site import render_perp as RP
 
     st = couleurs(ligue["chart"])
-    pfs = ligue["portfolios"]
-    joueurs = sorted(
-        (p for p in pfs if p["kind"] in ("llm", "conseil")), key=lambda p: -(p["rendement"] or 0.0)
-    )
     rows = []
-    for i, p in enumerate(joueurs, 1):
+    for p in ligue["portfolios"]:
+        temoin = p["kind"] not in ("llm", "conseil")
         rows.append({
             "nom": p["name"], "href": f"{RP._dossier(p)}/{p['slug']}.html", "rend": p["rendement"], "st": st.get(p["id"]),
-            "rang": i, "sous": p.get("sous_titre") or "", "attrs": RP._crochet(p, "rend"),
+            "sous": SOUS_TEMOINS.get(p["id"], "sans IA") if temoin else (p.get("sous_titre") or ""),
+            "ref": temoin, "attrs": RP._crochet(p, "rend"), "id": p["id"],
         })  # fmt: skip
-    panier = next((p for p in pfs if p["id"] == P.PANIER), None)
-    if panier:
-        rows.append({
-            "nom": "Témoin sans IA", "href": f"{RP._dossier(panier)}/{panier['slug']}.html", "rend": panier["rendement"],
-            "st": st.get(panier["id"]), "ref": True, "sous": "achète et garde les 6 cryptos, sans levier",
-            "attrs": RP._crochet(panier, "rend"),
-        })  # fmt: skip
-    return rows
+    return _classer(rows)
 
 
 def _spot_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
     st = couleurs({"series": data["chart"]["series"]}) if data.get("chart") else {}
-    pfs = data["portfolios"]
-    llms = sorted((p for p in pfs if p["kind"] == "llm"), key=lambda p: -(p["total_return"] or 0.0))
-    rows = [
-        {
-            "nom": p["name"],
-            "href": f"modele/{p['slug']}.html",
-            "rend": p["total_return"],
-            "st": st.get(p["id"]),
-            "rang": i,
-            "sous": "n’a encore rien acheté : tout en cash" if not p.get("n_trades") else "",
-        }
-        for i, p in enumerate(llms, 1)
-    ]
-    panier = next((p for p in pfs if p["id"] in R.REFERENCES), None)
-    if panier:
+    rows = []
+    for p in data["portfolios"]:
+        temoin = p["kind"] != "llm"
+        sous = (
+            SOUS_TEMOINS.get(p["id"], "sans IA")
+            if temoin
+            else ("n’a encore rien acheté : tout en cash" if not p.get("n_trades") else "")
+        )
         rows.append({
-            "nom": "Témoin sans IA", "href": f"modele/{panier['slug']}.html", "rend": panier["total_return"],
-            "st": st.get(panier["id"]), "ref": True, "sous": "achète et garde, sans levier",
+            "nom": p["name"], "href": f"modele/{p['slug']}.html", "rend": p["total_return"], "st": st.get(p["id"]),
+            "sous": sous, "ref": temoin, "id": p["id"],
         })  # fmt: skip
-    return rows
+    return _classer(rows)
 
 
-def _carte(*, href: str, titre: str, quoi: str, rows: list[dict[str, Any]], spark: str, label: str) -> str:
-    haut = [r for r in rows if not r.get("ref")][:2] + [r for r in rows if r.get("ref")]
+def _carte(
+    *, href: str, titre: str, quoi: str, rows: list[dict[str, Any]], chart: dict[str, Any] | None, label: str
+) -> str:
+    """Les trois premiers du classement (un témoin qui mène s'y voit), plus le panier s'il n'y est pas."""
+    haut = rows[:3]
+    haut += [r for r in rows[3:] if r.get("id") in R.REFERENCES or str(r.get("id", "")).endswith("basket-1x")]
+    spark = sparkline(chart, [r["id"] for r in haut]) if chart else ""
     return (
         f'<article class="ligue-carte"><h2 class="ligue-titre"><a href="{href}">{titre}</a></h2>'
         f'<p class="ligue-quoi">{quoi}</p>{spark}{scores(haut, label=label, mini=True)}'
@@ -159,29 +164,23 @@ def accueil_page(data: dict[str, Any]) -> str:
     cons = perp.get("conseils")
     if cons:
         rows = _perp_rows(cons)
-        ids = [p["id"] for p in cons["portfolios"]]
         cartes.append(_carte(
             href="conseils.html", titre="Conseils d’IA",
             quoi=f"Dix Claude Haiku donnent leur avis, un président tranche : Haiku pour l’un, Opus pour l’autre. Levier jusqu’à 10, {capital} fictifs chacun.",
-            rows=rows, spark=sparkline(cons["chart"], ids), label="Classement de la ligue des conseils",
+            rows=rows, chart=cons["chart"], label="Classement de la ligue des conseils",
         ))  # fmt: skip
     rows = _perp_rows(perp)
-    lead = [r for r in perp["portfolios"] if r["kind"] == "llm"]
-    ids = [p["id"] for p in sorted(lead, key=lambda p: -(p["rendement"] or 0.0))[:2]] + [
-        p["id"] for p in perp["portfolios"] if p["id"].endswith("basket-1x")
-    ]
     cartes.append(_carte(
         href="derives.html", titre="IA seules",
         quoi=f"Haiku, Sonnet, Opus et Fable décident chacun seul, à la hausse ou à la baisse. Levier jusqu’à 2, {capital} fictifs chacun.",
-        rows=rows, spark=sparkline(perp["chart"], ids), label="Classement de la ligue des IA seules",
+        rows=rows, chart=perp["chart"], label="Classement de la ligue des IA seules",
     ))  # fmt: skip
     if data.get("portfolios"):
         rows = _spot_rows(data)
-        ids = [p["id"] for p in data["portfolios"] if p["kind"] == "llm" or p["id"] in R.REFERENCES]
         cartes.append(_carte(
             href="comptant.html", titre="Comptant",
             quoi=f"Les mêmes IA achètent et revendent des cryptos, sans pari à la baisse ni levier, toutes les 4{NBSP}h. {eur(data['method']['capital_ueur'], decimals=0)} fictifs chacune.",
-            rows=rows, spark=sparkline(data["chart"], ids) if data.get("chart") else "", label="Classement de la ligue comptant",
+            rows=rows, chart=data.get("chart"), label="Classement de la ligue comptant",
         ))  # fmt: skip
     body = f"""
 <section class="une une-accueil" aria-labelledby="titre-page">

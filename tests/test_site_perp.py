@@ -316,7 +316,7 @@ def test_derives_sans_les_conseils(site):
     comparatif = re.search(r'<table class="tableau comparatif.*?</table>', idx, flags=re.DOTALL).group(0)
     assert len(re.findall(r"<tbody[^>]*>.*?</tbody>", comparatif, flags=re.DOTALL)) == 2  # IA, témoins
     classement = texte(re.search(r'<ol class="scores".*?</ol>', idx, flags=re.DOTALL).group(0))
-    assert "Claude" in classement and "Conseil" not in classement and "Témoin sans IA" in classement
+    assert "Claude" in classement and "Conseil" not in classement and "sans IA" in classement
     assert "trait--conseil" not in idx and "Agressif" not in idx and "un conseil agressif" not in texte(idx)
     for nom in ("council-perp-haiku", "council-perp-opus"):
         assert not (site / "derives" / f"{nom}.html").exists()
@@ -347,7 +347,7 @@ def test_ligue_des_conseils_tableau_classement_et_navigation(site):
     assert "Dix conseillers Claude Haiku" in t and "Haiku pour l’un, Opus pour l’autre" in t
     assert "trait--conseil" in page and "trait--conseil2" in page and "c--conseil2" in page
     classement = texte(re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0))
-    assert "Conseil Haiku" in classement and "Conseil Opus" in classement and "Témoin sans IA" in classement
+    assert "Conseil Haiku" in classement and "Conseil Opus" in classement and "sans IA" in classement
     assert re.search(r'<nav class="nav"[^>]*>.*?<a href="conseils.html" aria-current="page">Conseils</a>', page, flags=re.DOTALL)
     assert 'id="direct-data"' in page and "council-perp-opus" in re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)
     # Les autres pages du site la proposent aussi.

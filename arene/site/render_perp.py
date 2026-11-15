@@ -590,6 +590,18 @@ def _experience(conseils: list[dict[str, Any]]) -> str:
     )
 
 
+def _arrivees(pfs: list[dict[str, Any]]) -> str:
+    """Un portefeuille entré après les autres : sa courbe commence à son arrivée, et on le dit sous le graphique."""
+    if len(pfs) < 2:
+        return ""
+    debut = min(p["ouvert_ts"] for p in pfs)
+    tard = [p for p in pfs if p["ouvert_ts"] - debut > 3_600]
+    return "".join(
+        f'<p class="arrivee">Le {e(p["name"])} a rejoint la ligue le {quand(p["ouvert_ts"], annee=False)} : sa courbe commence là.</p>'
+        for p in tard
+    )
+
+
 def conseils_page(data: dict[str, Any]) -> str:
     """Accueil de la ligue des conseils (page du post LinkedIn) : la phrase, le classement et la courbe, puis les
     dernières décisions en clair ; le tableau complet, les actualités et la méthode viennent après."""
@@ -615,7 +627,7 @@ def conseils_page(data: dict[str, Any]) -> str:
         titre=titre, chapo=chapo,
         classement=A.scores(A._perp_rows(perp), label="Classement de la ligue des conseils, rendement net"),
         apres=_releve(data, perp, direct_pfs),
-        courbe=_chart_block(perp["chart"], ligue="conseils"),
+        courbe=_chart_block(perp["chart"], ligue="conseils") + _arrivees(conseils),
     ) + f"""
 <section class="etapes" aria-labelledby="titre-etapes">
   <h2 id="titre-etapes">Comment un conseil décide</h2>
@@ -815,6 +827,10 @@ def _tendance(avis: list[dict[str, Any]]) -> str:
     return ", ".join(f"{k}{NBSP}×{n}" for k, n in c.most_common(3))
 
 
+AVIS_DETAILLES = 12  # sur une page de conseil, les avis complets des 12 dernières rondes ; avant, le résumé seul
+_RESUME_SEUL: set[int] = set()  # id() des décisions dont la page ne montre que le résumé de la délibération
+
+
 def _deliberation(d: dict[str, Any]) -> str:
     c = d.get("conseil")
     if not c:
@@ -837,6 +853,8 @@ def _deliberation(d: dict[str, Any]) -> str:
     if avocat:
         mots.append(f"l’Avocat attaque le {avocat['cible']['sens']} {avocat['cible']['instrument']}")
     resume = f'<span class="etiquette">Délibération</span><span class="muted">{e(" · ".join(mots))}</span>'
+    if id(d) in _RESUME_SEUL:  # page légère : le détail des avis anciens reste dans le journal et data/conseils.json
+        return f'<p class="outils">{resume}<span class="muted"> · avis complets dans le journal et <code>data/conseils.json</code></span></p>'
     corps = ""
     if a_avis:
         n_a_abs = sum(1 for a in a_avis if a["absent"])
@@ -1002,6 +1020,9 @@ def _operations(p: dict[str, Any]) -> str:
 
 def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     conseil = p["kind"] == "conseil"
+    _RESUME_SEUL.clear()
+    avec_avis = [d for d in p.get("decisions") or [] if (d.get("conseil") or {}).get("avis")]
+    _RESUME_SEUL.update(id(d) for d in avec_avis[AVIS_DETAILLES:])
     llm = p["kind"] == "llm" or conseil  # le conseil décide comme une IA : décisions, attente, coût
     stats = [
         _stat("Rendement net", f'<span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>', cls="grand", carte="cle"),
