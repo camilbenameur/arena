@@ -285,7 +285,7 @@
       var w = host.clientWidth;
       if (!plot || !w) return;
       if ((w < 520) !== compactActuel) build();
-      else plot.setSize({ width: w, height: w < 520 ? 280 : 320 });
+      else plot.setSize({ width: w, height: w < 520 ? 280 : (host.closest(".une-courbe") ? 380 : 320) });
     }, 120);
   }
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(onResize).observe(host.parentNode);
