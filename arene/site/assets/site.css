@@ -396,3 +396,9 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .membre .cible .etiquette { display: inline; margin-right: 6px; }
 .membre.absent .membre-tete strong { color: var(--muted); }
 @media print { .deliberation > summary::before { display: none; } }
+
+/* Actualités : calendrier macro et annonces de Kraken, une ligne chacune. */
+.actus { margin-top: 8px; }
+.actu { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 10px 0; }
+.actu-titre { font-weight: 500; }
+.actu-sous { flex-basis: 100%; font-size: .88rem; }

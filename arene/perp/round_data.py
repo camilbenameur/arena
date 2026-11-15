@@ -9,7 +9,8 @@ is called, so that the tools never touch the network and a round stays auditable
 - `view`: the riskd market view at the round; `account`: the portfolio state; `counters`; `specs`;
   `policy` and `params` (so `simulate_order` is self-contained); `history`: the portfolio's last decisions;
 `agent_orders`: the portfolio's OWN pending alerts and entry orders and what happened to them since its last round;
-`rounds`: its rounds of the day against its quota, and the wake-up it asked for (docs/SPEC-PERP-REVEILS-LIBRES.md).
+`rounds`: its rounds of the day against its quota, and the wake-up it asked for (docs/SPEC-PERP-REVEILS-LIBRES.md);
+`news` (when the news are on): the journaled announcements and the macro calendar (docs/SPEC-PERP-ACTUALITES.md).
 Nothing after `now_ts` is read.
 """
 
@@ -25,6 +26,7 @@ from typing import Any
 
 from arene.perp.agent_orders import orders_view, pending_wakeup
 from arene.perp.ledger import MarginAccount
+from arene.perp.news import NewsConfig, news_block
 from arene.perp.policy import PerpPolicy
 from arene.perp.riskd import PerpCounters, PerpMarketView
 from arene.perp.sim import SimParams
@@ -134,6 +136,7 @@ def build_round(
     entries_blocked: bool = False,
     *,
     quota: Mapping[str, int] | None = None,
+    news: NewsConfig | None = None,
 ) -> tuple[dict[str, Any], str]:
     past = [e for e in events if e["ts"] <= now_ts]
     data = {
@@ -165,6 +168,8 @@ def build_round(
             "next_wakeup_ts": (pending_wakeup(past, acc.portfolio, now_ts) or {}).get("due_ts"),
         },
     }
+    if news is not None:  # absent from the rounds before the news (15/11/2026): their hash is unchanged
+        data["news"] = news_block(past, news, now_ts)
     raw = _canonical(data)
     out_dir.mkdir(parents=True, exist_ok=True)
     if (out_dir / "round.json").exists():

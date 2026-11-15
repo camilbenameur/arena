@@ -24,6 +24,7 @@ from arene.perp import agent_orders as AO
 from arene.perp import round_quota
 from arene.perp.ledger import MarginAccount, PerpLedgerError, price_pnl_uusd, replay, to_eur
 from arene.perp.llm_league import LlmConfigError, load_llm_league
+from arene.perp.news import load_news_config
 
 ROUND_S = 4 * 3600
 ROUND_OFFSET_S = 2 * 3600  # rendez-vous à 02:00, 06:00, …, 22:00 UTC
@@ -34,6 +35,10 @@ OPERATIONS_MAX = 60
 JUSTIFICATION_MAX = 1_200
 INVALIDATION_MAX = 200
 NOTE_MAX = 160
+TITRE_MAX = 120
+ACTU_S = 7 * 86_400  # fenêtre des actualités : 7 jours devant (calendrier) et derrière (annonces de Kraken)
+ANNONCES_MAX = 12
+IMPACTS = {"minor": "mineur", "major": "majeur", "critical": "critique"}
 
 PANIER = "benchmark-perp:basket-1x"
 TENDANCE = "benchmark-perp:trend"
@@ -280,9 +285,30 @@ def _rejet_public(error: Any, kind: Any = None) -> str:
     return "élément invalide"
 
 
+def _ts(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+def _news(d: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Les actualités jointes à un déclencheur : publications macro (id, libellé, heure) et annonces de Kraken
+    (nature, statut, titre). Textes bornés ; la clé interne n'est pas publiée."""
+    rel = d.get("releases")
+    ann = d.get("announcements")
+    releases = [
+        {"label": _texte(r.get("label"), 120) or "publication macro", "ts": _ts(r.get("ts"))}
+        for r in (rel if isinstance(rel, list) else []) if isinstance(r, Mapping)
+    ]  # fmt: skip
+    annonces = [
+        {"kind": str(a.get("kind") or "")[:20], "status": str(a.get("status") or "")[:20], "title": _texte(a.get("title"), TITRE_MAX) or "annonce"}
+        for a in (ann if isinstance(ann, list) else []) if isinstance(a, Mapping)
+    ]  # fmt: skip
+    return {"releases": releases[:3], "annonces": annonces[:3]} if releases or annonces else None
+
+
 def _declencheur(raw: Any, kind: str = "wakeup") -> dict[str, Any] | None:
     """Le déclencheur d'une ronde hors rendez-vous. Réveil de marché : contrat et variation. Alerte de l'IA :
-    contrat, sens, niveau et sa note. Le reste (id, fenêtre interne) n'est pas publié."""
+    contrat, sens, niveau et sa note. Annonce de Kraken ou publication macro : titres et libellés. Le reste (id,
+    fenêtre interne) n'est pas publié. Tout déclencheur peut porter des actualités (`news`)."""
     d = raw
     if isinstance(raw, str):
         try:
@@ -291,6 +317,19 @@ def _declencheur(raw: Any, kind: str = "wakeup") -> dict[str, Any] | None:
             return None
     if not isinstance(d, Mapping):
         return None
+    out = _declencheur_nu(d, kind)
+    sous = d.get("news") if isinstance(d.get("news"), Mapping) else None
+    n = _news(sous) if sous else None
+    if n:
+        out["news"] = n
+    return out
+
+
+def _declencheur_nu(d: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    if kind == "news":
+        return {"type": "annonce", **(_news(d) or {"releases": [], "annonces": []})}
+    if kind == "calendar":
+        return {"type": "publication", **(_news(d) or {"releases": [], "annonces": []})}
     if kind == "scheduled":
         due = d.get("due_ts")
         return {"type": "demande", "due_ts": due if isinstance(due, int) and not isinstance(due, bool) else None}
@@ -564,7 +603,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
         if t == "round_data":
             d = ronde(p["round"], e["ts"])
             d["kind"] = p.get("kind") or "rendezvous"
-            d["declencheur"] = _declencheur(p.get("trigger"), d["kind"]) if d["kind"] in ("wakeup", "alert", "scheduled", "cadence") else None
+            d["declencheur"] = _declencheur(p.get("trigger"), d["kind"]) if d["kind"] in ("wakeup", "alert", "scheduled", "cadence", "news", "calendar") else None
         elif t == "tool_call":
             d = ronde(p["round"], e["ts"])
             tool = str(p.get("tool") or "").removeprefix("mcp__arene__")
@@ -729,6 +768,50 @@ def _decisions_aleatoire(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(out, key=lambda d: d["round"], reverse=True)[:DECISIONS_MAX]
 
 
+def _calendrier(now: int) -> list[dict[str, Any]] | None:
+    """Les publications macro des 7 prochains jours (calendrier publié d'avance), ou None si la configuration
+    des actualités n'est pas lisible : le site omet alors le calendrier."""
+    try:
+        cfg = load_news_config()
+        out = [
+            {"id": str(c.id), "kind": c.kind, "label": _texte(c.label, 120) or c.kind.upper(), "ts": c.ts, "rappel": c.kind in cfg.wake_kinds}
+            for c in cfg.calendar if now <= c.ts <= now + ACTU_S
+        ]  # fmt: skip
+    except Exception:  # noqa: BLE001 - jamais de page cassée pour une configuration absente ou mal formée
+        return None
+    return sorted(out, key=lambda c: (c["ts"], c["id"]))
+
+
+def _annonces(events: list[dict[str, Any]], now: int) -> list[dict[str, Any]]:
+    """Les annonces de Kraken sur les dérivés vues depuis 7 jours : la dernière version de chacune (source, id)."""
+    last: dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
+    for e in events:
+        if e["type"] == "news_item" and isinstance(e["payload"], Mapping):
+            p = e["payload"]
+            last[(str(p.get("source")), str(p.get("id")))] = (
+                e["ts"],
+                p,
+            )  # le journal est ordonné : la dernière version gagne
+    out = []
+    for ts, p in last.values():
+        maj = max(
+            _ts(p.get("updated_ts")) or 0, _ts(p.get("published_ts")) or 0, _ts(p.get("fetched_ts")) or 0, ts
+        )
+        a_venir = (_ts(p.get("starts_ts")) or 0) > now or (_ts(p.get("ends_ts")) or 0) > now
+        if maj < now - ACTU_S and not a_venir:
+            continue
+        url = p.get("url")
+        ins = p.get("instruments")
+        out.append({
+            "kind": str(p.get("kind") or "")[:20], "status": str(p.get("status") or "")[:24], "impact": str(p.get("impact") or "")[:20],
+            "title": _texte(p.get("title"), TITRE_MAX) or "Annonce de Kraken", "maj_ts": maj,
+            "starts_ts": _ts(p.get("starts_ts")), "ends_ts": _ts(p.get("ends_ts")),
+            "instruments": [court(i) for i in ins[:8]] if isinstance(ins, list) else [],
+            "url": url if isinstance(url, str) and url.startswith("https://") and len(url) <= 200 else "",
+        })  # fmt: skip
+    return sorted(out, key=lambda a: a["maj_ts"], reverse=True)[:ANNONCES_MAX]
+
+
 def compute(path: Path, now: int) -> dict[str, Any] | None:
     """Tout ce que le site montre de la ligue dérivés, ou None si son journal n'existe pas (encore)."""
     path = Path(path)
@@ -848,6 +931,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         "journal": {"verify_ok": report.ok, "n_records": report.n_records},
         "cadence_min": ligue_llm.cadence_min if ligue_llm and ligue_llm.enabled else 0,
         "rondes_par_jour": ligue_llm.rounds_per_day if ligue_llm else None,
+        "actualites": {"calendrier": _calendrier(now), "annonces": _annonces(events, now)},
     }  # fmt: skip
 
     def ligue(pfs: list[dict[str, Any]]) -> dict[str, Any]:

@@ -233,6 +233,7 @@ def run_llm_round(
     triggers: Mapping[str, Mapping[str, Any]] | None = None,
     quota_of: Callable[[str], Mapping[str, int]] | None = None,
     policy_of: Callable[[str], Any] | None = None,
+    news: Any = None,
 ) -> LlmRoundReport:
     """Plays the LLM part of one league round; every outcome is journaled (problems never stop the others).
 
@@ -323,6 +324,7 @@ def run_llm_round(
                     kind=str(own["kind"]) if own else kind, trigger=own if triggers is not None else trigger,
                     entries_blocked=entries_blocked, extra=extra,
                     quota=quota_of(m.portfolio) if quota_of is not None else None,
+                    news=news,
                     snapshot_extra=(
                         {"bilan_du_conseil": council_record(events, m.portfolio, now_ts)} if m.council else None
                     ),

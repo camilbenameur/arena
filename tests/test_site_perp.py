@@ -7,6 +7,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,7 @@ from test_site import ROOT, synthetic_journal
 from test_site import _cfg as _config
 
 from arene.journal import Journal
+from arene.perp.news import CalendarEvent
 from arene.risk.policy import load_policy
 from arene.site import build
 from arene.site import perp as P
@@ -504,3 +506,127 @@ def test_sans_conseil_pas_de_ligue_des_conseils(tmp_path):
     assert not (out / "conseils.html").exists() and not (out / "conseils").exists() and not (out / "data" / "conseils.json").exists()
     for f in out.rglob("*.html"):
         assert "conseils.html" not in f.read_text(encoding="utf-8"), f.name
+
+
+# --- Actualités (annonces de Kraken, calendrier macro) -------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def site_actus(tmp_path_factory) -> Path:
+    tmp = tmp_path_factory.mktemp("actus")
+    spot = synthetic_journal(tmp / "var" / "journal" / "events.jsonl")
+    perp = F.ajoute_actualites(F.build(tmp / "var-perp" / "journal" / "events.jsonl"))
+    cal = [
+        CalendarEvent(
+            "cpi-2026-12",
+            "cpi",
+            "le CPI de décembre 2026 (BLS)",
+            NOW + 2 * 86_400,
+            "https://www.bls.gov/schedule/",
+        ),
+        CalendarEvent(
+            "ppi-2026-12",
+            "ppi",
+            "le PPI de décembre 2026 (BLS)",
+            NOW + 3 * 86_400,
+            "https://www.bls.gov/schedule/",
+        ),
+        CalendarEvent(
+            "nfp-2027-01",
+            "nfp",
+            "l’emploi de janvier 2027 (BLS)",
+            NOW + 20 * 86_400,
+            "https://www.bls.gov/schedule/",
+        ),
+    ]
+    mp = pytest.MonkeyPatch()
+    mp.setattr(
+        P,
+        "load_news_config",
+        lambda: SimpleNamespace(calendar=tuple(cal), wake_kinds=("fomc", "cpi", "nfp", "pce")),
+    )
+    try:
+        out = tmp / "site"
+        config, policy = _cfg()
+        build(
+            spot.path,
+            out,
+            config=config,
+            policy=policy,
+            now_ts=NOW,
+            public=True,
+            racine="/arene/",
+            perp_journal=perp,
+        )
+    finally:
+        mp.undo()
+    return out
+
+
+def _bloc(html: str) -> str:
+    return re.search(r'<section aria-labelledby="titre-actualites">(.*?)</section>', html, re.DOTALL).group(1)
+
+
+def test_actualites_declencheurs_des_decisions(site_actus):
+    t = texte(lire(site_actus, "derives/llm-perp-claude-fable-5-2.html"))
+    assert "annonce de Kraken · Délai sur les ordres des dérivés" in t
+    c = texte(lire(site_actus, "conseils/council-perp-haiku.html"))
+    assert f"publication macro · après {F.LIBELLE_CPI}" in c
+    s = texte(lire(site_actus, "derives/llm-perp-claude-sonnet-5-5.html"))
+    assert "appel régulier" in s and "annonce de Kraken jointe" in s
+
+
+def test_actualites_bloc_de_l_accueil_derives_et_des_conseils(site_actus):
+    for nom in ("index.html", "conseils.html"):
+        b = _bloc(lire(site_actus, nom))
+        t = texte(b)
+        assert "le CPI de décembre 2026 (BLS)" in t and "rappelle les IA 3 min après" in t
+        assert (
+            "le PPI de décembre 2026" in t and t.count("rappelle les IA") == 1
+        )  # le PPI ne rappelle pas les IA
+        assert "janvier 2027" not in t  # au-delà de 7 jours
+        assert "Ancienne annonce" not in t
+        assert "retrait" not in t and "Maintenance" in t and "programmée" in t and "contrats : BTC" in t
+        assert 'href="https://stspg.io/abc"' in b
+
+
+def test_actualites_une_annonce_a_plusieurs_versions_montre_la_derniere(site_actus):
+    t = texte(_bloc(lire(site_actus, "index.html")))
+    assert t.count("Délai sur les ordres des dérivés") == 1
+    assert "résolu" in t and "en analyse" not in t
+
+
+def test_actualites_titre_echappe_et_lien_non_https_ecarte(site_actus):
+    b = _bloc(lire(site_actus, "index.html"))
+    assert "<script>" not in b and "&lt;script&gt;alert(1)&lt;/script&gt;" in b
+    assert "javascript:" not in b
+
+
+def test_actualites_methode_et_export(site_actus):
+    t = texte(lire(site_actus, "methode.html"))
+    assert (
+        "jamais les chiffres publiés" in t
+        and "3 min" in t
+        and 'id="m-actualites"' in lire(site_actus, "methode.html")
+    )
+    for nom in ("derives.json", "conseils.json"):
+        a = json.loads(lire(site_actus, f"data/{nom}"))["actualites"]
+        assert len(a["calendrier"]) == 2 and {x["title"] for x in a["annonces"]} == {
+            "Délai sur les ordres des dérivés",
+            F.TITRE_PIEGE,
+        }
+
+
+def test_actualites_sans_annonce_ni_calendrier(site, monkeypatch):
+    b = _bloc(lire(site, "index.html"))
+    assert "Aucune annonce de Kraken sur les dérivés depuis 7 jours." in texte(b)
+    assert json.loads(lire(site, "data/derives.json"))["actualites"]["annonces"] == []
+
+
+def test_actualites_calendrier_illisible_est_omis(tmp_path, monkeypatch):
+    def boom():
+        raise ValueError("config cassée")
+
+    monkeypatch.setattr(P, "load_news_config", boom)
+    perp = F.build(tmp_path / "p" / "events.jsonl")
+    assert P.compute(perp, NOW)["actualites"]["calendrier"] is None

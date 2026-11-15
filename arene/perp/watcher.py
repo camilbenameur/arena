@@ -56,6 +56,7 @@ from arene.ops.notify import Notifier
 from arene.paths import Paths
 from arene.perp import agent_orders as AO
 from arene.perp import benchmarks as B
+from arene.perp import news as N
 from arene.perp import round_quota as RQ
 from arene.perp.agent import AgentDecider
 from arene.perp.agent_round import _close_unprotected, _execute
@@ -76,6 +77,7 @@ from arene.perp.llm_league import (
 from arene.perp.margin import leveraged
 from arene.perp.market import market_view, worst_half_spread_bp
 from arene.perp.mcp_server import usd
+from arene.perp.news import NewsConfig, NewsConfigError, load_news_config
 from arene.perp.policy import PerpPolicy, load_perp_policy
 from arene.perp.riskd import PerpIntent, PerpMarketView, evaluate_perp
 from arene.perp.sim import MinuteCandles, PerpSimulator
@@ -114,6 +116,12 @@ ALERT_PENDING_S = HOUR_S  # a crossed alert waiting longer is no longer served b
 ASKED_EARLY_S = TICK_S // 2  # an asked wake-up is served by the tick that starts at most 2.5 min before it
 ENTRY_MAX_LAG_S = 900  # a crossed entry order is executed only if its crossing minute is under 15 min old
 PRIVATE_KINDS = ("alert", "private")  # "alert": the private rounds before 13/11/2026 15:00 UTC (one owner)
+NEWS_READ_S = (
+    2 * HOUR_S
+)  # collected items older than this, never journaled (the watcher was down), are dropped
+NEWS_PENDING_S = HOUR_S  # a new announcement calls a model back within the hour, or its next round shows it
+RELEASE_LAPSE_S = 1800  # a macro release calls the models back at most 30 min after its call-back time
+CALENDAR_WARN_S = 30 * 86_400  # alert when the macro calendar ends within 30 days
 ROUND_LATE_S = 1800  # a rendez-vous is run (or resumed) by a tick at most 30 min after its time
 
 
@@ -184,8 +192,10 @@ class PerpWatcher:
         llm: LlmLeague | None = None,
         decider_factory: Callable[[LlmModel], AgentDecider] | None = None,
         round_offset_s: int = ROUND_OFFSET_S,
+        news: NewsConfig | None = None,
     ) -> None:
         self.var = var
+        self.news = news if news is not None and news.enabled else None
         self.cfg = cfg
         self.policy = policy
         self.specs = specs
@@ -294,6 +304,7 @@ class PerpWatcher:
         prev_minute = ticks[-1]["payload"]["last_minute"] if ticks else None
         pending = list(last["pending_funding"]) if last else []
         self._closeout_followups(events, rep)
+        self._journal_news(now_ts, rep)
         view = market_view(self.store, self.symbols, now_ts)
         fresh = self._is_fresh(view, now_ts)
         snaps = self.store.tickers().load((last_minute or now_ts) - 86_400, now_ts + 1)
@@ -330,6 +341,36 @@ class PerpWatcher:
             },
             now_ts,
         )
+
+    def _journal_news(self, now_ts: int, rep: TickReport) -> None:
+        """The items the collector read since the last tick, journaled once each (`news_item`); the journal is
+        what the rounds read (docs/SPEC-PERP-ACTUALITES.md §2). Never stops the tick."""
+        if self.news is None:
+            return
+        try:
+            items = N.read_items(self.store.root / "news", now_ts - NEWS_READ_S, now_ts)
+            events = self._events()
+            known = N.journaled_keys(events)
+            for it in items:
+                if it.get("key") in known:
+                    continue
+                known.add(it["key"])
+                self._append("news_item", it, now_ts)
+                rep.notes.append(f"news: {it['kind']} {it['status']}: {it.get('title', '')}"[:200])
+            end = self.news.calendar[-1].ts if self.news.calendar else 0
+            if end - now_ts < CALENDAR_WARN_S and not any(
+                e["type"] == "alert"
+                and e["payload"].get("code") == "perp_news_calendar_ending"
+                and now_ts - e["ts"] < 86_400
+                for e in events
+            ):
+                self._alert(
+                    "action", "perp_news_calendar_ending",
+                    "perp league: the macro calendar (config/calendrier-macro.toml) ends within 30 days: "
+                    "add the next official dates", now_ts,
+                )  # fmt: skip
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            rep.problems.append(f"news: {type(exc).__name__}: {exc}"[:300])
 
     def _is_fresh(self, view: PerpMarketView | None, now_ts: int) -> bool:
         if view is None or now_ts - view.fx_ts > VIEW_MAX_AGE_S or view.fx_bid <= 0:
@@ -369,7 +410,7 @@ class PerpWatcher:
                 trigger=trigger, entries_blocked=lambda: blocked or self._kill_active(),
                 decider_factory=self.decider_factory, refresh=refresh,
                 only=None if portfolios is None else set(portfolios), triggers=triggers,
-                quota_of=lambda p: self.quota(self._events(), p, now_ts),
+                quota_of=lambda p: self.quota(self._events(), p, now_ts), news=self.news,
             )  # fmt: skip
         except Exception as exc:  # noqa: BLE001 (the round stays open: resumed by the next tick)
             message = f"llm round {round_id}: {type(exc).__name__}: {exc}"[:500]
@@ -1016,6 +1057,32 @@ class PerpWatcher:
                     "asked_at_round": asked["round"],
                     "due_ts": asked["due_ts"],
                 }
+        if self.news is not None:
+            # the news (docs/SPEC-PERP-ACTUALITES.md §4): a new announcement, or a macro release a few minutes
+            # old, calls back every model that has not played since; with another trigger, it is attached to it
+            for m in self.llm.players:
+                last = RQ.last_played(events, m.portfolio)
+                info: dict[str, Any] = {}
+                due = N.due_releases(self.news, last, now_ts, ASKED_EARLY_S, RELEASE_LAPSE_S)
+                if due:
+                    info["releases"] = [{"id": e.id, "label": e.label, "ts": e.ts} for e in due]
+                fresh = N.unseen_news(events, last, now_ts, NEWS_PENDING_S)
+                if fresh:
+                    info["announcements"] = [
+                        {
+                            "kind": n["kind"],
+                            "status": n["status"],
+                            "title": n.get("title", ""),
+                            "key": n["key"],
+                        }
+                        for n in fresh[-3:]
+                    ]
+                if not info:
+                    continue
+                if m.portfolio in triggers:
+                    triggers[m.portfolio]["news"] = info
+                else:
+                    triggers[m.portfolio] = {"kind": "calendar" if due else "news", **info}
         if self.llm.cadence_min:
             # the cadence (the owner, 13/11 and 14/11): every model is called again at most `cadence_min` after its
             # last round, whatever that round was (a failed one included). A wake-up it asked for can only bring
@@ -1341,7 +1408,17 @@ def main(argv: list[str] | None = None) -> int:
                     {"level": "action", "code": "perp_council_config_invalid", "message": err[:1000]},
                     now_ts,
                 )
-        w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm)
+        news: NewsConfig | None = None
+        try:  # bad news config: no news, never a stopped watcher
+            news = load_news_config()
+        except (NewsConfigError, OSError) as exc:
+            notifier.send("action", "perp_news_config_invalid", f"perp news config invalid, off: {exc}"[:900])
+            journal.append(
+                "alert",
+                {"level": "action", "code": "perp_news_config_invalid", "message": str(exc)[:1000]},
+                now_ts,
+            )
+        w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm, news=news)
         rep = w.tick(now_ts)
     except Exception as exc:
         notifier.send(

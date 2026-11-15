@@ -356,3 +356,43 @@ def _ronde_conseil(g: Gen, ts: int, *, ouvre: bool, arbitragiste: bool = False, 
     elif ouvre:
         _executer(g, pf, "ETH-PERP", "open_short", t, 0, True, qty=-qty_pour(3_000_000_000, "ETH-PERP", t), stop_pct=3, tp_pct=4)
         _executer(g, pf, "ETH-PERP", "open_short", t, 1, False, ["MAX_LEVERAGE", "LIQUIDATION_BEFORE_STOP"])
+
+
+TITRE_PIEGE = "Maintenance <script>alert(1)</script> des ordres"
+LIBELLE_CPI = "le CPI de novembre 2026 (BLS)"
+
+
+def _news_item(g: Gen, ts: int, **kw) -> None:
+    p = {"source": "kraken_status", "id": "x", "kind": "incident", "title": "t", "status": "investigating", "impact": "minor",
+         "published_ts": ts, "updated_ts": ts, "starts_ts": None, "ends_ts": None, "instruments": [], "url": "", "wake": False,
+         "key": f"k{ts}", "fetched_ts": ts, "raw_sha256": "d" * 64}  # fmt: skip
+    g.add("news_item", {**p, **kw}, ts)
+
+
+def ajoute_actualites(path: Path) -> Path:
+    """Annonces de Kraken (deux versions d'un incident, une maintenance au titre piégé, une annonce vieille de 10 jours) et
+    trois rondes privées : `news` (Fable), `calendar` (Conseil Haiku), cadence qui porte une annonce (Sonnet)."""
+    g = Gen(path)
+    fin = T0 + 2 * 86_400
+    _news_item(g, fin - 10 * 86_400, id="vieux", title="Ancienne annonce de Kraken", status="resolved", published_ts=fin - 10 * 86_400,
+               updated_ts=fin - 10 * 86_400, fetched_ts=fin - 10 * 86_400)  # fmt: skip
+    _news_item(g, fin - 3_600, id="inc1", title="Délai sur les ordres des dérivés", status="investigating", impact="major",
+               instruments=["PF_XBTUSD", "PF_ETHUSD"], url="https://stspg.io/abc")  # fmt: skip
+    _news_item(g, fin - 600, id="inc1", title="Délai sur les ordres des dérivés", status="resolved", impact="major", published_ts=fin - 3_600,
+               instruments=["PF_XBTUSD", "PF_ETHUSD"], url="https://stspg.io/abc")  # fmt: skip
+    _news_item(g, fin - 300, id="mt1", kind="maintenance", title=TITRE_PIEGE, status="scheduled", impact="maintenance",
+               starts_ts=fin + 7_200, ends_ts=fin + 10_800, instruments=["PF_XBTUSD"], url="javascript:alert(1)")  # fmt: skip
+    fable, sonnet = LLMS[3], LLMS[1]
+    for pf, rnd, kind, trig in (
+        (fable, fin + 20, "news", {"announcements": [{"kind": "incident", "status": "resolved", "title": "Délai sur les ordres des dérivés", "key": "k"}]}),
+        (CONSEIL, fin + 40, "calendar", {"releases": [{"id": "cpi-2026-11", "label": LIBELLE_CPI, "ts": fin}]}),
+        (sonnet, fin + 60, "cadence", {"news": {"announcements": [{"kind": "maintenance", "status": "scheduled", "title": "Maintenance annoncée", "key": "m"}]}}),
+    ):  # fmt: skip
+        g.add("perp_round", {"round": rnd, "kind": kind, "portfolios": [pf], "trigger": trig, "ts": rnd}, rnd)
+        g.add("round_data", {"portfolio": pf, "round": rnd, "kind": kind, "trigger": json.dumps(trig), "sha256": "a" * 64,
+                             "message_sha256": "b" * 64, "path": SECRET}, rnd + 5)  # fmt: skip
+        g.add("agent_decision", {"portfolio": pf, "round": rnd, "kind": kind, "model_requested": "claude-haiku-5-5",
+                                 "parsed": {"actions": [], "justification": "Rien à faire.", "action_errors": []},
+                                 "parse_error": None, "cost_uusd": 1_000}, rnd + 8)  # fmt: skip
+        g.add("perp_round_done", {"round": rnd}, rnd + 9)
+    return path

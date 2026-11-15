@@ -124,6 +124,11 @@ class KrakenFuturesClient:
     def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return self._http.get_json(f"{self._base}{path}", params, parse_float=Decimal)
 
+    def get_url_json(self, url: str) -> Any:
+        """A public JSON page outside the market data (Kraken's announcements, `arene.perp.news`), through the
+        same rate-limited client; numbers stay floats (only booleans, integers and texts are kept)."""
+        return self._http.get_json(url)
+
     # ------------------------------------------------------------------ snapshots
 
     def tickers(self, kraken_symbols: Iterable[str]) -> tuple[dict[str, PerpTicker], dict[str, str]]:

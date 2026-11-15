@@ -41,6 +41,8 @@ from arene.data import DataError
 from arene.paths import REPO
 from arene.perp.config import DEFAULT_CONFIG, PerpConfig, PerpConfigError, default_var, load_perp_config
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
+from arene.perp.news import DEFAULT_CONFIG as NEWS_CONFIG
+from arene.perp.news import NewsConfig, NewsConfigError, collect_news, load_news_config
 from arene.perp.store import PerpDataStore, TickerSnapshot, missing_steps
 
 HOUR_S = 3600
@@ -138,11 +140,16 @@ def collect_once(
     *,
     backfill_s: int | None = None,
     clock: Callable[[], float] = time.monotonic,
+    news: NewsConfig | None = None,
+    news_get: Callable[[str], Any] | None = None,
 ) -> RunReport:
     """One collection run. Market-data and storage errors go into the report, per instrument.
 
     `backfill_s` given explicitly (the --backfill-days option) also fetches BACKWARDS, before the first
     stored record; by default (None) the run only catches up forwards, at most `cfg.backfill_s`.
+
+    `news` (enabled) and `news_get`: Kraken's announcements are read too (docs/SPEC-PERP-ACTUALITES.md); an
+    error there is recorded and never touches the market data.
     """
     t0 = clock()
     report = RunReport(ts=now_ts, config_sha256=cfg.sha256)
@@ -192,6 +199,14 @@ def collect_once(
     iv = cfg.candle_interval_s
     oiv = cfg.open_interest_interval_s
     try:
+        # 1b. Kraken's official announcements (small payloads, before the per-instrument loop and its deadline)
+        if news is not None and news.enabled and news_get is not None:
+
+            def announcements() -> None:
+                for k, v in collect_news(news, news_get, store.root / "news", state, now_ts, symbols).items():
+                    count(k, v)
+
+            guarded("news", announcements)
         for n, inst in enumerate(cfg.instruments):
             # The deadline protects the 5-minute timer; an explicit backfill (run by hand) may take longer.
             if not explicit and clock() - t0 > cfg.run_deadline_s:
@@ -382,6 +397,7 @@ def main(
     ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     ap.add_argument("--backfill-days", type=int, default=None, help="run: also fetch backwards, N days")
     ap.add_argument("--days", type=int, default=7, help="report: window in days")
+    ap.add_argument("--news-config", type=Path, default=NEWS_CONFIG)
     args = ap.parse_args(argv)
 
     try:
@@ -412,8 +428,25 @@ def main(
             print(json.dumps(line))
             return EXIT_OK
         client = (client_factory or KrakenFuturesClient)()
+        news: NewsConfig | None = None
+        news_error = None
         try:
-            report = collect_once(cfg, client, store, var, now_ts, backfill_s=backfill_s)
+            news = load_news_config(args.news_config)
+        except (NewsConfigError, OSError) as exc:
+            news_error = f"news config: {type(exc).__name__}: {exc}"[:400]
+        try:
+            report = collect_once(
+                cfg,
+                client,
+                store,
+                var,
+                now_ts,
+                backfill_s=backfill_s,
+                news=news,
+                news_get=getattr(client, "get_url_json", None),
+            )
+            if news_error:
+                report.errors.append(news_error)
         except Exception as exc:
             append_run_line(var, {"ts": now_ts, "ok": False, "crash": f"{type(exc).__name__}: {exc}"[:400]})
             raise

@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any
 
 from arene.site import perp as P
+from arene.site.perp import IMPACTS as IMPACTS_FR
 from arene.site.render import (
     FLUX_DIRECT,
     MINUS,
@@ -81,9 +82,20 @@ def niveau(cond: str | None, prix: int | None) -> str:
     return f"{mot} {usd_prix(prix)}"
 
 
+def _apres(rel: list[dict[str, Any]]) -> str:
+    return " et ".join(r["label"] for r in rel)
+
+
 def declencheur(d: dict[str, Any] | None) -> str:
     if not d:
         return "réveil"
+    if d.get("type") == "annonce":
+        n = len(d.get("annonces") or [])
+        return "annonce de Kraken" + (
+            f" · {d['annonces'][0]['title']}" if n == 1 else f" · {n}{NBSP}annonces" if n > 1 else ""
+        )
+    if d.get("type") == "publication":
+        return "publication macro" + (f" · après {_apres(d['releases'])}" if d.get("releases") else "")
     if d.get("type") == "alerte":
         return f"son alerte · {d.get('instrument') or '?'} {niveau(d.get('condition'), d.get('prix_uusd'))}"
     if d.get("type") == "ordre":
@@ -97,13 +109,106 @@ def declencheur(d: dict[str, Any] | None) -> str:
 def _pastille_ronde(d: dict[str, Any]) -> str:
     """Pourquoi l'IA a été appelée hors rendez-vous. L'appel régulier, de loin le plus fréquent, reste discret."""
     k = d.get("kind")
+    avec = ""
+    n = (d.get("declencheur") or {}).get("news")
+    if n and k not in (
+        "news",
+        "calendar",
+    ):  # un autre déclencheur qui portait aussi une annonce ou une publication
+        avec = f' <span class="pastille discret" title="{e(_news_titre(n))}">{"annonce de Kraken" if n["annonces"] else "publication macro"} jointe</span>'
     if k == "cadence":
-        return '<span class="pastille discret">appel régulier</span> '
+        return f'<span class="pastille discret">appel régulier</span>{avec} '
     if k == "scheduled":
-        return '<span class="pastille neutre">à sa demande</span> '
+        return f'<span class="pastille neutre">à sa demande</span>{avec} '
+    if k in ("news", "calendar"):
+        dec = d.get("declencheur") or {"type": "annonce" if k == "news" else "publication"}
+        return f'<span class="pastille reveil">{e(declencheur(dec))}</span> '
     if k not in ("wakeup", "alert", "ordre"):
         return ""
-    return f'<span class="pastille reveil">{e(declencheur(d.get("declencheur")))}</span> '
+    return f'<span class="pastille reveil">{e(declencheur(d.get("declencheur")))}</span>{avec} '
+
+
+def _news_titre(n: dict[str, Any]) -> str:
+    return " ; ".join([*(f"après {r['label']}" for r in n["releases"]), *(a["title"] for a in n["annonces"])])
+
+
+NATURES = {
+    "incident": "incident",
+    "maintenance": "maintenance",
+    "delisting": "retrait de contrat",
+    "contract_state": "état du contrat",
+}
+STATUTS = {
+    "investigating": "en analyse", "identified": "cause identifiée", "monitoring": "sous surveillance", "resolved": "résolu",
+    "postmortem": "analyse terminée", "scheduled": "programmée", "in_progress": "en cours", "verifying": "en vérification",
+    "completed": "terminée", "abnormal": "anormal", "normal": "normal", "unlisted": "retiré de la cote",
+}  # fmt: skip
+CLOS = {"resolved", "postmortem", "completed", "normal", "unlisted"}
+
+
+def _annonce(a: dict[str, Any]) -> str:
+    statut = STATUTS.get(a["status"], a["status"] or "statut inconnu")
+    ton = "neutre" if a["status"] in CLOS else ("info" if a["kind"] == "maintenance" else "warn")
+    impact = IMPACTS_FR.get(a["impact"])
+    morceaux = [f'<span class="pastille {ton}">{e(statut)}</span>']
+    if impact and a["status"] not in CLOS:
+        morceaux.append(
+            f'<span class="pastille {"perte-bg" if a["impact"] in ("major", "critical") else "warn"}">impact {impact}</span>'
+        )
+    plage = ""
+    if a["starts_ts"] and a["ends_ts"]:
+        plage = f"du {when(a['starts_ts'], annee=False)} au {when(a['ends_ts'], annee=False)}"
+    elif a["starts_ts"]:
+        plage = f"à partir du {when(a['starts_ts'], annee=False)}"
+    elif a["ends_ts"]:
+        plage = f"jusqu’au {when(a['ends_ts'], annee=False)}"
+    sous = [e(NATURES.get(a["kind"], "annonce"))]
+    if plage:
+        sous.append(e(plage))
+    if a["instruments"]:
+        sous.append(e("contrats : " + ", ".join(a["instruments"])))
+    sous.append(f"mis à jour {quand(a['maj_ts'], annee=False)}")
+    lien = f' <a href="{e(a["url"])}" rel="noopener noreferrer">Lien Kraken</a>' if a["url"] else ""
+    return (
+        f'<li class="ligne sans-detail actu"><span class="actu-titre">{e(a["title"])}</span> {" ".join(morceaux)}'
+        f'<span class="muted actu-sous">{" · ".join(sous)}{lien}</span></li>'
+    )
+
+
+def actualites_block(perp: dict[str, Any]) -> str:
+    """Le calendrier macro des 7 prochains jours et les annonces de Kraken sur les dérivés des 7 derniers jours."""
+    act = perp.get("actualites")
+    if act is None:
+        return ""
+    lignes = []
+    cal = act.get("calendrier")
+    if cal is not None:
+        if cal:
+            for c in cal:
+                rappel = (
+                    ' <span class="pastille reveil">rappelle les IA 3 min après</span>' if c["rappel"] else ""
+                )
+                lignes.append(
+                    f'<li class="ligne sans-detail actu"><span class="actu-titre">{e(c["label"])}</span> <span class="muted">{quand(c["ts"], annee=False)}</span>{rappel}</li>'
+                )
+            cal_html = (
+                f'<h3>Prochaines publications macro</h3><ul class="decisions actus">{"".join(lignes)}</ul>'
+            )
+        else:
+            cal_html = '<h3>Prochaines publications macro</h3><p class="muted">Aucune publication macro dans les 7 prochains jours.</p>'
+    else:
+        cal_html = ""
+    ann = act.get("annonces") or []
+    if ann:
+        ann_html = (
+            f'<h3>Annonces de Kraken</h3><ul class="decisions actus">{"".join(_annonce(a) for a in ann)}</ul>'
+        )
+    else:
+        ann_html = '<h3>Annonces de Kraken</h3><p class="muted">Aucune annonce de Kraken sur les dérivés depuis 7 jours.</p>'
+    return (
+        '<section aria-labelledby="titre-actualites"><h2 id="titre-actualites">Actualités <span class="h-note">sources officielles seulement</span></h2>'
+        f'{cal_html}{ann_html}<p class="muted"><a href="methode.html#m-actualites">Ce que voient les IA</a></p></section>'
+    )
 
 
 def _resume(actions: list[dict[str, Any]]) -> str:
@@ -437,6 +542,7 @@ def index_page(data: dict[str, Any]) -> str:
   <li><strong>Gelé</strong> : plus d’ouverture pendant 24{NBSP}h après une perte de 5{NBSP}% en un jour.</li>
   </ul></details>
 </section>
+{actualites_block(perp)}
 {_dernieres(perp)}
 """
     ch = perp["chart"]
@@ -500,6 +606,7 @@ def conseils_page(data: dict[str, Any]) -> str:
   <li><strong>Levier</strong> : montant engagé divisé par la valeur du portefeuille. 10 au plus pour un conseil.</li>
   </ul></details>
 </section>
+{actualites_block(perp)}
 {_dernieres(perp, "Dernières décisions des conseils")}
 {methode_conseils(data)}
 """
@@ -973,6 +1080,8 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 </dl>
 <h3>Les témoins</h3>
 <dl class="regles">{temoins}</dl>
+<h3 id="m-actualites">Actualités</h3>
+<p>Les IA ne voient que des actualités officielles et structurées : la page d’état des dérivés de Kraken et l’état de ses contrats, relevés toutes les 5{NBSP}min, et le calendrier macro américain publié d’avance. Jamais d’articles ni de réseaux sociaux, et jamais les chiffres publiés : seule la réaction du marché leur parvient. Une nouvelle annonce de Kraken, ou une publication FOMC, CPI, emploi (NFP) ou PCE vieille de 3{NBSP}min, rappelle les IA.</p>
 <h3>Ce que l’IA peut consulter</h3>
 <p>Un instantané du compte et des 6 marchés, puis 4 appels au plus parmi 6 outils en lecture seule, figés au début de la ronde (ni web, ni donnée postérieure) :</p>
 <ul class="liste-simple">{outils}</ul>

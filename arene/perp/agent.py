@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, f
 
 from arene.perp.riskd import PerpIntent
 
-PROMPT_PATH = Path(__file__).parent / "prompt" / "v7.md"
+PROMPT_PATH = Path(__file__).parent / "prompt" / "v8.md"
 MCP_SERVER = "arene"
 TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
 MAX_TOOL_CALLS = 4

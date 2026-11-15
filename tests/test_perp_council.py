@@ -214,7 +214,7 @@ def test_a_council_round_end_to_end(tmp_path):
     assert d["prompt_sha256"] == member_sha256(PRESIDENT) and d["cost_uusd"] == 11 * 12346
     assert d["council"]["members_ok"] == 10 and d["council"]["members_failed"] == []
     assert d["council"]["president_model"] == "claude-haiku-5-5" and d["council"]["name"] == "Conseil Haiku"
-    assert d["council"]["members_model"] == "claude-haiku-5-5" and d["council"]["prompts_version"] == "v2"
+    assert d["council"]["members_model"] == "claude-haiku-5-5" and d["council"]["prompts_version"] == "v3"
     assert d["model_requested"] == "claude-haiku-5-5"
     assert d["council"]["config_sha256"] == COUNCIL.sha256
     # the opinions are journaled before the decision, the tool calls carry their member

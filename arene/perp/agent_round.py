@@ -41,6 +41,7 @@ from arene.perp.ledger import (
     to_eur,
 )
 from arene.perp.mcp_server import eur, pct_e12_hour, qty, usd
+from arene.perp.news import NewsConfig
 from arene.perp.policy import AGGRESSIVE, PerpPolicy
 from arene.perp.riskd import PerpMarketView, evaluate_perp
 from arene.perp.round_data import build_round
@@ -182,6 +183,49 @@ def rules_text(policy: Mapping[str, Any] | None) -> str:
     )
 
 
+NEWS_KINDS_FR = {
+    "incident": "incident",
+    "maintenance": "maintenance",
+    "delisting": "retrait de contrat",
+    "contract_state": "état du contrat",
+}
+NEWS_NOTE = (
+    "Annonces officielles de Kraken (page de statut des dérivés, état de chaque contrat), relevées toutes les "
+    "5 minutes, et calendrier des publications américaines. Les chiffres publiés (CPI, emploi...) ne sont pas "
+    "fournis : seule la réaction du marché les montre."
+)
+
+
+def news_snapshot(news: Mapping[str, Any], now: int) -> dict[str, Any]:
+    """The `actualites` block (docs/SPEC-PERP-ACTUALITES.md §5): French keys, times in UTC seconds."""
+    return {
+        "calendrier_macro": [
+            {
+                "publication": e["label"],
+                "type": e["kind"],
+                "heure_utc": e["ts"],
+                "dans_min": (e["ts"] - now) // 60,
+                "te_rappelle": e["wakes"],
+            }
+            for e in news.get("calendar", [])
+        ],
+        "annonces_kraken": [
+            {
+                "titre": a["title"],
+                "type": NEWS_KINDS_FR.get(a["kind"], a["kind"]),
+                "statut": a["status"],
+                "impact": a["impact"],
+                "debut_utc": a.get("starts_ts"),
+                "fin_utc": a.get("ends_ts"),
+                "vue_a_utc": a["seen_ts"],
+                "contrats": a.get("instruments", []),
+            }
+            for a in news.get("announcements", [])
+        ],
+        "note": NEWS_NOTE,
+    }
+
+
 def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | None) -> dict[str, Any]:
     """The first message: compact (the tools give the detail), with what the prompt promises: positions and
     their unrealized P&L, equity, leverage, open interest."""
@@ -238,7 +282,7 @@ def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | No
         for h in data["history"]
         if h.get("actions")
     ][-3:]
-    return {
+    out = {
         "heure_utc": now,
         "appel": {"type": kind, "declencheur": trigger},
         "compte": {
@@ -258,6 +302,9 @@ def snapshot(data: Mapping[str, Any], kind: str, trigger: Mapping[str, Any] | No
         "tes_conditions_d_invalidation": invalidations,
         "regles": rules_text(data.get("policy")),
     }
+    if data.get("news") is not None:
+        out["actualites"] = news_snapshot(data["news"], now)
+    return out
 
 
 def _blocked(entries_blocked: bool | Callable[[], bool]) -> bool:
@@ -336,6 +383,7 @@ def prepare_agent_round(
     extra: Mapping[str, Any] | None = None,
     quota: Mapping[str, int] | None = None,
     snapshot_extra: Mapping[str, Any] | None = None,
+    news: NewsConfig | None = None,
 ) -> RoundContext | AgentResult:
     """Freezes and journals the round's data (`round_data`); an AgentResult with an error if this portfolio
     already played this round. Thread-free: the caller may run `decider.decide` in parallel afterwards.
@@ -355,7 +403,7 @@ def prepare_agent_round(
     out_dir = var / "rounds" / str(round_id) / name.replace(":", "_")
     data, sha = build_round(
         out_dir, store, events, view, acc, counters, specs, policy, sim.params, round_id, now_ts,
-        config_sha256, _blocked(entries_blocked), quota=quota,
+        config_sha256, _blocked(entries_blocked), quota=quota, news=news,
     )  # fmt: skip
     snap = {**snapshot(data, kind, trigger), **dict(snapshot_extra or {})}
     message = decider.message(snap)

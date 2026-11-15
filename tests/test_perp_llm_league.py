@@ -1081,7 +1081,7 @@ def test_the_prompt_states_the_cadence_and_the_wakeup_bounds():
     from arene.perp.agent import PROMPT_PATH, WAKEUP_MAX_MIN, WAKEUP_MIN_MIN
 
     text = PROMPT_PATH.read_text(encoding="utf-8")
-    assert PROMPT_PATH.name == "v7.md"
+    assert PROMPT_PATH.name == "v8.md"
     assert f"toutes les {CONFIG.cadence_min} minutes" in text
     assert f"de {WAKEUP_MIN_MIN} à {WAKEUP_MAX_MIN}" in text and WAKEUP_MAX_MIN == 60
     assert "souvent la meilleure" not in text  # the bias against trading is gone (the owner, 13/11)

@@ -1,0 +1,23 @@
+# Les actualités de la ligue dérivés (docs/SPEC-PERP-ACTUALITES.md) : les annonces officielles de Kraken et le
+# calendrier macro. Aucun texte libre du web n'atteint les modèles. Haché : son empreinte est dans chaque dossier
+# de ronde. `enabled = false` les retire de l'instantané et des réveils (le collecteur cesse de les relever).
+enabled = true
+
+# Le calendrier macro (dates publiées à l'avance), dans ce dossier.
+calendar = "calendrier-macro.toml"
+# Les publications qui rappellent les modèles, `calendar_wake_after_min` après leur heure (les bougies 1 min de la
+# réaction sont alors closes). Les autres (PPI, PIB) ne sont que montrées.
+calendar_wake_kinds = ["fomc", "cpi", "nfp", "pce"]
+calendar_wake_after_min = 3
+# Ce que l'instantané montre du calendrier : les 72 h à venir et les 6 h passées.
+calendar_ahead_h = 72
+calendar_past_h = 6
+
+# Les annonces de Kraken (relevées par le collecteur toutes les 5 min).
+status_api = "https://status.kraken.com/api/v2/"
+# Le groupe « Kraken Derivatives » de la page de statut (relevé le 15/11/2026 ; « US Derivatives » est exclu).
+derivatives_group_id = "77r52jbmww8v"
+instruments_status_url = "https://futures.kraken.com/derivatives/api/v3/instruments/status"
+# Une annonce terminée reste dans l'instantané 24 h ; une annonce en cours y reste tant qu'elle dure.
+announcements_window_h = 24
+max_items = 8
