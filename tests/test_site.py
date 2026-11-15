@@ -523,8 +523,17 @@ def test_version_publique_sans_texte_operateur_avec_404(site, tmp_path):
     page404 = (out / "404.html").read_text(encoding="utf-8")
     assert 'href="/arene/assets/site.css"' in page404 and "Cette page n’existe pas" in page404
     assert not (out_prive / "404.html").exists()  # sans racine, pas de 404 (le site privé n'en a pas besoin)
-    # Épuré : pas de gros titre visible ; le h1 reste pour les lecteurs d'écran.
-    assert '<h1 class="visuellement-cache">' in index
+    # Tableau des scores : un h1 d'une phrase (pas de gros titre), puis le classement et la courbe.
+    assert '<h1 id="titre-page" class="titre-page">' in index and 'class="scores"' in index
+    # Version publique indexée (décision du 15/11), avec aperçu de partage ; le site privé reste en noindex.
+    assert '<meta name="robots" content="index, follow">' in index
+    assert '<meta property="og:image" content="https://example.github.io/arene/assets/apercu.png">' in index
+    assert '<link rel="canonical" href="https://example.github.io/arene/">' in index
+    assert (out / "assets" / "apercu.png").stat().st_size > 10_000
+    assert "https://example.github.io/arene/methode.html" in (out / "sitemap.xml").read_text(encoding="utf-8")
+    prive = (out_prive / "index.html").read_text(encoding="utf-8")
+    assert "noindex" in prive and "og:image" not in prive
+    assert "SIMULÉ" in index and "SIMULÉ" in page404
 
 
 def test_modele_configure_pas_encore_ouvert(site):

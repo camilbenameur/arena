@@ -195,7 +195,7 @@
     var font = "12px " + css("--sans");
     var opts = {
       width: width,
-      height: compact ? 280 : 320,
+      height: compact ? 280 : (host.closest(".une-courbe") ? 380 : 320),
       series: series,
       legend: { show: false },
       padding: [12, compact ? 112 : 190, 0, 0],

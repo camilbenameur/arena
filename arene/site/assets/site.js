@@ -50,3 +50,19 @@
   maj();
   setInterval(maj, 60000);
 })();
+
+/* Une ancre vers un passage replié (ex. « Ses règles » → #m-conseils) ouvre le pli qui le contient. */
+(function () {
+  "use strict";
+  function ouvrir() {
+    var id = decodeURIComponent(location.hash.slice(1));
+    var cible = id && document.getElementById(id);
+    if (!cible) return;
+    for (var n = cible.parentElement; n; n = n.parentElement) {
+      if (n.tagName === "DETAILS") n.open = true;
+    }
+    cible.scrollIntoView();
+  }
+  window.addEventListener("hashchange", ouvrir);
+  if (location.hash) ouvrir();
+})();

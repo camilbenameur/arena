@@ -15,9 +15,9 @@ from typing import Any
 
 from arene.config import Config
 from arene.risk.policy import Policy
+from arene.site import accueil, render, render_perp
 from arene.site import data as site_data
 from arene.site import perp as site_perp
-from arene.site import render, render_perp
 
 HERE = Path(__file__).resolve().parent
 VENDOR = HERE / "vendor"
@@ -49,6 +49,7 @@ def build(
     journal_path, out_dir = Path(journal_path), Path(out_dir)
     data = site_data.compute(journal_path, config, policy, now_ts)
     data["public"] = public
+    data["racine"] = racine or "/"
     pj = site_perp.perp_journal_path(journal_path) if perp_journal is None else Path(perp_journal)
     try:
         data["perp"] = site_perp.compute(pj, data["generated_ts"])
@@ -91,7 +92,8 @@ def build(
 
         perp = data["perp"]
         if perp:
-            _write(tmp / "index.html", render_perp.index_page(data))
+            _write(tmp / "index.html", accueil.accueil_page(data))
+            _write(tmp / "derives.html", render_perp.index_page(data))
             _write(tmp / "comptant.html", render.index_page(data))
             for p in perp["portfolios"]:
                 _write(tmp / "derives" / f"{p['slug']}.html", render_perp.portfolio_page(data, p))
@@ -108,6 +110,15 @@ def build(
         _write(tmp / "methode.html", render.methode_page(data))
         if racine is not None:
             _write(tmp / "404.html", render.page_404(data, racine))
+        if public and racine is not None:  # version publique indexée (décision du propriétaire du 15/11) : plan du site et robots
+            base = f"{render.SITE_HOTE}{racine}"
+            pages = sorted(
+                str(f.relative_to(tmp)) for f in tmp.rglob("*.html") if f.name != "404.html"
+            ) + [f"modele/{p['slug']}.html" for p in data["portfolios"]]
+            pages = sorted({("" if x == "index.html" else x) for x in pages})
+            urls = "".join(f"<url><loc>{base}{x}</loc></url>" for x in pages)
+            _write(tmp / "sitemap.xml", f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n')
+            _write(tmp / "robots.txt", f"User-agent: *\nAllow: /\nSitemap: {base}sitemap.xml\n")
         for p in data["portfolios"]:
             focus_chart = _model_chart(data, p)
             _write(tmp / "modele" / f"{p['slug']}.html", render.model_page(data, p, focus_chart))

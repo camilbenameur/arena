@@ -38,7 +38,7 @@ def description(data: dict[str, Any]) -> str:
     )
 AVERTISSEMENT = "Expérience en simulation, pas un conseil en investissement. Chiffres avant impôt."
 CSP = (
-    "default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'none'; "
+    "default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'self'; "
     "connect-src 'none'; base-uri 'none'; form-action 'none'"
 )
 # Pages dérivés avec prix en direct : le navigateur lit le flux public de Kraken Futures, rien d'autre.
@@ -171,7 +171,7 @@ def json_inline(obj: Any) -> str:
 
 
 def nom_court(name: str) -> str:
-    for pre in ("Claude ", "Témoin "):
+    for pre in ("Claude ", "Témoin ", "Conseil "):
         name = name.removeprefix(pre)
     name = name.replace(" (adapté)", "")
     return name[:1].upper() + name[1:]
@@ -185,80 +185,91 @@ NON_APPLICABLE = '<span class="muted" aria-hidden="true">—</span><span class="
 # ---------------------------------------------------------------------------
 
 
-def layout(
-    *, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "", ligue: str = "spot",
-    direct: bool = False,
-) -> str:
-    """`ligue` choisit la rangée de portefeuilles de l'en-tête : « perp » (ligue dérivés), « conseils » (ligue des
-    conseils) ou « spot » (comptant)."""
-    perp = data.get("perp")
-    if ligue == "conseils" and not (perp and perp.get("conseils")):
-        ligue = "perp"
-    if ligue == "perp" and not perp:
-        ligue = "spot"
-    if ligue == "conseils":
-        pfs = perp["conseils"]["portfolios"]
-    else:
-        pfs = perp["portfolios"] if ligue == "perp" else data["portfolios"]
+SITE_HOTE = "https://example.github.io"  # hôte de la version publique (GitHub Pages)
+NOM_SITE = "L’arène des IA"
+DESCRIPTION_SITE = (
+    "Des modèles Claude tradent de l’argent fictif sur les prix réels de Kraken, en simulation, face à des "
+    "stratégies sans IA : classement en direct, chaque décision expliquée."
+)
 
-    def lien(p: dict[str, Any]) -> str:
-        courant = ' aria-current="page"' if active == p["id"] else ""
-        dossier = "modele" if ligue == "spot" else ("conseils" if p["kind"] == "conseil" else "derives")
-        return f'<a href="{root}{dossier}/{e(p["slug"])}.html"{courant}>{e(nom_court(p["name"]))}</a>'
 
-    llms = "".join(lien(p) for p in pfs if p["kind"] == "llm")
-    conseils = "".join(lien(p) for p in pfs if p["kind"] == "conseil")
-    tems = "".join(lien(p) for p in pfs if p["kind"] not in ("llm", "conseil"))
-    groupes = ""
-    if llms:
-        groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Modèles d’IA</span>{llms}</div>'
-    if conseils:  # ligue des conseils : les conseils agressifs, puis le témoin de référence
-        groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Conseils</span>{conseils}</div>'
-    if tems:
-        groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Témoins</span>{tems}</div>'
+ALT_APERCU = {
+    "apercu.png": "L’arène, des IA qui tradent, simulé : trois ligues, Conseils d’IA, IA seules et Comptant, chacune face à un témoin sans IA.",
+    "apercu-conseils.png": "Schéma d’un conseil : neuf conseillers Haiku, l’avocat du diable, puis un président Haiku ou Opus. Simulé.",
+}
+
+
+def nav_ligues(root: str, active: str, perp: dict[str, Any] | None) -> str:
     def cur(x: str) -> str:
         return ' aria-current="page"' if active == x else ""
 
-    if perp:
-        nav_top = (
-            f'<a href="{root}index.html"{cur("index")}>Dérivés</a>'
-            + (f'<a href="{root}conseils.html"{cur("conseils")}>Conseils</a>' if perp.get("conseils") else "")
-            + f'<a href="{root}comptant.html"{cur("comptant")}>Comptant</a>'
-            f'<a href="{root}methode.html"{cur("methode")}>Méthode</a>'
-        )
-    else:
-        nav_top = f'<a href="{root}index.html"{cur("index")}>Vue d’ensemble</a><a href="{root}methode.html"{cur("methode")}>Méthode</a>'
-    n_llm = sum(1 for p in data["portfolios"] if p["kind"] == "llm")
-    accroche = (
-        f"{n_llm}{NBSP}IA gèrent chacune {eur(data['method']['capital_ueur'], decimals=0)} fictifs, "
-        "comparées à des témoins sans IA"
-        if n_llm > 1 else "Une IA gère un portefeuille fictif, comparée à des témoins sans IA"
+    if not perp:
+        return f'<a href="{root}index.html"{cur("index")}>Vue d’ensemble</a><a href="{root}methode.html"{cur("methode")}>Méthode</a>'
+    return (
+        (f'<a href="{root}conseils.html"{cur("conseils")}>Conseils</a>' if perp.get("conseils") else "")
+        + f'<a href="{root}derives.html"{cur("derives")}>IA seules</a>'
+        + f'<a href="{root}comptant.html"{cur("comptant")}>Comptant</a>'
+        + f'<a href="{root}methode.html"{cur("methode")}>Méthode</a>'
     )
-    if ligue == "perp":
-        accroche = f"Des IA gèrent chacune {eur(1_000_000_000, decimals=0)} fictifs en contrats perpétuels, face à des témoins sans IA"
-    if ligue == "conseils":
-        accroche = f"Des conseils d’IA gèrent chacun {eur(1_000_000_000, decimals=0)} fictifs en contrats perpétuels, avec un mandat agressif"
+
+
+def layout(
+    *, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "", ligue: str = "spot",
+    direct: bool = False, chemin: str | None = None, desc: str | None = None, titre_complet: str | None = None,
+    image: str = "apercu.png",
+) -> str:
+    """Gabarit commun. `chemin` (relatif à la racine du site, ex. « conseils.html ») donne l'adresse canonique et
+    celle de l'aperçu de partage sur la version publique ; `desc` la méta-description de la page."""
+    perp = data.get("perp")
     vm = data["venue_mode"]
     if vm == "paper":
-        bandeau = ""  # l'avertissement de simulation est au pied de chaque page (AVERTISSEMENT) et dans la méthode
+        etiquette = '<span class="simule" title="Argent fictif : aucune somme réelle n’est engagée">SIMULÉ<span class="simule-sous"> · argent fictif</span></span>'
+        bandeau = ""
     else:
+        etiquette = ""
         bandeau = (
             f'<p class="bandeau reel"><strong>{e(BANDEAU_REEL)}</strong>'
             f' <span class="venue">venue_mode{NBSP}: {e(vm)}</span></p>'
         )
+    public = bool(data.get("public"))
+    racine = data.get("racine") or "/"
+    page_titre = titre_complet or f"{title} · {NOM_SITE}"
+    desc = desc or (DESCRIPTION_SITE if perp else description(data))
+    partage = ""
+    if public and chemin is not None:
+        url = f"{SITE_HOTE}{racine}{chemin}"
+        image = f"{SITE_HOTE}{racine}assets/{image}"
+        partage = f"""<link rel="canonical" href="{e(url)}">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="fr_FR">
+<meta property="og:site_name" content="{e(NOM_SITE)}">
+<meta property="og:title" content="{e(page_titre)}">
+<meta property="og:description" content="{e(desc)}">
+<meta property="og:url" content="{e(url)}">
+<meta property="og:image" content="{e(image)}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{e(ALT_APERCU.get(image, ALT_APERCU["apercu.png"]))}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{e(page_titre)}">
+<meta name="twitter:description" content="{e(desc)}">
+<meta name="twitter:image" content="{e(image)}">
+"""
+    robots = "index, follow" if public else "noindex, nofollow"
     return f"""<!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<meta name="robots" content="noindex, nofollow">
+<meta name="robots" content="{robots}">
 <meta name="referrer" content="no-referrer">
 <meta http-equiv="Content-Security-Policy" content="{CSP_DIRECT if direct else CSP}">
-<title>{e(title)} · Arène de trading</title>
-<meta name="description" content="{e(description(data))}">
+<title>{e(page_titre)}</title>
+<meta name="description" content="{e(desc)}">
+{partage}<link rel="icon" href="{root}assets/icone.svg" type="image/svg+xml">
 <link rel="preload" href="{root}fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="{root}fonts/ibm-plex-serif-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="{root}fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{root}vendor/uPlot.min.css">
 <link rel="stylesheet" href="{root}assets/site.css">
 </head>
@@ -267,18 +278,17 @@ def layout(
 <header class="entete">
   {bandeau}
   <div class="wrap entete-haut">
-    <p class="marque-bloc"><a class="marque" href="{root}index.html">L’arène <span class="marque-sous">de trading</span></a>
-    <span class="accroche">{e(accroche)}</span></p>
-    <nav class="nav" aria-label="Pages principales">{nav_top}</nav>
+    <a class="marque" href="{root}index.html">L’arène<span class="marque-sous">· des IA qui tradent</span></a>
+    {etiquette}
+    <nav class="nav" aria-label="Pages principales">{nav_ligues(root, active, perp)}</nav>
   </div>
-  <nav class="wrap nav-modeles" aria-label="Portefeuilles">{groupes}</nav>
 </header>
 <main class="wrap" id="contenu" tabindex="-1">
 {typo_fr(body)}
 </main>
 <footer class="pied wrap">
-  <p>{typo_fr(e(AVERTISSEMENT))}</p>
-  <p>Mis à jour le {quand(data["generated_ts"])}</p>
+  <p><strong>Simulation.</strong> {typo_fr(e(AVERTISSEMENT))}</p>
+  <p>Mis à jour le {quand(data["generated_ts"])} · <a href="{root}methode.html">Méthode et journal vérifiable</a></p>
 </footer>
 <script src="{root}assets/site.js"></script>
 {scripts}
@@ -764,20 +774,29 @@ def index_page(data: dict[str, Any]) -> str:
     elif data["distribution_note"]:
         lecture.insert(1, f"<li><strong>Rang vs hasard</strong> : {e(data['distribution_note'])}.</li>")
     depuis = "depuis le début de la saison, " if data.get("rodage") else ""
-    body = f"""
-<h1 class="visuellement-cache">{e(description(data))}</h1>
-<section class="etat" aria-label="État de l’expérience">
-  {_saison_tete(data)}
+    from arene.site import accueil as A
+
+    n_llm = len(llms)
+    capital = eur(m["capital_ueur"], decimals=0)
+    titre = (
+        f"{NOMBRES_MIN.get(n_llm, str(n_llm)).capitalize()} IA Claude achètent et revendent des cryptos avec {capital} fictifs chacune, sans levier."
+        if n_llm > 1 else f"Une IA Claude achète et revend des cryptos avec {capital} fictifs."
+    )
+    chapo = (
+        "Elles décident toutes les 4 h sur les prix réels de Kraken, frais compris, sans pouvoir parier à la baisse. "
+        "Des règles fixes sans IA servent de témoins, dont le panier acheté et gardé."
+    )
+    etat = f"""{_saison_tete(data)}
   {_avancee(data, verdict) if nc else f'<p class="avancee"><strong>{e(verdict)}</strong></p>'}
   {_releve(data)}
-  {_a_faire(data, llms)}
-</section>
-<section class="courbes" aria-labelledby="titre-courbes">
-  <h2 id="titre-courbes">Rendement net <span class="h-note">{depuis}frais compris</span></h2>
-  {_chart_block(data["chart"])}
-</section>
+  {_a_faire(data, llms)}"""
+    body = A.une(
+        titre=titre, chapo=chapo,
+        classement=A.scores(A._spot_rows(data), label="Classement de la ligue comptant, rendement net") + f'<div class="etat etat-une">{etat}</div>',
+        courbe=_chart_block(data["chart"]),
+    ) + f"""
 <section aria-labelledby="titre-comparatif">
-  <h2 id="titre-comparatif">Portefeuilles</h2>
+  <h2 id="titre-comparatif">Tous les portefeuilles <span class="h-note">{depuis}frais compris</span></h2>
   {overview_table(data)}
   <details class="lecture"><summary>Comment lire ce tableau</summary><ul class="liste-simple">{"".join(lecture)}</ul></details>
   {_rodage(data)}
@@ -785,7 +804,9 @@ def index_page(data: dict[str, Any]) -> str:
 """
     return layout(
         title="Ligue comptant" if data.get("perp") else "Vue d’ensemble", body=body, root="",
-        active="comptant" if data.get("perp") else "index", data=data,
+        active="comptant" if data.get("perp") else "index", data=data, chemin="comptant.html" if data.get("perp") else "",
+        titre_complet="Ligue comptant : des IA Claude achètent des cryptos avec de l’argent fictif",
+        desc=description(data),
         scripts=_chart_scripts("", data["chart"], None) if _courbe_visible(data["chart"]) else "",
     )  # fmt: skip
 
@@ -796,7 +817,7 @@ def page_404(data: dict[str, Any], racine: str) -> str:
 <section aria-labelledby="titre-404">
   <h1 id="titre-404">Cette page n’existe pas</h1>
   <p class="chapo">L’adresse est peut-être mal recopiée, ou la page a été renommée. Le journal, lui, n’a rien perdu.</p>
-  <p class="actions-404"><a class="bouton" href="{r}index.html">Revenir à la vue d’ensemble</a> <a href="{r}methode.html">Lire la méthode</a></p>
+  <p class="actions-404"><a class="bouton" href="{r}index.html">Revenir à l’accueil</a> <a href="{r}methode.html">Lire la méthode</a></p>
 </section>
 """.replace("{r}", e(racine))
     return layout(title="Page introuvable", body=body, root=racine, active="", data=data, ligue="perp")
@@ -1079,7 +1100,7 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
 </section>
 """
     return layout(
-        title=p["name"], body=body, root="../", active=p["id"], data=data,
+        title=p["name"], body=body, root="../", active=p["id"], data=data, chemin=f"modele/{p['slug']}.html",
         scripts=_chart_scripts("../", baseline_chart, p["id"]) if _courbe_visible(baseline_chart) else "",
     )  # fmt: skip
 
@@ -1278,7 +1299,10 @@ Positions valorisées au dernier bid.</p></section>
 <section class="avis" aria-labelledby="m-avertissement"><h2 id="m-avertissement">Avertissement</h2>
 <p><strong>Ce n’est pas un conseil en investissement.</strong> Expérience personnelle en simulation, sans recommandation ni promesse de rendement. Investir dans des crypto-actifs comporte un risque de perte totale.</p></section>
 """
-    return layout(title="Méthode", body=body, root="", active="methode", data=data, ligue="perp")
+    return layout(
+        title="Méthode", body=body, root="", active="methode", data=data, ligue="perp", chemin="methode.html",
+        desc="Comment l’arène fonctionne : prix réels de Kraken, ordres simulés avec frais, garde-fous, témoins sans IA et journal haché vérifiable.",
+    )
 
 
 def _methode_perp(data: dict[str, Any]) -> str:

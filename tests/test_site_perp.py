@@ -50,10 +50,15 @@ def texte(html: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
 
 
-def test_derives_au_premier_plan_et_comptant_en_second(site):
-    idx = lire(site, "index.html")
-    assert "<title>Ligue dérivés" in idx
-    assert 'href="comptant.html"' in idx and (site / "comptant.html").exists()
+def test_accueil_des_trois_ligues_puis_une_page_par_ligue(site):
+    """Décision du propriétaire du 15/11 : l'accueil présente les trois ligues ; les IA seules (dérivés) passent sur derives.html."""
+    acc = lire(site, "index.html")
+    for page in ("conseils.html", "derives.html", "comptant.html"):
+        assert f'href="{page}"' in acc and (site / page).exists()
+    assert acc.count('class="ligue-carte"') == 3 and 'class="scores mini"' in acc
+    idx = lire(site, "derives.html")
+    assert "<title>Ligue des IA seules" in idx
+    assert 'href="comptant.html"' in idx
     assert "Ligue comptant" in lire(site, "comptant.html")
     for pf in F.LLMS + F.TEMOINS:
         assert (site / "derives" / f"{P.slug(pf)}.html").exists()
@@ -83,7 +88,7 @@ def test_decision_complete_justification_invalidation_outils_verdict_execution(s
     assert F.FABLE_RAISON.split(":")[0] in t
     assert "Invalide si" in t and "3 300 $" in t
     assert "A consulté indicateurs ETH 4h, funding ETH" in t
-    assert "accepté" in t and "vente" in t and "Ferme ETH" in t
+    assert "accepté" in t and "vente" in t and "Ferme son pari sur l’ether" in t
 
 
 def test_refus_du_garde_fou_en_clair(site):
@@ -235,7 +240,7 @@ def test_prix_en_direct_estimation_cote_navigateur(site):
 
     from arene.site.render import CSP, CSP_DIRECT
 
-    idx = lire(site, "index.html")
+    idx = lire(site, "derives.html")
     assert f'content="{CSP_DIRECT}"' in idx and "connect-src wss://futures.kraken.com" in CSP_DIRECT
     assert (site / "assets" / "direct.js").exists() and 'assets/direct.js"></script>' in idx
     data = json.loads(re.search(r'<script id="direct-data" type="application/json">(.*?)</script>', idx).group(1))
@@ -306,20 +311,19 @@ def test_derives_sans_les_conseils(site):
     d = _perp(site)
     assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["temoin"] * 3
     assert not any(s["kind"] == "conseil" for s in d["chart"]["series"])
-    idx = lire(site, "index.html")
+    idx = lire(site, "derives.html")
     assert "Conseil" not in texte(re.search(r"<tbody.*</table>", idx, flags=re.DOTALL).group(0))
-    assert len(re.findall(r"<tbody[^>]*>.*?</tbody>", idx, flags=re.DOTALL)) == 2  # IA, témoins
-    verdict = texte(re.search(r'<p class="avancee">.*?</p>', idx, flags=re.DOTALL).group(0))
-    assert "En tête des IA : Claude" in verdict and "Conseil" not in verdict and "hors catégorie" not in verdict
-    groupes = re.findall(r'<div class="nav-groupe">(.*?)</div>', idx, flags=re.DOTALL)
-    assert len(groupes) == 2 and not any("Conseil" in g and "nav-titre" in g and "Conseils<" in g for g in groupes)
+    comparatif = re.search(r'<table class="tableau comparatif.*?</table>', idx, flags=re.DOTALL).group(0)
+    assert len(re.findall(r"<tbody[^>]*>.*?</tbody>", comparatif, flags=re.DOTALL)) == 2  # IA, témoins
+    classement = texte(re.search(r'<ol class="scores".*?</ol>', idx, flags=re.DOTALL).group(0))
+    assert "Claude" in classement and "Conseil" not in classement and "Témoin sans IA" in classement
     assert "trait--conseil" not in idx and "Agressif" not in idx and "un conseil agressif" not in texte(idx)
     for nom in ("council-perp-haiku", "council-perp-opus"):
         assert not (site / "derives" / f"{nom}.html").exists()
     dj = lire(site, "data/derives.json")
     assert "council-perp" not in dj and "Conseil" not in dj
     # La landing renvoie vers l'autre ligue, à côté du lien Comptant.
-    assert 'href="conseils.html"' in idx and "Ligue des conseils" in texte(idx)
+    assert 'href="conseils.html"' in idx and "ligue des conseils" in texte(idx)
 
 
 def test_ligue_des_conseils_tableau_classement_et_navigation(site):
@@ -329,8 +333,9 @@ def test_ligue_des_conseils_tableau_classement_et_navigation(site):
     assert [s["id"] for s in d["chart"]["series"]] == [p["id"] for p in d["portfolios"]]
     page = lire(site, "conseils.html")
     t = texte(page)
-    assert "<title>Ligue des conseils" in page and "Ligue des conseils" in t
-    corps = re.findall(r"<tbody[^>]*>.*?</tbody>", page, flags=re.DOTALL)
+    assert "Haiku ou Opus à la présidence" in page and "Seul leur président change" in t
+    comparatif = re.search(r'<table class="tableau comparatif.*?</table>', page, flags=re.DOTALL).group(0)
+    corps = re.findall(r"<tbody[^>]*>.*?</tbody>", comparatif, flags=re.DOTALL)
     assert len(corps) == 2 and "Conseil Haiku" in corps[0] and "Conseil Opus" in corps[0] and "Témoin panier 1x" in corps[1]
     assert P.MARQUE_CONSEIL in texte(corps[0])
     assert "10 Haiku · président Haiku" in texte(_ligne_tableau(page, "Conseil Haiku"))
@@ -338,11 +343,11 @@ def test_ligue_des_conseils_tableau_classement_et_navigation(site):
     assert "hors règle 2x" in texte(_ligne_tableau(page, "Conseil Opus"))
     assert 'href="conseils/council-perp-opus.html"' in page and 'href="derives/benchmark-perp-basket-1x.html"' in page
     assert "Claude Haiku 5.5" not in "".join(corps) and "Témoin tendance" not in t  # ni les IA ni les autres témoins
-    # L'expérience en deux phrases, puis la courbe aux deux teintes, la navigation et le prix en direct.
-    assert "mêmes dix conseillers Haiku" in t and "Seul le Président change" in t
-    assert "trait--conseil" in page and "trait--conseil2" in page
-    groupes = re.findall(r'<div class="nav-groupe">(.*?)</div>', page, flags=re.DOTALL)
-    assert len(groupes) == 2 and "Conseil Haiku" in groupes[0] and "Conseil Opus" in groupes[0]
+    # L'expérience en une phrase, puis le classement et la courbe aux deux teintes, la navigation et le prix en direct.
+    assert "Dix conseillers Claude Haiku" in t and "Haiku pour l’un, Opus pour l’autre" in t
+    assert "trait--conseil" in page and "trait--conseil2" in page and "c--conseil2" in page
+    classement = texte(re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0))
+    assert "Conseil Haiku" in classement and "Conseil Opus" in classement and "Témoin sans IA" in classement
     assert re.search(r'<nav class="nav"[^>]*>.*?<a href="conseils.html" aria-current="page">Conseils</a>', page, flags=re.DOTALL)
     assert 'id="direct-data"' in page and "council-perp-opus" in re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)
     # Les autres pages du site la proposent aussi.
@@ -426,7 +431,7 @@ def test_conseils_methode_dans_la_ligue_des_conseils(site):
 
 def test_courbe_relie_le_direct_aux_series(site):
     """direct.js nomme chaque portefeuille par son slug, que porte sa série : la courbe peut ajouter son point en direct."""
-    for nom in ("index.html", "conseils.html"):
+    for nom in ("derives.html", "conseils.html"):
         page = lire(site, nom)
         direct = json.loads(html.unescape(re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)))
         courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
@@ -577,7 +582,7 @@ def test_actualites_declencheurs_des_decisions(site_actus):
 
 
 def test_actualites_bloc_de_l_accueil_derives_et_des_conseils(site_actus):
-    for nom in ("index.html", "conseils.html"):
+    for nom in ("derives.html", "conseils.html"):
         b = _bloc(lire(site_actus, nom))
         t = texte(b)
         assert "le CPI de décembre 2026 (BLS)" in t and "rappelle les IA 3 min après" in t
@@ -591,13 +596,13 @@ def test_actualites_bloc_de_l_accueil_derives_et_des_conseils(site_actus):
 
 
 def test_actualites_une_annonce_a_plusieurs_versions_montre_la_derniere(site_actus):
-    t = texte(_bloc(lire(site_actus, "index.html")))
+    t = texte(_bloc(lire(site_actus, "derives.html")))
     assert t.count("Délai sur les ordres des dérivés") == 1
     assert "résolu" in t and "en analyse" not in t
 
 
 def test_actualites_titre_echappe_et_lien_non_https_ecarte(site_actus):
-    b = _bloc(lire(site_actus, "index.html"))
+    b = _bloc(lire(site_actus, "derives.html"))
     assert "<script>" not in b and "&lt;script&gt;alert(1)&lt;/script&gt;" in b
     assert "javascript:" not in b
 
@@ -618,7 +623,7 @@ def test_actualites_methode_et_export(site_actus):
 
 
 def test_actualites_sans_annonce_ni_calendrier(site, monkeypatch):
-    b = _bloc(lire(site, "index.html"))
+    b = _bloc(lire(site, "derives.html"))
     assert "Aucune annonce de Kraken sur les dérivés depuis 7 jours." in texte(b)
     assert json.loads(lire(site, "data/derives.json"))["actualites"]["annonces"] == []
 

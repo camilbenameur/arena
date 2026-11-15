@@ -1,0 +1,4 @@
+Sources des images d'aperçu de partage (1200 x 630) : assets/apercu.png (accueil et autres pages) et
+assets/apercu-conseils.png (conseils.html, page du post LinkedIn). Schémas sans chiffres : elles ne vieillissent pas.
+Pour les refaire : servir arene/site/ en local, ouvrir og.html ou og-conseils.html dans un navigateur à 1200 x 630
+et faire une capture de la fenêtre.
