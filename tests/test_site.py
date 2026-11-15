@@ -266,12 +266,18 @@ def test_venue_mode_dans_chaque_json(site):
         assert d.get("venue_mode") == "paper", f.name
 
 
-def test_bandeau_simule_partout(site):
+def test_pas_de_bandeau_jaune_la_simulation_reste_dite_au_pied(site):
+    """Le bandeau « Simulation : argent fictif… » est retiré de toutes les pages (composant partagé) ; l'avertissement
+    de pied de page, lui, reste sur chacune."""
     out, _ = site
-    for f in out.rglob("*.html"):
+    pages = list(out.rglob("*.html"))
+    assert pages
+    for f in pages:
         txt = f.read_text(encoding="utf-8")
-        assert "Simulation\u202f: argent fictif, aucun ordre réel" in txt, f.name
+        assert 'class="bandeau' not in txt and "aucun ordre réel" not in txt.split("<main")[0], f.name
         assert "ARGENT RÉEL" not in txt, f.name
+        if f.name != "404.html":
+            assert "Expérience en simulation, pas un conseil en investissement" in txt, f.name
 
 
 def test_bandeau_argent_reel_si_venue_live():
@@ -280,8 +286,7 @@ def test_bandeau_argent_reel_si_venue_live():
     data = {"portfolios": [], "venue_mode": "live", "generated_ts": T0,
             "journal": {"n_records": 1, "head_hash": "a" * 64}}  # fmt: skip
     page = layout(title="t", body="", root="", active="index", data=data)
-    assert "ARGENT RÉEL" in page and "venue_mode" in page
-    assert "Simulation\u202f: argent fictif, aucun ordre réel" not in page
+    assert "ARGENT RÉEL" in page and "venue_mode" in page and 'class="bandeau reel"' in page
 
 
 def test_csp_stricte_et_aucun_style_inline(site):

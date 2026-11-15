@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 import sys
 from pathlib import Path
@@ -282,7 +283,7 @@ def test_appels_reguliers_groupes_rappel_et_quota(site):
 
 
 # ---------------------------------------------------------------------------
-# Conseil Haiku : hors catégorie, délibération A, B, C (docs/COORDINATION-dashboard.md, 14/11 ~18 h UTC)
+# Ligue des conseils : Conseil Haiku et Conseil Opus, hors de la ligue dérivés (demande du propriétaire du 15/11)
 # ---------------------------------------------------------------------------
 
 
@@ -295,83 +296,139 @@ def _ligne_tableau(idx: str, nom: str) -> str:
     return next(r for r in re.findall(r"<tr[^>]*>.*?</tr>", idx, flags=re.DOTALL) if f">{nom}</a>" in r)
 
 
-def test_conseil_hors_categorie_jamais_classe_avec_les_ia(site):
+def _perp(site: Path):
+    return P.compute(Path(site).parent / "var-perp" / "journal" / "events.jsonl", NOW)
+
+
+def test_derives_sans_les_conseils(site):
+    d = _perp(site)
+    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["temoin"] * 3
+    assert not any(s["kind"] == "conseil" for s in d["chart"]["series"])
     idx = lire(site, "index.html")
-    d = P.compute(Path(site).parent / "var-perp" / "journal" / "events.jsonl", NOW)
-    c = next(p for p in d["portfolios"] if p["id"] == F.CONSEIL)
-    assert c["kind"] == "conseil" and c["name"] == "Conseil Haiku"
-    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["conseil"] + ["temoin"] * 3
-    # Son propre groupe dans le tableau, entre les IA et les témoins, avec sa marque.
-    corps = re.findall(r"<tbody[^>]*>.*?</tbody>", idx, flags=re.DOTALL)
-    assert len(corps) == 3 and "Conseil Haiku" in corps[1] and "Conseil Haiku" not in corps[0] + corps[2]
-    assert "Hors catégorie" in corps[1] and P.MARQUE_CONSEIL in texte(corps[1])
-    assert "hors règle 2x" in texte(_ligne_tableau(idx, "Conseil Haiku"))
-    # « En tête des IA » ne regarde que les IA ; le conseil est cité à part.
+    assert "Conseil" not in texte(re.search(r"<tbody.*</table>", idx, flags=re.DOTALL).group(0))
+    assert len(re.findall(r"<tbody[^>]*>.*?</tbody>", idx, flags=re.DOTALL)) == 2  # IA, témoins
     verdict = texte(re.search(r'<p class="avancee">.*?</p>', idx, flags=re.DOTALL).group(0))
-    assert "En tête des IA : Claude" in verdict and "hors catégorie, Conseil Haiku" in verdict
-    assert "un conseil agressif" in texte(idx)
-    # Navigation : un groupe à part, jamais dans « Modèles d'IA » ni « Témoins ».
+    assert "En tête des IA : Claude" in verdict and "Conseil" not in verdict and "hors catégorie" not in verdict
     groupes = re.findall(r'<div class="nav-groupe">(.*?)</div>', idx, flags=re.DOTALL)
-    assert [g for g in groupes if "Conseil Haiku" in g] == [g for g in groupes if "Agressif" in g]
-    # Courbe : sa propre série, sa propre couleur.
-    assert any(s["id"] == F.CONSEIL and s["kind"] == "conseil" for s in d["chart"]["series"])
-    assert "trait--conseil" in idx
+    assert len(groupes) == 2 and not any("Conseil" in g and "nav-titre" in g and "Conseils<" in g for g in groupes)
+    assert "trait--conseil" not in idx and "Agressif" not in idx and "un conseil agressif" not in texte(idx)
+    for nom in ("council-perp-haiku", "council-perp-opus"):
+        assert not (site / "derives" / f"{nom}.html").exists()
+    dj = lire(site, "data/derives.json")
+    assert "council-perp" not in dj and "Conseil" not in dj
+    # La landing renvoie vers l'autre ligue, à côté du lien Comptant.
+    assert 'href="conseils.html"' in idx and "Ligue des conseils" in texte(idx)
 
 
-def test_conseil_page_deliberation_dans_l_ordre(site):
-    html = lire(site, "derives/council-perp-haiku.html")
-    t = texte(html)
-    assert P.MARQUE_CONSEIL in t and "ne pourrait pas passer au réel telle quelle" in t
-    assert "Hors catégorie" in t and _n("objectif 2 000 €") in _n(t)
-    # Étapes A, B, C dans l'ordre, puis la décision du Président.
-    i_a, i_b, i_c = t.index("Étape A"), t.index("Étape B"), t.index("Étape C · le Président tranche")
+def test_ligue_des_conseils_tableau_classement_et_navigation(site):
+    d = _perp(site)["conseils"]
+    assert [(p["id"], p["kind"]) for p in d["portfolios"]] == [(F.CONSEIL, "conseil"), (F.OPUS, "conseil"), (F.TEMOINS[0], "temoin")]
+    assert {p["id"]: p["name"] for p in d["portfolios"]} == {F.CONSEIL: "Conseil Haiku", F.OPUS: "Conseil Opus", F.TEMOINS[0]: "Témoin panier 1x"}
+    assert [s["id"] for s in d["chart"]["series"]] == [p["id"] for p in d["portfolios"]]
+    page = lire(site, "conseils.html")
+    t = texte(page)
+    assert "<title>Ligue des conseils" in page and "Ligue des conseils" in t
+    corps = re.findall(r"<tbody[^>]*>.*?</tbody>", page, flags=re.DOTALL)
+    assert len(corps) == 2 and "Conseil Haiku" in corps[0] and "Conseil Opus" in corps[0] and "Témoin panier 1x" in corps[1]
+    assert P.MARQUE_CONSEIL in texte(corps[0])
+    assert "10 Haiku · président Haiku" in texte(_ligne_tableau(page, "Conseil Haiku"))
+    assert "10 Haiku · président Opus" in texte(_ligne_tableau(page, "Conseil Opus"))
+    assert "hors règle 2x" in texte(_ligne_tableau(page, "Conseil Opus"))
+    assert 'href="conseils/council-perp-opus.html"' in page and 'href="derives/benchmark-perp-basket-1x.html"' in page
+    assert "Claude Haiku 5.5" not in "".join(corps) and "Témoin tendance" not in t  # ni les IA ni les autres témoins
+    # L'expérience en deux phrases, puis la courbe aux deux teintes, la navigation et le prix en direct.
+    assert "mêmes dix conseillers Haiku" in t and "Seul le Président change" in t
+    assert "trait--conseil" in page and "trait--conseil2" in page
+    groupes = re.findall(r'<div class="nav-groupe">(.*?)</div>', page, flags=re.DOTALL)
+    assert len(groupes) == 2 and "Conseil Haiku" in groupes[0] and "Conseil Opus" in groupes[0]
+    assert re.search(r'<nav class="nav"[^>]*>.*?<a href="conseils.html" aria-current="page">Conseils</a>', page, flags=re.DOTALL)
+    assert 'id="direct-data"' in page and "council-perp-opus" in re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)
+    # Les autres pages du site la proposent aussi.
+    assert 'href="conseils.html"' in lire(site, "comptant.html") and 'href="conseils.html"' in lire(site, "methode.html")
+    cj = json.loads(lire(site, "data/conseils.json"))
+    assert cj["venue_mode"] == "paper" and {p["id"] for p in cj["portfolios"]} == {F.CONSEIL, F.OPUS, F.TEMOINS[0]}
+
+
+def test_conseil_haiku_page_ancienne_et_nouvelle_ronde(site):
+    html_ = lire(site, "conseils/council-perp-haiku.html")
+    t = texte(html_)
+    assert P.MARQUE_CONSEIL in t and "ne pourrait pas passer au réel telle quelle" in t and "10 Haiku · président Haiku" in t
+    assert _n("objectif 2 000 €") in _n(t)
+    assert "Ligue des conseils" in t and "conseils.html#m-conseils" in html_
+    # Deux rondes repliées : l'ancienne à 8 avis (7 rendus + 1 absent, aucun Arbitragiste), la récente à 9 (Arbitragiste).
+    assert html_.count('class="deliberation"') == 2
+    assert _n("8 avis · 1 absent") in _n(t) and _n("9 avis · 1 absent") in _n(t)
+    assert _n("Étape A · 7 avis indépendants") in _n(t) and _n("Étape A · 8 avis indépendants") in _n(t)  # absents déduits
+    assert "L’Arbitragiste de paires" in t and _n(F.ARG_ARBITRAGE) in _n(t)
+    assert t.count("L’Arbitragiste de paires") == 1  # un seul : l'ancienne ronde n'en avait pas
+    # Président Haiku : champ absent des anciennes décisions, présent dans la récente ; consignes v1 puis v2.
+    assert t.count("Président · Haiku") >= 3 and "Président · Opus" not in t
+    assert "consignes v1" in t and "consignes v2" in t and "Conseillers Haiku" in t
+    # Coût réel de la ronde (sans nombre d'appels codé en dur), jamais « 10 appels ».
+    assert "10 appels" not in t and "coût réel des rondes" in t and "dont Président" not in t
+    assert "OSError" not in html_
+
+
+def test_conseil_opus_page_modele_du_president_et_cout_a_part(site):
+    html_ = lire(site, "conseils/council-perp-opus.html")
+    t = texte(html_)
+    assert "Conseil Opus" in t and "10 Haiku · président Opus" in t and P.MARQUE_CONSEIL in t
+    assert 'class="tete-modele teinte-2"' in html_ and 'class="teinte-2"' in html_
+    assert _n("Étape C · le Président tranche Président · Opus") in _n(t)
+    assert _n("9 avis · 1 absent") in _n(t) and _n("Étape A · 8 avis indépendants") in _n(t)
+    assert "L’Arbitragiste de paires" in t and "consignes v2" in t
+    # Le Président pèse l'essentiel : son coût est montré à part, par ronde et au total.
+    assert _n("0,2150 $ dont Président 0,1800 $") in _n(t)
+    assert _n("coût réel des rondes · dont Président 0,1800 $") in _n(t)
+    assert _n(F.RAISON_OPUS) in _n(t)
+    assert "A consulté simulation d’ordre ETH" in t
+    assert 'data-direct="lat" data-pf="council-perp-opus" data-p="PF_SOLUSD"' in html_
+    # Ses refus se lisent aux bornes de sa politique.
+    assert "levier au-delà de 2" not in t
+
+
+def test_conseil_ordre_des_membres_et_contenu_d_un_avis(site):
+    t = texte(lire(site, "conseils/council-perp-opus.html"))
+    i_a, i_b, i_c = t.index("Étape A"), t.index("Étape B"), t.index("Étape C · le Président a lu")
     assert i_a < i_b < i_c
     noms = [P.MEMBRES[m][0] for m in P.ORDRE_MEMBRES if P.MEMBRES[m][1] == "A"]
+    assert "L’Arbitragiste de paires" in noms and noms.index("L’Arbitragiste de paires") == noms.index("Le Contrarien") + 1
     pos = [t.index(n, i_a) for n in noms]
-    assert pos == sorted(pos) and pos[-1] < i_b  # les 8 de l'étape A, dans l'ordre, avant l'Avocat
+    assert pos == sorted(pos) and pos[-1] < i_b
     assert "L’Avocat du diable" in t[i_b:i_c] and "Attaque le short ETH" in t[i_b:i_c]
-    assert all(_n(x) in _n(t) for x in (F.ARG_CARTO, F.ARG_AVOCAT, F.RAISON_PRESIDENT))
-    # Un avis : position, conviction, taille, stop, niveau clé.
+    assert all(_n(x) in _n(t) for x in (F.ARG_CARTO, F.ARG_AVOCAT, F.ARG_ARBITRAGE))
     assert _n("short ETH · conviction 65 · 250 % · stop 2,5 % · niveau clé 3 150,00 $") in _n(t)
-    # Le membre absent : « absent » et une catégorie, jamais le texte brut de l'erreur.
     assert "absent erreur interne" in t
-    assert "OSError" not in html
-    # Résumé replié : tendance et cible de l'Avocat.
-    assert _n("8 avis · 1 absent · short ETH ×6, plat ×1 · l’Avocat attaque le short ETH") in _n(t)
-    # Outils attribués : le Cartographe a ses indicateurs, l'Avocat son funding, le Président sa simulation.
+    assert _n("9 avis · 1 absent · short ETH ×7, plat ×1 · l’Avocat attaque le short ETH") in _n(t)
     carto = t[t.index("Le Cartographe", i_a): t.index("Le Suiveur", i_a)]
-    assert "A consulté indicateurs ETH 4h" in carto
-    assert "A consulté funding ETH" in t[i_b:i_c]
-    assert "A consulté simulation d’ordre ETH" in t[i_c:]
-    # Refus aux bornes de SA politique, et coût des 10 appels.
+    assert "A consulté indicateurs ETH 4h" in carto and "A consulté funding ETH" in t[i_b:i_c]
+
+
+def test_conseil_haiku_refus_aux_bornes_de_sa_politique(site):
+    t = texte(lire(site, "conseils/council-perp-haiku.html"))
     assert "levier au-delà de 10" in t and "liquidation atteinte avant le stop" in t and "levier au-delà de 2" not in t
-    assert "10 appels Haiku par ronde" in t
-    assert html.count('class="deliberation"') == 2  # une par ronde, repliée
 
 
-def test_conseil_regles_dans_la_methode(site):
-    t = texte(lire(site, "methode.html")).replace("\xa0", " ").replace(" ", " ")
-    i = t.index("Hors catégorie : le Conseil Haiku")
-    m = t[i:]
+def test_conseils_methode_dans_la_ligue_des_conseils(site):
+    t = texte(lire(site, "conseils.html")).replace("\xa0", " ").replace("\u202f", " ")
+    m = t[t.index("Les conseils : méthode"):]
     for x in ("10 au plus", "500 %", "1 000 %", "avant la liquidation", "25 %", "60 %", "24 ouvertures par 24 h",
-              "ni gel quotidien, ni budget de frais", "−90 %", "marge de maintenance"):  # fmt: skip
+              "ni gel quotidien, ni budget de frais", "−90 %", "marge de maintenance", "dix Claude Haiku 5.5",
+              "Conseil Haiku 10 $ par jour", "Conseil Opus 25 $ par jour", "équivalent catalogue", "Arbitragiste de paires",
+              "pair-trade-screener", "TradingAgents", "Président"):  # fmt: skip
         assert x in m, x
-
-
-def test_conseil_prix_en_direct(site):
-    html = lire(site, "derives/council-perp-haiku.html")
-    assert 'data-direct="lat" data-pf="council-perp-haiku" data-p="PF_ETHUSD"' in html
-    assert "council-perp-haiku" in re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', lire(site, "index.html")).group(1)
+    # La méthode générale des dérivés n'en parle plus que pour renvoyer ici.
+    g = texte(lire(site, "methode.html"))
+    assert "Hors catégorie" not in g and "Les membres" not in g and "conseils.html#m-conseils" in lire(site, "methode.html")
 
 
 def test_courbe_relie_le_direct_aux_series(site):
     """direct.js nomme chaque portefeuille par son slug, que porte sa série : la courbe peut ajouter son point en direct."""
-    import json
-
-    page = lire(site, "index.html")
-    direct = json.loads(html.unescape(re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)))
-    courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
-    assert direct["pf"] and set(direct["pf"]) <= {s.get("slug") for s in courbe["series"]}
+    for nom in ("index.html", "conseils.html"):
+        page = lire(site, nom)
+        direct = json.loads(html.unescape(re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)))
+        courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
+        assert direct["pf"] and set(direct["pf"]) <= {s.get("slug") for s in courbe["series"]}, nom
 
 
 def test_conseil_arrete_le_dit(tmp_path):
@@ -379,31 +436,71 @@ def test_conseil_arrete_le_dit(tmp_path):
     perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", ruine=True)
     config, policy = _cfg()
     build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
-    t = texte((tmp_path / "site" / "derives" / "council-perp-haiku.html").read_text(encoding="utf-8"))
+    t = texte((tmp_path / "site" / "conseils" / "council-perp-haiku.html").read_text(encoding="utf-8"))
     assert "Conseil arrêté" in t and "ruine" in t and "Seul l’opérateur de l’arène peut le relancer" in t
-    assert "arrêté, ruine" in texte((tmp_path / "site" / "index.html").read_text(encoding="utf-8"))
+    assert "arrêté, ruine" in texte((tmp_path / "site" / "conseils.html").read_text(encoding="utf-8"))
 
 
 def test_conseil_deliberations_anciennes_hors_page(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "DELIBERATIONS_MAX", 1)
     perp = F.build(tmp_path / "events.jsonl")
-    d = P.compute(perp, NOW)
+    d = P.compute(perp, NOW)["conseils"]
     c = next(p for p in d["portfolios"] if p["id"] == F.CONSEIL)
     rondes = [x for x in c["decisions"] if x.get("conseil")]
     assert rondes[0]["conseil"]["avis"] and rondes[1]["conseil"]["avis"] == [] and rondes[1]["conseil"]["avis_hors_page"] == 9
+    assert rondes[1]["conseil"]["president"] == "Haiku"  # le modèle du Président reste dit, avis ou non
+
+
+def _ajoute(perp, pf, round_, *, council=None, opinions=(), opened=True):
+    j = Journal(perp)
+    r = F.T0 + 2 * 86_400 - 300 if round_ is None else round_
+    if opened:
+        j.append("portfolio_opened", {"portfolio": pf, "kind": "council", "league": "perp", "capital_ueur": 1_000_000_000,
+                                      "venue_mode": "paper"}, r - 1)  # fmt: skip
+    for op in opinions:
+        j.append("council_opinion", {"portfolio": pf, "round": r, "member": "suiveur", "stage": "A", "opinion": op, "error": None}, r)
+    j.append("agent_decision", {"portfolio": pf, "round": r, "kind": "cadence", "parsed": {"actions": [], "justification": "ok"},
+                                "parse_error": None, "council": council}, r)  # fmt: skip
+    return r
 
 
 def test_conseil_evenements_malformes_ne_cassent_rien(tmp_path):
     perp = F.build(tmp_path / "events.jsonl")
-    j = Journal(perp)
-    r = F.T0 + 2 * 86_400 - 300
-    for op in ({"avis": 5}, {"avis": [{"instrument": "PF_XBTUSD", "position": "long", "conviction": "x", "niveau_cle_usd": "1e400",
-                                        "taille_pct": "1e400"}], "cible": [1]}, "texte"):  # fmt: skip
-        j.append("council_opinion", {"portfolio": F.CONSEIL, "round": r, "member": "suiveur", "stage": "A", "opinion": op, "error": None}, r)
-    j.append("agent_decision", {"portfolio": F.CONSEIL, "round": r, "kind": "cadence", "parsed": {"actions": [], "justification": "ok"},
-                                "parse_error": None, "council": {"members_ok": 9, "members_failed": 2}}, r)  # fmt: skip
-    d = P.compute(perp, NOW)
+    ops = ({"avis": 5}, {"avis": [{"instrument": "PF_XBTUSD", "position": "long", "conviction": "x", "niveau_cle_usd": "1e400",
+                                    "taille_pct": "1e400"}], "cible": [1]}, "texte")  # fmt: skip
+    r = _ajoute(perp, F.CONSEIL, None, opinions=ops, opened=False,
+                council={"members_ok": 9, "members_failed": 2, "president_model": 7, "president_cost_uusd": "beaucoup",
+                         "members_model": ["x"], "prompts_version": {"v": 2}, "name": 3})  # fmt: skip
+    d = P.compute(perp, NOW)["conseils"]
     c = next(p for p in d["portfolios"] if p["id"] == F.CONSEIL)
     ronde = next(x for x in c["decisions"] if x["round"] == r)
     assert len(ronde["conseil"]["avis"]) == 1  # rejoué : un seul avis du Suiveur, le dernier
     assert ronde["conseil"]["avis"][0]["absent"]
+    assert ronde["conseil"]["president"] is None and ronde["conseil"]["consignes"] is None and ronde["conseil"]["cout_president_uusd"] is None
+
+
+def test_conseil_inconnu_nom_generique_sans_planter(tmp_path):
+    spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
+    perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl")
+    _ajoute(perp, F.INCONNU, None, council={"president_model": "claude-sonnet-5-5"})
+    assert P.nom(F.INCONNU) == "Conseil Zeta" and P.nom("council-perp:") == "Conseil"
+    config, policy = _cfg()
+    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    out = tmp_path / "site"
+    page = (out / "conseils.html").read_text(encoding="utf-8")
+    assert ">Conseil Zeta</a>" in page
+    z = texte((out / "conseils" / "council-perp-zeta.html").read_text(encoding="utf-8"))
+    assert "Président · Sonnet" in z and "Conseil Zeta" in z
+
+
+def test_sans_conseil_pas_de_ligue_des_conseils(tmp_path):
+    """Un journal sans conseil : ni page, ni lien dans la navigation, ni donnée."""
+    spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
+    perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", conseils=False)
+    assert P.compute(perp, NOW)["conseils"] is None
+    config, policy = _cfg()
+    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    out = tmp_path / "site"
+    assert not (out / "conseils.html").exists() and not (out / "conseils").exists() and not (out / "data" / "conseils.json").exists()
+    for f in out.rglob("*.html"):
+        assert "conseils.html" not in f.read_text(encoding="utf-8"), f.name

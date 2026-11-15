@@ -1,4 +1,5 @@
-"""Pages de la ligue dérivés : accueil (premier plan du site), une page par portefeuille, section de méthode.
+"""Pages de la ligue dérivés (accueil au premier plan du site, une page par portefeuille, section de méthode) et de la
+ligue des conseils (accueil, une page par conseil, méthode des conseils ; même journal que les dérivés).
 
 Même direction « Carnet » que le spot : filets, peu de mots, chiffres tabulaires. Tout texte venu du journal est
 échappé ; les textes libres des modèles (justification, invalidation) sont publiés tels quels, échappés, bornés.
@@ -190,6 +191,11 @@ def _depuis(perp: dict[str, Any], p: dict[str, Any]) -> str:
     return ""
 
 
+def _dossier(p: dict[str, Any]) -> str:
+    """Le dossier de la page d'un portefeuille : les conseils ont le leur, le témoin panier reste aux dérivés."""
+    return "conseils" if p["kind"] == "conseil" else "derives"
+
+
 def _hors_regle_court(p: dict[str, Any]) -> str:
     return '<small class="desc">démonstration paper, hors règle 2x</small>' if p["kind"] == "conseil" else ""
 
@@ -266,7 +272,7 @@ def courbe_visible(chart: dict[str, Any]) -> bool:
     return len(chart["x"]) >= MIN_POINTS and bool(chart["series"])
 
 
-def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name: str | None = None) -> str:
+def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name: str | None = None, ligue: str = "derives") -> str:
     if not courbe_visible(chart):
         return '<p class="vide vide-court">La courbe apparaît après 1{NBSP}h{NBSP}30 de relevés. Les valeurs sont dans le tableau.</p>'.replace("{NBSP}", NBSP)
     derniers = "; ".join(
@@ -276,7 +282,7 @@ def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name:
     if focus_name:
         label = f"Rendement net cumulé de {focus_name}, comparé au témoin panier 1x, {periode}. Valeurs en direct : {derniers}."
     else:
-        label = f"Rendement net cumulé des {len(chart['series'])} portefeuilles dérivés, {periode}. Valeurs en direct : {derniers}."
+        label = f"Rendement net cumulé des {len(chart['series'])} portefeuilles {'de la ligue des conseils' if ligue == 'conseils' else 'dérivés'}, {periode}. Valeurs en direct : {derniers}."
     return (
         '<figure class="graphique">'
         f'<div id="chart" class="graphique-zone" role="img" aria-label="{e(label)}">'
@@ -291,14 +297,15 @@ def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name:
 # ---------------------------------------------------------------------------
 
 
-def _tableau(perp: dict[str, Any]) -> str:
+def _tableau(perp: dict[str, Any], *, conseils: bool = False) -> str:
     pfs = perp["portfolios"]
     vmax = max((abs(p["rendement"] or 0.0) for p in pfs), default=0.0)
     from arene.site.render import _svg_barre
 
     def ligne(p: dict[str, Any]) -> str:
+        sous = f'<small class="desc">{e(p["sous_titre"])}</small>' if p.get("sous_titre") else ""
         return (
-            f'<tr class="{e(p["kind"])}"><th scope="row"><a href="derives/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{_depuis(perp, p)}{_hors_regle_court(p)}</th>'
+            f'<tr class="{e(p["kind"])}"><th scope="row"><a href="{_dossier(p)}/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{sous}{_depuis(perp, p)}{_hors_regle_court(p)}</th>'
             f'<td class="n cle"><span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>{_svg_barre(p["rendement"], vmax)}</td>'
             f'<td class="n"><span{_crochet(p, "val")}>{eur(p["equity_ueur"])}</span></td>'
             f'<td class="n">{levier(p["levier"])}</td>'
@@ -319,23 +326,28 @@ def _tableau(perp: dict[str, Any]) -> str:
         '<th scope="col" class="n">Levier</th><th scope="col" class="n">Pire baisse</th><th scope="col">Positions</th></tr>'
     )
     libelles = ["Rendement net", "Valeur", "Levier", "Pire baisse", "Positions"]
+    if conseils:
+        nom, corps = "ligue des conseils", groupe("conseil", "Conseils", n_col, P.MARQUE_CONSEIL) + groupe("temoin", "Témoin", n_col)
+        cap = "Ligue des conseils : les conseils, puis le témoin de référence"
+    else:
+        nom, corps = "ligue dérivés", groupe("llm", "Modèles d’IA", n_col) + groupe("temoin", "Témoins", n_col)
+        cap = "Ligue dérivés : modèles d’IA, puis témoins"
     return empiler(
-        '<div class="table-scroll" tabindex="0" role="region" aria-label="Tableau de la ligue dérivés, défilable">'
-        '<table class="tableau comparatif empile"><caption class="visuellement-cache">Ligue dérivés : modèles d’IA, hors catégorie, puis témoins</caption>'
-        f'<thead>{head}</thead>{groupe("llm", "Modèles d’IA", n_col)}{groupe("conseil", "Hors catégorie", n_col, P.MARQUE_CONSEIL)}'
-        f'{groupe("temoin", "Témoins", n_col)}</table></div>',
+        f'<div class="table-scroll" tabindex="0" role="region" aria-label="Tableau de la {nom}, défilable">'
+        f'<table class="tableau comparatif empile"><caption class="visuellement-cache">{cap}</caption>'
+        f'<thead>{head}</thead>{corps}</table></div>',
         libelles,
     )
 
 
-def _dernieres(perp: dict[str, Any]) -> str:
+def _dernieres(perp: dict[str, Any], titre: str = "Dernières décisions des IA") -> str:
     """La dernière décision de chaque IA : ce qu'elle a fait, et pourquoi, en une ligne dépliable."""
     items = []
     for p in perp["portfolios"]:
         if p["kind"] not in ("llm", "conseil"):
             continue
         d = next((x for x in p["decisions"] if x["statut"] in ("decidee", "echec", "sautee")), None)
-        lien = f'<a class="dernier-nom" href="derives/{e(p["slug"])}.html">{e(p["name"])}</a>'
+        lien = f'<a class="dernier-nom" href="{_dossier(p)}/{e(p["slug"])}.html">{e(p["name"])}</a>'
         if d is None:
             items.append(f'<li class="ligne sans-detail">{lien}<span class="muted">pas encore de décision</span></li>')
             continue
@@ -350,7 +362,7 @@ def _dernieres(perp: dict[str, Any]) -> str:
     if not items:
         return ""
     return (
-        '<section aria-labelledby="titre-dernieres"><h2 id="titre-dernieres">Dernières décisions des IA</h2>'
+        f'<section aria-labelledby="titre-dernieres"><h2 id="titre-dernieres">{titre}</h2>'
         f'<ul class="decisions dernieres">{"".join(items)}</ul></section>'
     )
 
@@ -366,29 +378,7 @@ def _resume_ligne(d: dict[str, Any]) -> str:
     return _resume(d["actions"]) + (f", {pose}" if pose else "")
 
 
-def index_page(data: dict[str, Any]) -> str:
-    perp = data["perp"]
-    pfs = perp["portfolios"]
-    llms = [p for p in pfs if p["kind"] == "llm"]
-    conseils = [p for p in pfs if p["kind"] == "conseil"]
-    n_tem = len(pfs) - len(llms) - len(conseils)
-    capital = pfs[0]["capital_ueur"] if pfs else 1_000_000_000
-    panier = next((p for p in pfs if p["id"] == P.PANIER), None)
-    if llms and any(d["statut"] == "decidee" for p in llms for d in p["decisions"]):
-        best = max(llms, key=lambda p: p["rendement"] or 0.0)
-        verdict = f'En tête des IA : {e(best["name"])} <span{_crochet(best, "rend")}>{pct(best["rendement"])}</span>'
-        if panier:
-            verdict += f' · référence sans IA (panier) <span{_crochet(panier, "rend")}>{pct(panier["rendement"])}</span>'
-        for c in conseils:  # hors catégorie : à côté du classement, jamais dedans
-            verdict += f' · hors catégorie, {e(c["name"])} <span{_crochet(c, "rend")}>{pct(c["rendement"])}</span>'
-    elif llms:
-        verdict = e(f"Les {len(llms)}{NBSP}IA décident à partir du rendez-vous de {heure(perp['prochain_rdv_ts'])}")
-    else:
-        verdict = e(f"Témoins seuls pour l’instant · les 4{NBSP}IA entrent au rendez-vous de {heure(perp['prochain_rdv_ts'])}")
-    qui = f"{len(llms)}{NBSP}IA et {n_tem}{NBSP}témoins sans IA" if llms else f"{n_tem}{NBSP}témoins sans IA"
-    if conseils:
-        qui = f"{len(llms)}{NBSP}IA, un conseil agressif et {n_tem}{NBSP}témoins sans IA"
-    direct_pfs = [p for p in pfs if _direct_pf(p)]
+def _releve(data: dict[str, Any], perp: dict[str, Any], direct_pfs: list[dict[str, Any]], extra: str = "") -> str:
     items = [f'<li>Prochain rendez-vous <time datetime="{iso(perp["prochain_rdv_ts"])}">{heure(perp["prochain_rdv_ts"])}</time></li>']
     if perp["live_ts"]:
         frais = data["generated_ts"] - perp["live_ts"] <= 1_800
@@ -401,18 +391,37 @@ def index_page(data: dict[str, Any]) -> str:
         items.append('<li><a href="methode.html#m-derives">Journal vérifié</a></li>')
     else:
         items.append('<li class="perte-txt">Journal : vérification en échec</li>')
+    return f'<ul class="releve">{extra}{"".join(items)}</ul>'
 
-    lecture_levier = f" (10 pour le {e(conseils[0]['name'])})" if conseils else ""
-    lecture_conseil = (
-        f"  <li><strong>Hors catégorie</strong> : {e(conseils[0]['name'])}, dix Haiku qui délibèrent avec un mandat agressif. {e(P.HORS_REGLE_CONSEIL)} Il n’est pas classé avec les IA.</li>\n"
-        if conseils else ""
-    )
+
+def index_page(data: dict[str, Any]) -> str:
+    perp = data["perp"]
+    pfs = perp["portfolios"]
+    llms = [p for p in pfs if p["kind"] == "llm"]
+    n_tem = len(pfs) - len(llms)
+    capital = pfs[0]["capital_ueur"] if pfs else 1_000_000_000
+    panier = next((p for p in pfs if p["id"] == P.PANIER), None)
+    if llms and any(d["statut"] == "decidee" for p in llms for d in p["decisions"]):
+        best = max(llms, key=lambda p: p["rendement"] or 0.0)
+        verdict = f'En tête des IA : {e(best["name"])} <span{_crochet(best, "rend")}>{pct(best["rendement"])}</span>'
+        if panier:
+            verdict += f' · référence sans IA (panier) <span{_crochet(panier, "rend")}>{pct(panier["rendement"])}</span>'
+    elif llms:
+        verdict = e(f"Les {len(llms)}{NBSP}IA décident à partir du rendez-vous de {heure(perp['prochain_rdv_ts'])}")
+    else:
+        verdict = e(f"Témoins seuls pour l’instant · les 4{NBSP}IA entrent au rendez-vous de {heure(perp['prochain_rdv_ts'])}")
+    qui = f"{len(llms)}{NBSP}IA et {n_tem}{NBSP}témoins sans IA" if llms else f"{n_tem}{NBSP}témoins sans IA"
+    direct_pfs = [p for p in pfs if _direct_pf(p)]
+    autre = ""
+    if perp.get("conseils"):  # les autres ligues, à côté de celle-ci
+        cs = [p["name"] for p in perp["conseils"]["portfolios"] if p["kind"] == "conseil"]
+        autre = f'<li><a href="conseils.html">Ligue des conseils</a> <span class="muted">({e(" et ".join(cs))})</span></li>'
     body = f"""
 <h1 class="visuellement-cache">Ligue dérivés : des IA gèrent chacune {eur(capital, decimals=0)} fictifs en contrats perpétuels, face à des témoins sans IA</h1>
 <section class="etat" aria-label="État de la ligue dérivés">
   <p class="saison"><strong>Ligue dérivés</strong> · {qui} · {eur(capital, decimals=0)} fictifs chacun, à la hausse ou à la baisse</p>
   <p class="avancee"><strong>{verdict}</strong></p>
-  <ul class="releve">{"".join(items)}</ul>
+  {_releve(data, perp, direct_pfs, autre)}
 </section>
 <section class="courbes" aria-labelledby="titre-courbes">
   <h2 id="titre-courbes">Rendement net <span class="h-note">frais et funding compris</span></h2>
@@ -424,8 +433,8 @@ def index_page(data: dict[str, Any]) -> str:
   <details class="lecture"><summary>Comment lire ce tableau</summary><ul class="liste-simple">
   <li><strong>Témoin</strong> : une règle fixe, sans IA. Le panier 1x (acheter et garder) est la référence : une IA utile doit faire mieux, frais compris.</li>
   <li><strong>Long, short</strong> : parier sur la hausse, sur la baisse.</li>
-  <li><strong>Levier</strong> : montant engagé divisé par la valeur du portefeuille. 2 au plus{lecture_levier}.</li>
-{lecture_conseil}  <li><strong>Gelé</strong> : plus d’ouverture pendant 24{NBSP}h après une perte de 5{NBSP}% en un jour.</li>
+  <li><strong>Levier</strong> : montant engagé divisé par la valeur du portefeuille. 2 au plus.</li>
+  <li><strong>Gelé</strong> : plus d’ouverture pendant 24{NBSP}h après une perte de 5{NBSP}% en un jour.</li>
   </ul></details>
 </section>
 {_dernieres(perp)}
@@ -433,6 +442,70 @@ def index_page(data: dict[str, Any]) -> str:
     ch = perp["chart"]
     return layout(
         title="Ligue dérivés", body=body, root="", active="index", data=data, ligue="perp",
+        scripts=(_chart_scripts("", ch, None, dernier="Dernier relevé") if courbe_visible(ch) else "") + _direct_scripts("", perp, direct_pfs),
+        direct=bool(direct_pfs),
+    )  # fmt: skip
+
+
+def _experience(conseils: list[dict[str, Any]]) -> str:
+    """Ce que la ligue mesure, en deux phrases."""
+    if len(conseils) >= 2:
+        return (
+            "Deux conseils jouent les mêmes rondes sur les mêmes marchés, avec les mêmes dix conseillers Haiku, les mêmes consignes et la même politique agressive. "
+            "Seul le Président change, Haiku pour l’un et Opus pour l’autre : la ligue mesure ce qu’un Président plus cher change au résultat."
+        )
+    return (
+        "Le Conseil Haiku joue seul pour l’instant ; le Conseil Opus le rejoint au déploiement. "
+        "Ils auront les mêmes dix conseillers Haiku, les mêmes consignes et la même politique : seul le Président changera, Haiku ou Opus."
+    )
+
+
+def conseils_page(data: dict[str, Any]) -> str:
+    """Accueil de la ligue des conseils : même journal et mêmes marchés que les dérivés, portefeuilles à part."""
+    perp = data["perp"]["conseils"]
+    pfs = perp["portfolios"]
+    conseils = [p for p in pfs if p["kind"] == "conseil"]
+    panier = next((p for p in pfs if p["id"] == P.PANIER), None)
+    capital = pfs[0]["capital_ueur"] if pfs else 1_000_000_000
+    decides = [p for p in conseils if any(d["statut"] == "decidee" for d in p["decisions"])]
+    if decides:
+        best = max(decides, key=lambda p: p["rendement"] or 0.0)
+        mot = "En tête" if len(conseils) > 1 else "Rendement"
+        verdict = f'{mot} : {e(best["name"])} <span{_crochet(best, "rend")}>{pct(best["rendement"])}</span>'
+        if panier:
+            verdict += f' · référence sans IA (panier) <span{_crochet(panier, "rend")}>{pct(panier["rendement"])}</span>'
+    else:
+        verdict = e(f"Les conseils délibèrent à partir du rendez-vous de {heure(perp['prochain_rdv_ts'])}")
+    direct_pfs = [p for p in pfs if _direct_pf(p)]
+    n = len(conseils)
+    body = f"""
+<h1 class="visuellement-cache">Ligue des conseils : {pluriel(n, "conseil", "conseils")} d’IA gèrent chacun {eur(capital, decimals=0)} fictifs en contrats perpétuels</h1>
+<section class="etat" aria-label="État de la ligue des conseils">
+  <p class="saison"><strong>Ligue des conseils</strong> · {pluriel(n, "conseil", "conseils")} · {eur(capital, decimals=0)} fictifs chacun · <span class="marque-conseil-ligne">{e(P.MARQUE_CONSEIL)}</span></p>
+  <p class="avancee"><strong>{verdict}</strong></p>
+  <p class="chapo">{e(_experience(conseils))}</p>
+  {_releve(data, perp, direct_pfs)}
+</section>
+<section class="courbes" aria-labelledby="titre-courbes">
+  <h2 id="titre-courbes">Rendement net <span class="h-note">frais et funding compris</span></h2>
+  {_chart_block(perp["chart"], ligue="conseils")}
+</section>
+<section aria-labelledby="titre-comparatif">
+  <h2 id="titre-comparatif">Portefeuilles</h2>
+  {_tableau(perp, conseils=True)}
+  <details class="lecture"><summary>Comment lire ce tableau</summary><ul class="liste-simple">
+  <li><strong>Conseil</strong> : plusieurs IA qui délibèrent avant qu’un Président décide. {e(P.HORS_REGLE_CONSEIL)}</li>
+  <li><strong>Témoin</strong> : le panier 1x (acheter et garder, sans IA) sert de référence ; il est aussi dans la ligue dérivés.</li>
+  <li><strong>Long, short</strong> : parier sur la hausse, sur la baisse.</li>
+  <li><strong>Levier</strong> : montant engagé divisé par la valeur du portefeuille. 10 au plus pour un conseil.</li>
+  </ul></details>
+</section>
+{_dernieres(perp, "Dernières décisions des conseils")}
+{methode_conseils(data)}
+"""
+    ch = perp["chart"]
+    return layout(
+        title="Ligue des conseils", body=body, root="", active="conseils", data=data, ligue="conseils",
         scripts=(_chart_scripts("", ch, None, dernier="Dernier relevé") if courbe_visible(ch) else "") + _direct_scripts("", perp, direct_pfs),
         direct=bool(direct_pfs),
     )  # fmt: skip
@@ -532,11 +605,17 @@ def _actions(d: dict[str, Any]) -> str:
     )
 
 
+def _president(d: dict[str, Any]) -> str:
+    """« Président · Opus » : le modèle du Président, discret (rien si le journal ne le dit pas)."""
+    m = (d.get("conseil") or {}).get("president")
+    return f' <span class="modele-president">Président · {e(m)}</span>' if m else ""
+
+
 def _justif(d: dict[str, Any]) -> str:
     out = ""
     if d.get("justification"):
         qui = "Étape C · le Président tranche" if d.get("conseil") else "Raisonnement du modèle"
-        out += f'<blockquote class="justif"><span class="etiquette">{qui}</span>{e(d["justification"])}</blockquote>'
+        out += f'<blockquote class="justif"><span class="etiquette">{qui}{_president(d)}</span>{e(d["justification"])}</blockquote>'
     if d.get("outils"):
         outils = ", ".join(
             f'{e(OUTILS_COURTS.get(o["outil"], o["outil"]))}{(" " + e(o["args"])) if o["args"] else ""}{" (erreur)" if o["erreur"] else ""}'
@@ -547,7 +626,7 @@ def _justif(d: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Délibération du Conseil Haiku : étape A (8 avis), B (l'Avocat du diable), C (le Président : la décision)
+# Délibération d'un conseil : étape A (des avis sans se voir), B (l'Avocat du diable), C (le Président : la décision)
 # ---------------------------------------------------------------------------
 
 def _outils_txt(outils: list[dict[str, Any]]) -> str:
@@ -623,10 +702,17 @@ def _deliberation(d: dict[str, Any]) -> str:
     resume = f'<span class="etiquette">Délibération</span><span class="muted">{e(" · ".join(mots))}</span>'
     corps = ""
     if a_avis:
-        corps += f'<h4 class="etape">Étape A · {pluriel(len(a_avis), "avis indépendant", "avis indépendants")}<span class="h-note">sans se voir</span></h4><ol class="avis">{"".join(_membre(a) for a in a_avis)}</ol>'
+        n_a_abs = sum(1 for a in a_avis if a["absent"])
+        note_a = "sans se voir" + (f" · {pluriel(n_a_abs, 'absent', 'absents')}" if n_a_abs else "")
+        corps += f'<h4 class="etape">Étape A · {pluriel(len(a_avis) - n_a_abs, "avis indépendant", "avis indépendants")}<span class="h-note">{note_a}</span></h4><ol class="avis">{"".join(_membre(a) for a in a_avis)}</ol>'
     if b_avis:
         corps += f'<h4 class="etape">Étape B · l’Avocat du diable<span class="h-note">a lu l’étape A</span></h4><ol class="avis">{"".join(_membre(a) for a in b_avis)}</ol>'
-    corps += '<p class="etape etape-c">Étape C · le Président a lu les avis et tranche ci-dessous.</p>'
+    corps += f'<p class="etape etape-c">Étape C · le Président a lu les avis et tranche ci-dessous.{_president(d)}</p>'
+    fiche = [x for x in (f"conseillers {c['modele_membres']}" if c.get("modele_membres") else "", f"consignes {c['consignes']}" if c.get("consignes") else "") if x]
+    if fiche:
+        ligne_fiche = " · ".join(fiche)
+        ligne_fiche = ligne_fiche[:1].upper() + ligne_fiche[1:]
+        corps += f'<p class="muted fiche-conseil">{e(ligne_fiche)}</p>'
     return f'<details class="deliberation"><summary>{resume}</summary>{corps}</details>'
 
 
@@ -634,6 +720,9 @@ def _meta(d: dict[str, Any]) -> str:
     meta = []
     if d.get("cout_uusd"):
         meta.append(usd(d["cout_uusd"]))
+        c = d.get("conseil") or {}
+        if c.get("cout_president_uusd") and c.get("president") not in (None, "Haiku"):  # un Président plus cher pèse l'essentiel
+            meta[-1] += f" dont Président {usd(c['cout_president_uusd'])}"
     return f'<span class="decision-meta">{" · ".join(meta)}</span>' if meta else ""
 
 
@@ -773,7 +862,12 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         _stat("Frais", eur(p["frais_ueur"]), '<small class="sous">0,07 % par ordre</small>'),
     ]  # fmt: skip
     if llm:
-        stats.append(_stat("Coût IA", usd(p["cout_uusd"]), f'<small class="sous">{"10 appels Haiku par ronde" if conseil else "équivalent API"}</small>'))
+        if conseil:
+            gros = p.get("president") not in (None, "Haiku") and p.get("cout_president_uusd")
+            sous = "coût réel des rondes" + (f" · dont Président {usd(p['cout_president_uusd'])}" if gros else "")
+        else:
+            sous = "équivalent API"
+        stats.append(_stat("Coût IA", usd(p["cout_uusd"]), f'<small class="sous">{sous}</small>'))
         q = (p.get("rythme") or {}).get("quota")
         jour = f'<small class="sous">{q["played_today"]} appels aujourd’hui, {q["per_day"]} au plus</small>' if q else ""
         stats.append(_stat("Décisions", str(p["n_rondes"]), f'<small class="sous">{pluriel(p["n_ordres"], "avec ordre", "avec ordres")}</small>{jour}'))
@@ -793,10 +887,11 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         jusqu = f" jusqu’au {quand(st['jusqu'])}" if st.get("jusqu") else ""
         cause = " après une liquidation" if st.get("raison") == "margin_closeout" else ""
         alertes = f'<p class="alerte warn">Portefeuille gelé{cause}{jusqu} : aucune nouvelle ouverture.</p>'
-    chart = _ref_chart(data["perp"], p["id"])
+    perp = data["perp"]["conseils"] if conseil else data["perp"]  # la ligue du portefeuille
+    chart = _ref_chart(perp, p["id"])
     direct_pfs = [p] if _direct_pf(p) else []
     # Le panier, seule autre courbe de la page, suit lui aussi le prix du moment (il n'a pas de chiffre ici).
-    panier = next((x for x in data["perp"]["portfolios"] if x["id"] == P.PANIER and x is not p), None)
+    panier = next((x for x in perp["portfolios"] if x["id"] == P.PANIER and x is not p), None)
     if direct_pfs and courbe_visible(chart) and panier and _direct_pf(panier):
         direct_pfs.append(panier)
     direct_etat = '<p class="direct-etat" data-direct-etat hidden></p>' if direct_pfs else ""
@@ -804,7 +899,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     if llm or p["id"] == P.ALEATOIRE:
         vide = "Pas encore de décision : la première arrive au prochain rendez-vous." if llm else "Aucun tirage pour l’instant."
         decs_html = f'<ol class="decisions">{decs}</ol>' if decs else f'<p class="vide">{vide}</p>'
-        decisions = f'<section aria-labelledby="titre-decisions"><h2 id="titre-decisions">Décisions <span class="h-note">du plus récent au plus ancien</span></h2>{decs_html}</section>'
+        decisions = f'<section{" class=\"teinte-2\"" if conseil and p["id"].endswith(":opus") else ""} aria-labelledby="titre-decisions"><h2 id="titre-decisions">Décisions <span class="h-note">du plus récent au plus ancien</span></h2>{decs_html}</section>'
         operations = (
             f'<section aria-labelledby="titre-operations"><details class="lecture"><summary><h2 id="titre-operations" class="h2-inline">Opérations</h2>'
             f' <span class="h-note">{pluriel(p["n_operations"], "opération")}</span></summary>{_operations(p)}</details></section>'
@@ -812,13 +907,18 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     else:
         decisions = ""
         operations = f'<section aria-labelledby="titre-operations"><h2 id="titre-operations">Opérations</h2>{_operations(p)}</section>'
+    if conseil:
+        fil = '<a href="../conseils.html"><span aria-hidden="true">← </span>Ligue des conseils</a>'
+    else:
+        fil = f'<a href="../index.html"><span aria-hidden="true">← </span>Ligue dérivés</a><span class="fil-sep" aria-hidden="true">/</span><span>{"Modèles d’IA" if llm else "Témoins"}</span>'
     body = f"""
-<p class="fil"><a href="../index.html"><span aria-hidden="true">← </span>Ligue dérivés</a><span class="fil-sep" aria-hidden="true">/</span><span>{"Hors catégorie" if conseil else "Modèles d’IA" if llm else "Témoins"}</span></p>
-<header class="tete-modele">
+<p class="fil">{fil}</p>
+<header class="tete-modele{" teinte-2" if conseil and p["id"].endswith(":opus") else ""}">
   <h1>{e(p["name"])}</h1>
+  {f'<p class="sous-titre">{e(p["sous_titre"])}</p>' if p.get("sous_titre") else ""}
   {f'<p class="marque-conseil">{e(p["marque"])}</p>' if p.get("marque") else ""}
   {f'<p class="chapo">{e(p["description"])}</p>' if p.get("description") else ""}
-  {f'<p class="hors-regle">{e(p["hors_regle"])} <a href="../methode.html#m-conseil">Ses règles</a></p>' if p.get("hors_regle") else ""}
+  {f'<p class="hors-regle">{e(p["hors_regle"])} <a href="../conseils.html#m-conseils">Ses règles</a></p>' if p.get("hors_regle") else ""}
 </header>
 {alertes}
 <dl class="stats">{"".join(stats)}</dl>
@@ -829,8 +929,9 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 {operations}
 """
     return layout(
-        title=f"{p['name']} · dérivés", body=body, root="../", active=p["id"], data=data, ligue="perp",
-        scripts=(_chart_scripts("../", chart, p["id"], dernier="Dernier relevé") if courbe_visible(chart) else "") + _direct_scripts("../", data["perp"], direct_pfs),
+        title=f"{p['name']} · {'conseils' if conseil else 'dérivés'}", body=body, root="../", active=p["id"], data=data,
+        ligue="conseils" if conseil else "perp",
+        scripts=(_chart_scripts("../", chart, p["id"], dernier="Dernier relevé") if courbe_visible(chart) else "") + _direct_scripts("../", perp, direct_pfs),
         direct=bool(direct_pfs),
     )  # fmt: skip
 
@@ -851,32 +952,13 @@ def methode_section(data: dict[str, Any]) -> str:
     cadence = f"<li><strong>Appel régulier</strong> : chaque IA est rappelée au plus tard {cad}{NBSP}min après sa dernière ronde.</li>\n" if cad else ""
     if perp.get("rondes_par_jour"):
         cadence += f"<li><strong>Plafond</strong> : {perp['rondes_par_jour']} appels par IA et par jour, rendez-vous compris.</li>\n"
-    conseil = next((p for p in perp["portfolios"] if p["kind"] == "conseil"), None)
-    membres = "".join(
-        f"<li><strong>{e(n)}</strong> ({'étape ' + etape}) : {e(role)}</li>" for n, etape, role in P.MEMBRES.values()
-    )
-    section_conseil = (
-        f"""<h3 id="m-conseil">Hors catégorie : le {e(conseil["name"])}</h3>
-<p>Un portefeuille de plus, décidé par dix Claude Haiku 5.5 qui délibèrent à chaque ronde, avec un mandat agressif : doubler la mise en quelques jours. Il joue les mêmes rondes que les IA (rendez-vous, appel régulier, réveils, alertes, rappels) ; une ronde compte pour un appel dans le plafond du jour, et son coût est celui de ses dix appels.</p>
-<p><strong>{e(P.HORS_REGLE_CONSEIL)}</strong> Il n’est donc jamais classé avec les IA, qui jouent toutes avec les mêmes règles.</p>
-<ul class="liste-simple">
-<li><strong>Étape A</strong> : huit membres donnent chacun un avis sans voir les autres (long, short ou plat par contrat, conviction de 0 à 100, taille, stop, niveau clé, argument).</li>
-<li><strong>Étape B</strong> : l’Avocat du diable lit ces avis et attaque le trade le plus soutenu.</li>
-<li><strong>Étape C</strong> : le Président lit les neuf avis et décide, au même format que les IA. Un membre en échec est laissé de côté ; sans Président, la ronde ne fait rien.</li>
-</ul>
-<details class="lecture"><summary>Les dix membres</summary><ul class="liste-simple">{membres}</ul></details>
-<dl class="regles">
-<div><dt>Levier</dt><dd>10 au plus, avec les marges de Kraken (1 à 2{NBSP}% du montant pour ouvrir) ; une entrée jusqu’à 500{NBSP}% de la valeur du portefeuille, une position jusqu’à 1{NNBSP}000{NBSP}%.</dd></div>
-<div><dt>Stop</dt><dd>Obligatoire, entre 1 et 15{NBSP}%, et toujours avant la liquidation ; perte au stop de 25{NBSP}% du portefeuille au plus par trade, 60{NBSP}% pour tous les stops réunis.</dd></div>
-<div><dt>Rythme</dt><dd>24 ouvertures par 24{NBSP}h au plus, sans délai entre deux ; ni gel quotidien, ni budget de frais (les frais restent réels et comptés).</dd></div>
-<div><dt>Arrêt</dt><dd>À −90{NBSP}% depuis son plus haut (la ruine) : positions fermées, plus aucune ronde. Seul l’opérateur de l’arène peut le relancer, à la main.</dd></div>
-<div><dt>Liquidation</dt><dd>Simulée comme chez Kraken : quand la valeur tombe sous la marge de maintenance (la moitié de la marge d’ouverture), testée chaque minute au pire prix, avec 5{NBSP}% de frais de liquidation ; puis 1{NBSP}h sans entrée.</dd></div>
-</dl>
-"""
-        if conseil else ""
+    pointeur_conseils = (
+        '<p>Les conseils, plusieurs IA qui délibèrent avant qu’un Président décide, ont leur propre ligue, sur le même journal, les mêmes marchés et la même veille : '
+        '<a href="conseils.html#m-conseils">leurs règles</a>.</p>\n'
+        if perp.get("conseils") else ""
     )
     temoins = "".join(
-        f'<div><dt>{e(P.NOMS[k].removeprefix("Témoin "))}</dt><dd>{e(v)}</dd></div>' for k, v in P.DESCRIPTIONS.items()
+        f'<div><dt>{e(P.NOMS[k].removeprefix("Témoin "))}</dt><dd>{e(v)}</dd></div>' for k, v in P.DESCRIPTIONS.items() if not k.startswith(P.PREFIXE_CONSEIL)
     )
     return f"""
 <section aria-labelledby="m-derives"><h2 id="m-derives">La ligue dérivés</h2>
@@ -889,7 +971,7 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 <div><dt>Coûts</dt><dd>Frais de 0,07{NBSP}% et glissement de 0,05{NBSP}% par ordre, arrondis défavorables ; funding horaire réel de Kraken ; clôture forcée si la marge tombe sous 25{NBSP}% de l’exposition.</dd></div>
 <div><dt>Prix</dt><dd>En dollars, convertis en euros au cours EUR/USD du moment. Sur ce site, les positions sont aussi revalorisées en direct au prix public de Kraken (chiffres soulignés en pointillé) : une estimation, le chiffre officiel reste celui du relevé.</dd></div>
 </dl>
-{section_conseil}<h3>Les témoins</h3>
+<h3>Les témoins</h3>
 <dl class="regles">{temoins}</dl>
 <h3>Ce que l’IA peut consulter</h3>
 <p>Un instantané du compte et des 6 marchés, puis 4 appels au plus parmi 6 outils en lecture seule, figés au début de la ronde (ni web, ni donnée postérieure) :</p>
@@ -902,6 +984,43 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 <li><strong>Alerte</strong> : à chaque décision, une IA peut laisser 3 alertes de prix au plus. Une alerte franchie ne réveille qu’elle.</li>
 <li><strong>Ordre d’entrée</strong> : 3 au plus, à un niveau de prix. Franchi, il passe le garde-fou puis s’exécute, sans rappeler l’IA. Chaque décision remplace ce qui était en attente.</li>
 </ul>
-<p><span class="pastille {"ok" if ok else "perte-bg"}">Journal de la ligue : {"chaîne intacte" if ok else "ÉCHEC"}</span> {pluriel(j["n_records"], "événement")}.</p>
+{pointeur_conseils}<p><span class="pastille {"ok" if ok else "perte-bg"}">Journal de la ligue : {"chaîne intacte" if ok else "ÉCHEC"}</span> {pluriel(j["n_records"], "événement")}.</p>
+</section>
+"""
+
+
+def methode_conseils(data: dict[str, Any]) -> str:
+    """Les règles de la ligue des conseils (section de sa page d'accueil)."""
+    perp = data["perp"]["conseils"]
+    conseils = [p for p in perp["portfolios"] if p["kind"] == "conseil"]
+    membres = "".join(
+        f"<li><strong>{e(n)}</strong> (étape {etape}) : {e(role)}. <span class=\"muted\">Sources : {e(src)}.</span></li>"
+        for n, etape, role, src in P.MEMBRES.values()
+    )
+    budgets = " ; ".join(
+        f"{e(c['name'])} {P.BUDGETS_CONSEIL_USD[c['id']]}{NBSP}$ par jour" for c in conseils if c["id"] in P.BUDGETS_CONSEIL_USD
+    )
+    budget = (
+        f"<div><dt>Budget du jour</dt><dd>{budgets}, en équivalent catalogue. Une ronde qui ne tient plus dans le budget est sautée.</dd></div>\n"
+        if budgets else ""
+    )
+    return f"""<section aria-labelledby="m-conseils"><h2 id="m-conseils">Les conseils : méthode</h2>
+<p>Un conseil est un portefeuille décidé par dix Claude Haiku 5.5 qui délibèrent à chaque ronde, puis par un Président, avec un mandat agressif : doubler la mise en quelques jours. Les conseils jouent les mêmes rondes que les IA des dérivés (rendez-vous, appel régulier, réveils, alertes, rappels) ; une ronde compte pour un appel dans le plafond du jour, et son coût est la somme des appels de la ronde.</p>
+<p>Les conseils ne diffèrent que par leur Président : Haiku pour le Conseil Haiku, Opus pour le Conseil Opus. <strong>{e(P.HORS_REGLE_CONSEIL)}</strong> Ils ne sont donc jamais classés avec les IA des dérivés, qui jouent toutes avec les mêmes règles.</p>
+<ul class="liste-simple">
+<li><strong>Étape A</strong> : les conseillers donnent chacun un avis sans voir les autres (long, short ou plat par contrat, conviction de 0 à 100, taille, stop, niveau clé, argument). Les rondes d’avant l’arrivée de l’Arbitragiste de paires comptent un avis de moins.</li>
+<li><strong>Étape B</strong> : l’Avocat du diable lit ces avis et attaque le trade le plus soutenu.</li>
+<li><strong>Étape C</strong> : le Président lit tous les avis et décide, au même format que les IA. Un conseiller en échec est laissé de côté ; sans Président, la ronde ne fait rien.</li>
+</ul>
+<details class="lecture"><summary>Les membres et leurs sources</summary><ul class="liste-simple">{membres}</ul>
+<p class="muted">Sources : TradingAgents (TauricResearch), claude-trading-skills (tradermonty) et HyperGrok (galleonlabs), trois dépôts publics.</p></details>
+<dl class="regles">
+<div><dt>Levier</dt><dd>10 au plus, avec les marges de Kraken (1 à 2{NBSP}% du montant pour ouvrir) ; une entrée jusqu’à 500{NBSP}% de la valeur du portefeuille, une position jusqu’à 1{NNBSP}000{NBSP}%.</dd></div>
+<div><dt>Stop</dt><dd>Obligatoire, entre 1 et 15{NBSP}%, et toujours avant la liquidation ; perte au stop de 25{NBSP}% du portefeuille au plus par trade, 60{NBSP}% pour tous les stops réunis.</dd></div>
+<div><dt>Rythme</dt><dd>24 ouvertures par 24{NBSP}h au plus, sans délai entre deux ; ni gel quotidien, ni budget de frais (les frais restent réels et comptés).</dd></div>
+<div><dt>Arrêt</dt><dd>À −90{NBSP}% depuis son plus haut (la ruine) : positions fermées, plus aucune ronde. Seul l’opérateur de l’arène peut le relancer, à la main.</dd></div>
+<div><dt>Liquidation</dt><dd>Simulée comme chez Kraken : quand la valeur tombe sous la marge de maintenance (la moitié de la marge d’ouverture), testée chaque minute au pire prix, avec 5{NBSP}% de frais de liquidation ; puis 1{NBSP}h sans entrée.</dd></div>
+{budget}</dl>
+<p class="muted">La politique est la même pour les deux conseils. Marchés, veille, journal et témoin de référence sont ceux de la <a href="index.html">ligue dérivés</a>.</p>
 </section>
 """

@@ -61,7 +61,7 @@ from arene.perp.agent import AgentDecider
 from arene.perp.agent_round import _close_unprotected, _execute
 from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
-from arene.perp.council import CouncilConfigError, load_council
+from arene.perp.council import CouncilConfigError, load_councils_league
 from arene.perp.counters import counters_for
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
@@ -211,8 +211,8 @@ class PerpWatcher:
         """The council's own policy for the council (docs/SPEC-PERP-CONSEIL-HAIKU.md §5), the league's for every
         other portfolio. A council whose configuration did not load keeps the league's policy (2x, halt at
         -15 %): stricter, never looser."""
-        c = self.llm.council if self.llm is not None else None
-        if c is not None and portfolio == c.portfolio and leveraged(portfolio):
+        c = self.llm.council(portfolio) if self.llm is not None else None
+        if c is not None and leveraged(portfolio):
             return c.policy
         return self.policy
 
@@ -1024,9 +1024,9 @@ class PerpWatcher:
                 if m.portfolio in triggers:
                     continue
                 last = RQ.last_played(events, m.portfolio)
-                if last is None:
-                    continue
-                due = last + self.llm.cadence_min * 60
+                # a player that never played (a council added to the league) is due now, not at the next
+                # rendez-vous (docs/SPEC-LIGUE-CONSEILS.md §5)
+                due = now_ts if last is None else last + self.llm.cadence_min * 60
                 asked = AO.pending_wakeup(events, m.portfolio, now_ts)
                 if asked is not None and asked["due_ts"] <= due:
                     continue  # served as `scheduled`, at its own time
@@ -1042,7 +1042,7 @@ class PerpWatcher:
             p: t
             for p, t in triggers.items()
             if p in models
-            and not states[p].halted
+            and not (p in states and states[p].halted)  # a council not opened yet opens in its round
             and has_budget(models[p], events, now_ts)
             and self.quota(events, p, now_ts)["extra_left"] > 0
         }
@@ -1325,15 +1325,20 @@ def main(argv: list[str] | None = None) -> int:
                 now_ts,
             )
         if llm is not None:
-            try:  # a bad council config disables the council only
-                llm = dataclasses.replace(llm, council=load_council())
+            errors: list[str] = []
+            try:  # a bad council config disables that council only; a bad league file, the councils only
+                councils = load_councils_league()
+                llm = dataclasses.replace(llm, councils=councils)
+                errors = list(councils.errors)
             except CouncilConfigError as exc:
+                errors = [f"league of the councils: {exc}"]
+            for err in errors:
                 notifier.send(
-                    "action", "perp_council_config_invalid", f"council config invalid, off: {exc}"[:900]
+                    "action", "perp_council_config_invalid", f"council config invalid, off: {err}"[:900]
                 )
                 journal.append(
                     "alert",
-                    {"level": "action", "code": "perp_council_config_invalid", "message": str(exc)[:1000]},
+                    {"level": "action", "code": "perp_council_config_invalid", "message": err[:1000]},
                     now_ts,
                 )
         w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm)

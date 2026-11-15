@@ -1,5 +1,7 @@
 # Ligue dérivés : le Conseil Haiku
 
+> **Depuis le 15/11/2026** (`docs/SPEC-LIGUE-CONSEILS.md`) : le conseil a 11 membres (10 conseillers Haiku, dont l'Arbitragiste de paires, et un Président), consignes v2 ; il joue dans la **ligue des conseils**, avec le Conseil Opus (mêmes conseillers, Président Opus). Ce qui suit reste vrai pour tout le reste ; la reprise après la ruine prend `--portfolio council-perp:haiku`.
+
 ## 0. La demande
 
 the owner, le 14/11/2026 à 16:54 UTC :
@@ -114,7 +116,7 @@ Doubler est impossible avec la politique de la ligue : 2x, 3 % de perte par trad
 **Relancer après la ruine :**
 
 ```bash
-cd ~/dev/arene-trading && .venv/bin/python -m arene.perp.council resume
+cd ~/dev/arene-trading && .venv/bin/python -m arene.perp.council resume --portfolio council-perp:haiku
 ```
 
 Cette commande écrit `portfolio_resumed` dans le journal. C'est une décision du propriétaire seul.

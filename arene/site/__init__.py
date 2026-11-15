@@ -95,7 +95,14 @@ def build(
             _write(tmp / "comptant.html", render.index_page(data))
             for p in perp["portfolios"]:
                 _write(tmp / "derives" / f"{p['slug']}.html", render_perp.portfolio_page(data, p))
-            _json(tmp / "data" / "derives.json", {**meta, **perp})  # déjà filtré par site.perp
+            conseils = perp.get("conseils")
+            if conseils:  # la ligue des conseils : même journal, sa propre page et une page par conseil
+                _write(tmp / "conseils.html", render_perp.conseils_page(data))
+                for p in conseils["portfolios"]:
+                    if p["kind"] == "conseil":
+                        _write(tmp / "conseils" / f"{p['slug']}.html", render_perp.portfolio_page(data, p))
+                _json(tmp / "data" / "conseils.json", {**meta, **conseils})
+            _json(tmp / "data" / "derives.json", {**meta, **{k: v for k, v in perp.items() if k != "conseils"}})  # déjà filtré par site.perp
         else:
             _write(tmp / "index.html", render.index_page(data))
         _write(tmp / "methode.html", render.methode_page(data))

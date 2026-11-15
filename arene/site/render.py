@@ -21,7 +21,6 @@ NNBSP = "\u202f"
 MINUS = "\u2212"
 MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
 
-BANDEAU = "Simulation\u202f: argent fictif, aucun ordre réel"
 BANDEAU_REEL = "ARGENT RÉEL"
 NOMBRES_MIN = {1: "un", 2: "deux", 3: "trois", 4: "quatre", 5: "cinq", 6: "six", 7: "sept", 8: "huit"}
 
@@ -190,14 +189,21 @@ def layout(
     *, title: str, body: str, root: str, active: str, data: dict[str, Any], scripts: str = "", ligue: str = "spot",
     direct: bool = False,
 ) -> str:
-    """`ligue` choisit la rangée de portefeuilles de l'en-tête : « perp » (ligue dérivés) ou « spot » (comptant)."""
+    """`ligue` choisit la rangée de portefeuilles de l'en-tête : « perp » (ligue dérivés), « conseils » (ligue des
+    conseils) ou « spot » (comptant)."""
     perp = data.get("perp")
+    if ligue == "conseils" and not (perp and perp.get("conseils")):
+        ligue = "perp"
     if ligue == "perp" and not perp:
         ligue = "spot"
-    dossier, pfs = ("derives", perp["portfolios"]) if ligue == "perp" else ("modele", data["portfolios"])
+    if ligue == "conseils":
+        pfs = perp["conseils"]["portfolios"]
+    else:
+        pfs = perp["portfolios"] if ligue == "perp" else data["portfolios"]
 
     def lien(p: dict[str, Any]) -> str:
         courant = ' aria-current="page"' if active == p["id"] else ""
+        dossier = "modele" if ligue == "spot" else ("conseils" if p["kind"] == "conseil" else "derives")
         return f'<a href="{root}{dossier}/{e(p["slug"])}.html"{courant}>{e(nom_court(p["name"]))}</a>'
 
     llms = "".join(lien(p) for p in pfs if p["kind"] == "llm")
@@ -206,8 +212,8 @@ def layout(
     groupes = ""
     if llms:
         groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Modèles d’IA</span>{llms}</div>'
-    if conseils:  # le Conseil Haiku (dérivés) : une catégorie à part, jamais avec les modèles neutres
-        groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Agressif</span>{conseils}</div>'
+    if conseils:  # ligue des conseils : les conseils agressifs, puis le témoin de référence
+        groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Conseils</span>{conseils}</div>'
     if tems:
         groupes += f'<div class="nav-groupe"><span class="nav-titre" aria-hidden="true">Témoins</span>{tems}</div>'
     def cur(x: str) -> str:
@@ -216,7 +222,8 @@ def layout(
     if perp:
         nav_top = (
             f'<a href="{root}index.html"{cur("index")}>Dérivés</a>'
-            f'<a href="{root}comptant.html"{cur("comptant")}>Comptant</a>'
+            + (f'<a href="{root}conseils.html"{cur("conseils")}>Conseils</a>' if perp.get("conseils") else "")
+            + f'<a href="{root}comptant.html"{cur("comptant")}>Comptant</a>'
             f'<a href="{root}methode.html"{cur("methode")}>Méthode</a>'
         )
     else:
@@ -229,9 +236,11 @@ def layout(
     )
     if ligue == "perp":
         accroche = f"Des IA gèrent chacune {eur(1_000_000_000, decimals=0)} fictifs en contrats perpétuels, face à des témoins sans IA"
+    if ligue == "conseils":
+        accroche = f"Des conseils d’IA gèrent chacun {eur(1_000_000_000, decimals=0)} fictifs en contrats perpétuels, avec un mandat agressif"
     vm = data["venue_mode"]
     if vm == "paper":
-        bandeau = f'<p class="bandeau"><span class="bandeau-point" aria-hidden="true"></span><strong>{e(BANDEAU)}</strong></p>'
+        bandeau = ""  # l'avertissement de simulation est au pied de chaque page (AVERTISSEMENT) et dans la méthode
     else:
         bandeau = (
             f'<p class="bandeau reel"><strong>{e(BANDEAU_REEL)}</strong>'
@@ -329,8 +338,8 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
     out, llm, tem = [], 0, 0
     for s in chart["series"]:
         focused = focus is not None and s["id"] == focus
-        if s["kind"] == "conseil":
-            st = {"color": "--conseil", "dash": None, "width": 2.5}
+        if s["kind"] == "conseil":  # une teinte par conseil : Haiku magenta, Opus doré
+            st = {"color": "--conseil2" if s["id"].endswith(":opus") else "--conseil", "dash": None, "width": 2.5}
         elif s["kind"] == "llm":
             k = COULEUR_LLM.get(s["id"].replace("llm-perp:", "llm:"), llm)
             st = {"color": f"--llm{k % N_COULEURS_LLM}", "dash": None, "width": 2.5}

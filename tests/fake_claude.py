@@ -27,7 +27,7 @@ ROLES = {
     "le Cartographe": "cartographe", "le Suiveur": "suiveur", "le Chasseur de cassures": "chasseur",
     "le Contrarien": "contrarien", "le Lecteur de carnet": "carnet", "le Trésorier du levier": "tresorier",
     "l'Avocat du diable": "avocat", "le Gardien du risque": "gardien", "le Mémorialiste": "memorialiste",
-    "le Président": "president",
+    "l'Arbitragiste de paires": "arbitragiste", "le Président": "president",
 }  # fmt: skip
 member = next((k for name, k in ROLES.items() if f"## Ton rôle : {name}\n" in system), None)
 council = json.loads(os.environ.get("FAKE_CLAUDE_COUNCIL") or "{}")

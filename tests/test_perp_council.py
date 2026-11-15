@@ -20,8 +20,10 @@ from arene.perp.council import (
     STAGE_A,
     CouncilConfigError,
     CouncilDecider,
+    CouncilsLeague,
     council_record,
     load_council,
+    load_councils_league,
     member_prompt,
     member_sha256,
     parse_opinion,
@@ -38,10 +40,12 @@ from tests.test_perp_watcher import POLICY, SPECS, T0, World
 
 COUNCIL = load_council()
 NAME = COUNCIL.portfolio
+OPUS = load_council(Path("config/perp-conseil-opus.toml"))
+ONLY_HAIKU = CouncilsLeague(True, 4, (COUNCIL,), (), "league-sha")
 HAIKU = "llm-perp:claude-haiku-5-5"
 # one LLM portfolio beside the council keeps the tests short; no cadence (its own test below)
 BASE = dataclasses.replace(load_llm_league(), cadence_min=0, rounds_per_day=48)
-LEAGUE = dataclasses.replace(BASE, models=BASE.models[:1], council=COUNCIL)
+LEAGUE = dataclasses.replace(BASE, models=BASE.models[:1], councils=ONLY_HAIKU)
 BIG_ENTRY = {
     "actions": [
         {
@@ -67,7 +71,8 @@ def council_factory(tmp: Path, calls: list, council: dict | None = None, extra: 
 
     def make(m):
         if m.council:
-            return CouncilDecider(COUNCIL, tmp / "claude-empty", runner=counted)
+            cfg = OPUS if m.portfolio == OPUS.portfolio else COUNCIL
+            return CouncilDecider(cfg, tmp / "claude-empty", runner=counted)
         return AgentDecider(m.model, m.portfolio, tmp / "claude-empty", runner=counted, effort=BASE.effort)
 
     return make
@@ -123,20 +128,22 @@ def test_the_council_config_and_its_policy_are_valid_and_strict(tmp_path):
         (tmp_path / "c.toml").write_text(cfg.replace(old, new))
         with pytest.raises(CouncilConfigError):
             load_council(tmp_path / "c.toml")
-    # the default league config never loads the council by itself (the watcher adds it)
-    assert load_llm_league().council is None and len(load_llm_league().players) == 4
+    # the default league config never loads the councils by itself (the watcher adds them)
+    assert load_llm_league().councils is None and len(load_llm_league().players) == 4
     assert [m.portfolio for m in LEAGUE.players] == [HAIKU, NAME] and LEAGUE.players[-1].council
 
 
-def test_ten_members_with_their_role_sources_and_format():
+def test_eleven_members_with_their_role_sources_and_format():
     assert (
-        len(MEMBERS) == 10 and len(STAGE_A) == 8 and ADVOCATE.key == "avocat" and PRESIDENT.key == "president"
+        len(MEMBERS) == 11 and len(STAGE_A) == 9 and ADVOCATE.key == "avocat" and PRESIDENT.key == "president"
     )
+    assert "arbitragiste" in [m.key for m in STAGE_A]
     shas = set()
     for m in MEMBERS:
         text = member_prompt(m)
         assert (
-            "le Conseil Haiku" in text
+            "onze membres d'un conseil" in text
+            and "Haiku" not in text  # the same prompts for both councils: nothing tells the President's model
             and "doubler le capital" in text
             and f"## Ton rôle : {m.name[0].lower()}{m.name[1:]}" in text
         )
@@ -145,7 +152,7 @@ def test_ten_members_with_their_role_sources_and_format():
             m is not PRESIDENT
         )
         shas.add(member_sha256(m))
-    assert len(shas) == 10
+    assert len(shas) == 11
     # the neutral models keep their prompt and their schema
     assert prompt_sha256() == AgentDecider("m", "p", Path("/tmp")).prompt_digest()
     assert OUTPUT_SCHEMA["properties"]["actions"]["items"]["properties"]["size_pct"]["maximum"] == 100
@@ -197,15 +204,18 @@ def test_the_council_parses_sizes_above_the_equity_and_the_models_do_not():
 def test_a_council_round_end_to_end(tmp_path):
     w, calls, rep = council_world(tmp_path, {"president": BIG_ENTRY})
     assert not rep.problems, rep.problems
-    assert calls.count("claude-haiku-5-5") == 1 + 10  # the Haiku portfolio, then the ten members
+    assert calls.count("claude-haiku-5-5") == 1 + 11  # the Haiku portfolio, then the eleven members
     ops = payloads(w, "council_opinion", NAME)
     assert [o["member"] for o in ops] == [m.key for m in (*STAGE_A, ADVOCATE)]
     assert all(o["opinion"] is not None and o["error"] is None and o["cost_uusd"] == 12346 for o in ops)
     assert {o["persona_sha256"] for o in ops} == {member_sha256(m) for m in (*STAGE_A, ADVOCATE)}
     assert ops[-1]["opinion"]["cible"] == {"instrument": "PF_XBTUSD", "sens": "long"}
     [d] = payloads(w, "agent_decision", NAME)
-    assert d["prompt_sha256"] == member_sha256(PRESIDENT) and d["cost_uusd"] == 10 * 12346
-    assert d["council"]["members_ok"] == 9 and d["council"]["members_failed"] == []
+    assert d["prompt_sha256"] == member_sha256(PRESIDENT) and d["cost_uusd"] == 11 * 12346
+    assert d["council"]["members_ok"] == 10 and d["council"]["members_failed"] == []
+    assert d["council"]["president_model"] == "claude-haiku-5-5" and d["council"]["name"] == "Conseil Haiku"
+    assert d["council"]["members_model"] == "claude-haiku-5-5" and d["council"]["prompts_version"] == "v2"
+    assert d["model_requested"] == "claude-haiku-5-5"
     assert d["council"]["config_sha256"] == COUNCIL.sha256
     # the opinions are journaled before the decision, the tool calls carry their member
     seqs = [e["seq"] for e in w.events() if e["payload"].get("portfolio") == NAME]
@@ -216,7 +226,7 @@ def test_a_council_round_end_to_end(tmp_path):
         range(1, len(tools) + 1)
     )
     [rd] = payloads(w, "round_data", NAME)
-    assert rd["council_config_sha256"] == COUNCIL.sha256
+    assert rd["council_config_sha256"] == COUNCIL.sha256 and rd["councils_league_sha256"] == "league-sha"
     # the President's 4x entry passes the council's policy, with its own hash
     [v] = payloads(w, "perp_verdict", NAME)
     assert v["approved"] and v["policy_sha256"] == COUNCIL.policy.sha256
@@ -233,7 +243,7 @@ def test_a_council_round_end_to_end(tmp_path):
     # the next tick calls nobody again
     w.advance(T0 + 420)
     w.w.tick(T0 + 420)
-    assert len(calls) == 11
+    assert len(calls) == 12
 
 
 def test_stage_a_opinions_are_independent(tmp_path):
@@ -242,7 +252,7 @@ def test_stage_a_opinions_are_independent(tmp_path):
     base = w.var / rd["path"] / "membres"
     stdin = {m.key: (base / m.key / "stdin.txt").read_text() for m in MEMBERS}
     first = {stdin[m.key] for m in STAGE_A}
-    assert len(first) == 1  # the eight members of stage A get the same message...
+    assert len(first) == 1  # the nine members of stage A get the same message...
     msg = first.pop()
     assert "<avis_du_conseil>" not in msg and "funding faible" not in msg  # ...without anyone's opinion
     assert "bilan_du_conseil" in msg
@@ -273,11 +283,11 @@ def test_a_failed_member_is_left_out_and_a_failed_president_decides_nothing(tmp_
     w, _, _ = council_world(tmp_path / "b", {"fail": ["president"], "president": BIG_ENTRY})
     [d] = payloads(w, "agent_decision", NAME)
     assert d["parsed"] is None and str(d["parse_error"]).startswith("president")
-    assert not payloads(w, "perp_verdict", NAME) and len(payloads(w, "council_opinion", NAME)) == 9
+    assert not payloads(w, "perp_verdict", NAME) and len(payloads(w, "council_opinion", NAME)) == 10
     assert any(e["type"] == "perp_round_done" for e in w.events())
 
 
-COUNCIL_CEILING_UUSD = 100_000  # 1 $ for the round (max_budget_usd of the league), a tenth per member
+COUNCIL_CEILING_UUSD = 50_000  # 1 $ for the round (max_budget_usd of the league), a twentieth per adviser
 
 
 def test_a_crash_inside_the_council_never_loses_the_cost_of_its_calls(tmp_path, monkeypatch):
@@ -298,15 +308,15 @@ def test_a_crash_inside_the_council_never_loses_the_cost_of_its_calls(tmp_path, 
         ops["carnet"]["opinion"] is None and ops["carnet"]["cost_uusd"] == 12346
     )  # read back from its stream
     [d] = payloads(w, "agent_decision", NAME)
-    assert d["cost_uusd"] == 10 * 12346 and d["council"]["members_failed"] == ["carnet"]
+    assert d["cost_uusd"] == 11 * 12346 and d["council"]["members_failed"] == ["carnet"]
 
-    def broken_record(self, m, r, ceiling):
+    def broken_record(self, m, r):
         raise OSError("prompt file unreadable")
 
     monkeypatch.setattr(C.CouncilDecider, "_record", broken_record)
     w, _, _ = council_world(tmp_path / "b")
     [d] = payloads(w, "agent_decision", NAME)
-    assert str(d["parse_error"]).startswith("council crashed") and d["cost_uusd"] == 8 * 12346
+    assert str(d["parse_error"]).startswith("council crashed") and d["cost_uusd"] == 9 * 12346
     assert not payloads(w, "perp_verdict", NAME)
 
 
@@ -332,10 +342,10 @@ def test_a_cut_during_the_council_is_never_replayed(tmp_path, monkeypatch):
     skipped = payloads(w, "perp_llm_skipped", NAME)
     assert len(calls) == n and [s["reason"] for s in skipped] == ["interrupted_after_call"]
     assert not payloads(w, "agent_decision", NAME) and not payloads(w, "council_opinion", NAME)
-    # the eight members of stage A were paid (0.0123456 $ each, from their streams): counted in the budget
+    # the nine members of stage A were paid (0.0123456 $ each, from their streams): counted in the budget
     from arene.perp.llm_league import spent_today_uusd
 
-    assert skipped[0]["cost_uusd"] == 8 * 12346 and spent_today_uusd(w.events(), NAME, T0 + 420) == 8 * 12346
+    assert skipped[0]["cost_uusd"] == 9 * 12346 and spent_today_uusd(w.events(), NAME, T0 + 420) == 9 * 12346
 
 
 def test_opinions_of_a_round_cut_before_its_decision_count_in_the_budget():
@@ -355,13 +365,13 @@ def test_opinions_of_a_round_cut_before_its_decision_count_in_the_budget():
 def test_the_council_plays_the_cadence_like_the_models(tmp_path):
     league = dataclasses.replace(LEAGUE, cadence_min=10)
     w, calls, _ = council_world(tmp_path, league=league)
-    assert len(calls) == 11
+    assert len(calls) == 12
     w.advance(T0 + 720)
     w.w.tick(T0 + 720)
     rounds = [p for p in payloads(w, "perp_round") if p["kind"] == "private"]
     assert rounds and rounds[-1]["portfolios"] == sorted([HAIKU, NAME])
-    assert rounds[-1]["triggers"][NAME]["kind"] == "cadence" and len(calls) == 22
-    assert w.w.quota(w.events(), NAME, T0 + 720)["played_today"] == 2  # one round of the council, not ten
+    assert rounds[-1]["triggers"][NAME]["kind"] == "cadence" and len(calls) == 24
+    assert w.w.quota(w.events(), NAME, T0 + 720)["played_today"] == 2  # one round of the council, not eleven
 
 
 # ---------------------------------------------------------------------- the aggressive policy and the margins
@@ -485,7 +495,7 @@ def test_the_watcher_never_freezes_the_council_and_halts_it_at_minus_90(tmp_path
 
 
 def test_a_council_without_its_config_keeps_the_stricter_league_policy(tmp_path):
-    w = World(tmp_path, llm=dataclasses.replace(LEAGUE, council=None))
+    w = World(tmp_path, llm=dataclasses.replace(LEAGUE, councils=None))
     assert w.w.policy_for(NAME) is POLICY
     assert NAME not in {m.portfolio for m in w.w.llm.players}
 
@@ -526,6 +536,140 @@ def test_resume_lifts_the_halt(tmp_path, capsys):
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
     sim.open_portfolio(NAME, "council", 0)
     sim.append_event("portfolio_halted", {"portfolio": NAME, "reason": "drawdown", "until_ts": 0}, 1)
-    assert main(["resume", "--var", str(var)]) == 0 and "resumed" in capsys.readouterr().out
+    assert main(["resume", "--var", str(var)]) == 2  # two councils: which one?
+    assert main(["resume", "--portfolio", "council-perp:nope", "--var", str(var)]) == 2
+    assert (
+        main(["resume", "--portfolio", NAME, "--var", str(var)]) == 0 and "resumed" in capsys.readouterr().out
+    )
     assert not PerpSimulator(Journal(var / "journal" / "events.jsonl"), {}).states()[NAME].halted
-    assert main(["resume", "--var", str(var)]) == 0 and "nothing to do" in capsys.readouterr().out
+    assert main(["resume", "--portfolio", NAME, "--var", str(var)]) == 0
+    assert "nothing to do" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------- the league of the councils
+
+
+def test_the_league_of_the_councils_config(tmp_path):
+    league = load_councils_league()
+    assert [c.portfolio for c in league.councils] == ["council-perp:haiku", "council-perp:opus"]
+    assert league.errors == () and league.max_member_processes == 4
+    haiku, opus = league.councils
+    assert (haiku.name, haiku.model, haiku.president_model) == (
+        "Conseil Haiku",
+        "claude-haiku-5-5",
+        "claude-haiku-5-5",
+    )
+    assert (opus.name, opus.model, opus.president_model) == (
+        "Conseil Opus",
+        "claude-haiku-5-5",
+        "claude-opus-5-5",
+    )
+    # the same advisers, prompts and policy: only the President (and its budget and timeout) differ
+    assert opus.policy.sha256 == haiku.policy.sha256 and opus.members_parallel == haiku.members_parallel
+    assert opus.daily_budget_uusd == 25_000_000 and haiku.daily_budget_uusd == 10_000_000
+    assert opus.president_timeout_s == 240 and haiku.president_timeout_s == 90
+    # a bad council is left out alone; a bad league file is an error
+    for f in ("policy-perp-conseil.toml", "perp-conseil.toml", "perp-conseil-opus.toml"):
+        (tmp_path / f).write_text(Path("config", f).read_text())
+    opus_bad = (
+        Path("config/perp-conseil-opus.toml").read_text().replace("claude-opus-5-5", "claude-fable-5-2")
+    )
+    (tmp_path / "perp-conseil-opus.toml").write_text(opus_bad)
+    (tmp_path / "l.toml").write_text(Path("config/ligue-conseils.toml").read_text())
+    got = load_councils_league(tmp_path / "l.toml")
+    assert [c.portfolio for c in got.councils] == [NAME] and "president_model" in got.errors[0]
+    (tmp_path / "l.toml").write_text(Path("config/ligue-conseils.toml").read_text() + "extra = 1\n")
+    with pytest.raises(CouncilConfigError):
+        load_councils_league(tmp_path / "l.toml")
+    off = Path("config/ligue-conseils.toml").read_text().replace("enabled = true", "enabled = false")
+    (tmp_path / "l.toml").write_text(off)
+    assert load_councils_league(tmp_path / "l.toml").councils == ()
+    # each council reads its own policy: the league's players
+    lg = dataclasses.replace(BASE, councils=league)
+    assert [m.portfolio for m in lg.players][-2:] == [NAME, OPUS.portfolio]
+    assert lg.players[-1].model == "claude-opus-5-5" and lg.council(OPUS.portfolio) is opus
+
+
+def test_the_ceilings_of_a_round_favour_the_president():
+    d = CouncilDecider(OPUS, Path("/tmp"))
+    assert d.member_ceiling_uusd(STAGE_A[0]) == 50_000 and d.member_ceiling_uusd(ADVOCATE) == 50_000
+    assert d.member_ceiling_uusd(PRESIDENT) == 500_000  # 10 x 0.05 + 0.50 = the round's 1 $
+    assert d.model == "claude-opus-5-5"
+    president = d._member(PRESIDENT, [], "0.5")
+    adviser = d._member(STAGE_A[0], None, "0.05")
+    assert (president.model, president.timeout_s) == ("claude-opus-5-5", 240.0)
+    assert (adviser.model, adviser.timeout_s) == ("claude-haiku-5-5", 90.0)
+
+
+def test_two_councils_play_the_same_round_haiku_and_opus_presidents(tmp_path):
+    both = CouncilsLeague(True, 2, (COUNCIL, OPUS), (), "league-sha")
+    lg = dataclasses.replace(LEAGUE, councils=both)
+    w, calls, rep = council_world(tmp_path, {"president": BIG_ENTRY}, league=lg)
+    assert not rep.problems, rep.problems
+    assert calls.count("claude-opus-5-5") == 1 and calls.count("claude-haiku-5-5") == 1 + 11 + 10
+    for name, pres in ((NAME, "claude-haiku-5-5"), (OPUS.portfolio, "claude-opus-5-5")):
+        ops = payloads(w, "council_opinion", name)
+        assert [o["member"] for o in ops] == [m.key for m in (*STAGE_A, ADVOCATE)]
+        [d] = payloads(w, "agent_decision", name)
+        assert d["council"]["president_model"] == pres and d["model_requested"] == pres
+        assert d["prompt_sha256"] == member_sha256(PRESIDENT)  # the same prompts for both
+        [v] = payloads(w, "perp_verdict", name)
+        assert v["approved"] and v["policy_sha256"] == COUNCIL.policy.sha256
+    opened = {p["portfolio"]: (p["kind"], p["league"]) for p in payloads(w, "portfolio_opened")}
+    assert opened[OPUS.portfolio] == ("council", "perp")  # same engine and journal; the site shows them apart
+    assert w.w.policy_for(OPUS.portfolio) is OPUS.policy
+
+
+def test_member_processes_are_bounded_across_the_councils(tmp_path):
+    both = CouncilsLeague(True, 2, (COUNCIL, OPUS), (), "league-sha")
+    lg = dataclasses.replace(LEAGUE, models=(), councils=both)
+    lock = threading.Lock()
+    live, peak = [0], [0]
+    plain = fake_runner("normal")
+
+    def runner(cmd, stdin, env, cwd, timeout):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        try:
+            return plain(cmd, stdin, {**env, "FAKE_CLAUDE_COUNCIL": "{}"}, cwd, timeout)
+        finally:
+            with lock:
+                live[0] -= 1
+
+    w = World(tmp_path, llm=lg)  # the league's own deciders (with the shared slots), only the runner is fake
+    import arene.perp.llm_league as L
+
+    real = L.CouncilDecider
+
+    def with_runner(*a, **k):
+        return real(*a, **{**k, "runner": runner})
+
+    L.CouncilDecider = with_runner
+    try:
+        rep = w.w.tick(T0 + 120)
+    finally:
+        L.CouncilDecider = real
+    assert not rep.problems, rep.problems
+    assert (
+        len(payloads(w, "agent_decision", NAME)) == 1
+        and len(payloads(w, "agent_decision", OPUS.portfolio)) == 1
+    )
+    assert peak[0] == 2
+
+
+def test_a_council_that_never_played_is_due_at_the_next_tick(tmp_path):
+    lg = dataclasses.replace(LEAGUE, models=(), cadence_min=10)
+    w, calls, _ = council_world(tmp_path, league=lg)
+    assert len(calls) == 11  # the rendez-vous of T0
+    both = CouncilsLeague(True, 4, (COUNCIL, OPUS), (), "league-sha")
+    w.w.llm = dataclasses.replace(lg, councils=both)
+    w.w.decider_factory = council_factory(tmp_path, calls)
+    w.advance(T0 + 420)
+    w.w.tick(T0 + 420)  # the Haiku council is not due yet; the Opus council never played: due now
+    [d] = payloads(w, "agent_decision", OPUS.portfolio)
+    assert (
+        d["council"]["president_model"] == "claude-opus-5-5" and len(payloads(w, "agent_decision", NAME)) == 1
+    )
+    rnd = [p for p in payloads(w, "perp_round") if p["kind"] == "private"][-1]
+    assert rnd["portfolios"] == [OPUS.portfolio] and rnd["triggers"][OPUS.portfolio]["last_round_ts"] is None

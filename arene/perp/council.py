@@ -1,16 +1,23 @@
-"""The Haiku council of the perp league (docs/SPEC-PERP-CONSEIL-HAIKU.md, the owner's request of 14/11/2026).
+"""The councils (docs/SPEC-PERP-CONSEIL-HAIKU.md, the owner's requests of 14/11/2026, and of 15/11/2026 for the
+league of the councils, docs/SPEC-LIGUE-CONSEILS.md).
 
-One portfolio, `council-perp:haiku`, decided by ten Haiku members at every round it plays. To the league it is
-one more player (`LlmModel(council=True)`): it plays the same triggers as the LLM portfolios (rendez-vous,
+A council is one portfolio (`council-perp:<name>`) decided at every round it plays by eleven members: ten Haiku
+advisers and a President, Haiku (`council-perp:haiku`) or Opus (`council-perp:opus`); the two councils have the
+same advisers, prompts and policy, so only the President differs. The league of the councils
+(config/ligue-conseils.toml) lists them; they share the engine, journal, market and watcher of the perp league.
+To the league each council is one more player (`LlmModel(council=True)`): it plays the same triggers as the LLM portfolios (rendez-vous,
 cadence, market wake-ups, its alerts and the wake-ups its President asks for), against its own round quota and
 daily budget, and its decision goes through the same pipeline (`agent_decision`, riskd, execution). Its
 `CouncilDecider` has the interface of `AgentDecider`: `decide(round_dir, snapshot) -> AgentResult`.
 
 A round of the council (§3 of the spec):
-- A: eight members (1 to 6, 8 and 9) in parallel, each in its own `claude -p` process and MCP server, with the
+- A: nine members (1 to 6, 8, 9 and 10) in parallel, each in its own `claude -p` process and MCP server, with the
   same snapshot and nothing of the others: each gives a short opinion (JSON);
-- B: the Devil's advocate reads the eight opinions and attacks the strongest idea;
-- C: the President reads the nine opinions and the snapshot, and decides in the standard format.
+- B: the Devil's advocate reads the nine opinions and attacks the strongest idea;
+- C: the President reads the ten opinions and the snapshot, and decides in the standard format.
+
+Member processes are bounded across the councils of a round by one semaphore (`CouncilDecider.slots`,
+`max_member_processes` of the league): the the host has little free memory.
 
 A member that fails is left out (journaled); a President that fails leaves the round without a decision. The
 opinions come back to the caller in `AgentResult.council`, and are journaled as `council_opinion` events by the
@@ -20,7 +27,7 @@ the model without saying how much counts for its ceiling).
 Its risk policy is its own (config/policy-perp-conseil.toml, profile `aggressive`): leverage up to 10x with
 Kraken's margins, a paper demonstration outside the retail 2x rule.
 
-`python -m arene.perp.council resume` lifts the halt of the council (after its "ruin", -90 % from the peak):
+`python -m arene.perp.council resume --portfolio council-perp:<name>` lifts the halt of a council (after its "ruin", -90 % from the peak):
 the owner's decision only.
 """
 
@@ -31,10 +38,12 @@ import hashlib
 import json
 import shutil
 import sys
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -58,7 +67,11 @@ from arene.perp.policy import AGGRESSIVE, PerpPolicy, PerpPolicyError, load_perp
 REPO = Path(__file__).resolve().parent.parent.parent
 CONFIG_DIR = REPO / "config"
 DEFAULT_COUNCIL_CONFIG = CONFIG_DIR / "perp-conseil.toml"
-PROMPT_DIR = Path(__file__).parent / "prompt" / "conseil" / "v1"
+DEFAULT_COUNCILS_LEAGUE = CONFIG_DIR / "ligue-conseils.toml"
+PROMPTS_VERSION = "v2"
+PROMPT_DIR = Path(__file__).parent / "prompt" / "conseil" / PROMPTS_VERSION
+MEMBERS_MODEL = "claude-haiku-5-5"
+PRESIDENT_MODELS = {"claude-haiku-5-5": "Haiku", "claude-opus-5-5": "Opus"}
 ARGUMENT_MAX = 600
 MAX_OPINIONS = 6
 MEMBER_MAX_TURNS = 7
@@ -87,7 +100,8 @@ MEMBERS = (
     Member("avocat", "L'Avocat du diable", "B", "07-avocat.md"),
     Member("gardien", "Le Gardien du risque", "A", "08-gardien.md"),
     Member("memorialiste", "Le Mémorialiste", "A", "09-memorialiste.md"),
-    Member("president", "Le Président", "C", "10-president.md"),
+    Member("arbitragiste", "L'Arbitragiste de paires", "A", "10-arbitragiste.md"),
+    Member("president", "Le Président", "C", "11-president.md"),
 )
 STAGE_A = tuple(m for m in MEMBERS if m.stage == "A")
 ADVOCATE = next(m for m in MEMBERS if m.stage == "B")
@@ -107,7 +121,7 @@ def member_sha256(member: Member) -> str:
 
 
 def prompts_sha256() -> str:
-    """One digest of the ten prompts (journaled with every council decision)."""
+    """One digest of the eleven prompts (journaled with every council decision)."""
     return hashlib.sha256("".join(f"{m.key}:{member_sha256(m)}\n" for m in MEMBERS).encode()).hexdigest()
 
 
@@ -298,10 +312,13 @@ def council_record(events: Sequence[Mapping[str, Any]], portfolio: str, now_ts: 
 class CouncilConfig:
     enabled: bool
     portfolio: str
-    model: str
+    name: str
+    model: str  # the ten advisers
+    president_model: str
     daily_budget_uusd: int
     members_parallel: int
     member_timeout_s: int
+    president_timeout_s: int
     member_max_tool_calls: int
     policy: PerpPolicy
     sha256: str
@@ -324,8 +341,8 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
         raise CouncilConfigError(f"unreadable {path}: {exc}") from exc
     expected = {
-        "enabled", "portfolio", "model", "daily_budget_usd", "members_parallel", "member_timeout_s",
-        "member_max_tool_calls", "policy",
+        "enabled", "portfolio", "name", "model", "president_model", "daily_budget_usd", "members_parallel",
+        "member_timeout_s", "president_timeout_s", "member_max_tool_calls", "policy",
     }  # fmt: skip
     if set(data) != expected:
         raise CouncilConfigError(f"keys: expected {sorted(expected)}, got {sorted(data)}")
@@ -333,12 +350,18 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
         raise CouncilConfigError("enabled is a boolean")
     if not isinstance(data["portfolio"], str) or not data["portfolio"].startswith(LEVERAGED_PREFIX):
         raise CouncilConfigError(f"portfolio must start with {LEVERAGED_PREFIX}")
-    if data["model"] != "claude-haiku-5-5":
-        raise CouncilConfigError("model: the council is made of Haiku (claude-haiku-5-5)")
+    if data["model"] != MEMBERS_MODEL:
+        raise CouncilConfigError(f"model: the advisers of a council are Haiku ({MEMBERS_MODEL})")
+    if data["president_model"] not in PRESIDENT_MODELS:
+        raise CouncilConfigError(f"president_model: one of {sorted(PRESIDENT_MODELS)}")
+    if not isinstance(data["name"], str) or not 1 <= len(data["name"]) <= 40:
+        raise CouncilConfigError("name: a display name of 1 to 40 characters")
     if type(data["members_parallel"]) is not int or not 1 <= data["members_parallel"] <= 8:
         raise CouncilConfigError("members_parallel: 1 to 8")
     if type(data["member_timeout_s"]) is not int or not 30 <= data["member_timeout_s"] <= 300:
         raise CouncilConfigError("member_timeout_s: 30 to 300")
+    if type(data["president_timeout_s"]) is not int or not 30 <= data["president_timeout_s"] <= 300:
+        raise CouncilConfigError("president_timeout_s: 30 to 300")
     if type(data["member_max_tool_calls"]) is not int or not 0 <= data["member_max_tool_calls"] <= 4:
         raise CouncilConfigError("member_max_tool_calls: 0 to 4")
     if not isinstance(data["policy"], str) or "/" in data["policy"] or not data["policy"].endswith(".toml"):
@@ -350,12 +373,75 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
     return CouncilConfig(
         data["enabled"],
         data["portfolio"],
+        data["name"],
         data["model"],
+        data["president_model"],
         _usd_to_uusd(data["daily_budget_usd"], "daily_budget_usd"),
         data["members_parallel"],
         data["member_timeout_s"],
+        data["president_timeout_s"],
         data["member_max_tool_calls"],
         policy,
+        hashlib.sha256(raw).hexdigest(),
+    )
+
+
+@dataclass(frozen=True)
+class CouncilsLeague:
+    """config/ligue-conseils.toml: the councils that play, and the bound on member processes across them.
+    `errors`: the councils left out because their own configuration is invalid (one bad council never stops
+    the others)."""
+
+    enabled: bool
+    max_member_processes: int
+    councils: tuple[CouncilConfig, ...]
+    errors: tuple[str, ...]
+    sha256: str
+
+    def council(self, portfolio: str) -> CouncilConfig | None:
+        return next((c for c in self.councils if c.portfolio == portfolio), None)
+
+
+def load_councils_league(path: Path = DEFAULT_COUNCILS_LEAGUE) -> CouncilsLeague:
+    """Raises `CouncilConfigError` when the league file itself is invalid (all councils off); a council whose
+    own file is invalid is left out with its error."""
+    try:
+        raw = path.read_bytes()
+        data = tomllib.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
+        raise CouncilConfigError(f"unreadable {path}: {exc}") from exc
+    if set(data) != {"enabled", "max_member_processes", "councils"}:
+        raise CouncilConfigError(
+            f"keys: expected enabled, max_member_processes, councils, got {sorted(data)}"
+        )
+    if type(data["enabled"]) is not bool:
+        raise CouncilConfigError("enabled is a boolean")
+    if type(data["max_member_processes"]) is not int or not 1 <= data["max_member_processes"] <= 8:
+        raise CouncilConfigError("max_member_processes: 1 to 8")
+    files = data["councils"]
+    if (
+        not isinstance(files, list)
+        or not all(isinstance(f, str) and "/" not in f and f.endswith(".toml") for f in files)
+        or len(set(files)) != len(files)
+    ):
+        raise CouncilConfigError("councils: distinct file names of config/")
+    councils: list[CouncilConfig] = []
+    errors: list[str] = []
+    for f in files:
+        try:
+            c = load_council(path.parent / f)
+        except CouncilConfigError as exc:
+            errors.append(f"{f}: {exc}"[:500])
+            continue
+        if any(o.portfolio == c.portfolio for o in councils):
+            errors.append(f"{f}: duplicate portfolio {c.portfolio}")
+            continue
+        councils.append(c)
+    return CouncilsLeague(
+        data["enabled"],
+        data["max_member_processes"],
+        tuple(councils) if data["enabled"] else (),
+        tuple(errors),
         hashlib.sha256(raw).hexdigest(),
     )
 
@@ -412,11 +498,15 @@ class CouncilDecider:
     runner: Runner = _default_runner
     python: str = sys.executable
     effort: str | None = "low"
-    max_budget_usd: str = "1.00"  # the ceiling of the whole round, set by the league; a tenth per member
+    # the ceiling of the whole round, set by the league: a twentieth per adviser, half for the President
+    max_budget_usd: str = "1.00"
+    # bounds the member processes across the councils of a round (None: only `members_parallel`)
+    slots: threading.Semaphore | None = None
 
     @property
     def model(self) -> str:
-        return self.config.model
+        """The model of the decision (`model_requested`): the President's."""
+        return self.config.president_model
 
     @property
     def portfolio(self) -> str:
@@ -430,36 +520,42 @@ class CouncilDecider:
         return member_sha256(PRESIDENT)
 
     def _member(self, member: Member, opinions: list[dict[str, Any]] | None, ceiling: str) -> MemberDecider:
+        president = member.stage == "C"
         return MemberDecider(
-            self.config.model, self.config.portfolio, self.workdir, self.runner,
-            max_tool_calls=self.config.member_max_tool_calls, max_turns=MEMBER_MAX_TURNS,
-            timeout_s=float(self.config.member_timeout_s), python=self.python, max_budget_usd=ceiling,
-            effort=self.effort, member=member, opinions=opinions,
-            schema=output_schema(self.max_size_pct) if member.stage == "C" else OPINION_SCHEMA,
+            self.config.president_model if president else self.config.model, self.config.portfolio,
+            self.workdir, self.runner, max_tool_calls=self.config.member_max_tool_calls,
+            max_turns=MEMBER_MAX_TURNS,
+            timeout_s=float(self.config.president_timeout_s if president else self.config.member_timeout_s),
+            python=self.python, max_budget_usd=ceiling, effort=self.effort, member=member, opinions=opinions,
+            schema=output_schema(self.max_size_pct) if president else OPINION_SCHEMA,
         )  # fmt: skip
 
     def message(self, snapshot: Mapping[str, Any]) -> str:
-        """The first message of stage A (the same for its eight members; its sha256 goes in `round_data`)."""
+        """The first message of stage A (the same for its nine members; its sha256 goes in `round_data`)."""
         return self._member(STAGE_A[0], None, self.max_budget_usd).message(snapshot)
 
-    def member_ceiling_uusd(self) -> int:
+    def member_ceiling_uusd(self, member: Member | None = None) -> int:
+        """A twentieth of the round's ceiling for an adviser (ten of them: half), half for the President (an
+        Opus President costs most of the round)."""
         total = int(Decimal(self.max_budget_usd) * 1_000_000)
-        return max(1, total // len(MEMBERS))
+        if member is not None and member.stage == "C":
+            return max(1, total // 2)
+        return max(1, total // (2 * (len(MEMBERS) - 1)))
 
     def decide(self, round_dir: Path, snapshot: Mapping[str, Any]) -> AgentResult:
         """Never raises: whatever fails once the members are called, the cost of the calls made is returned
         (the league's budget counts it)."""
         t0 = time.monotonic()
-        ceiling_uusd = self.member_ceiling_uusd()
-        ceiling = f"{Decimal(ceiling_uusd).scaleb(-6):.6f}"
-        done: list[AgentResult] = []
+        done: list[tuple[Member, AgentResult]] = []
 
         def run(member: Member, opinions: list[dict[str, Any]] | None) -> AgentResult:
             mdir = round_dir / "membres" / member.key
+            ceiling = f"{Decimal(self.member_ceiling_uusd(member)).scaleb(-6):.6f}"
             try:
                 mdir.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(round_dir / "round.json", mdir / "round.json")
-                r = self._member(member, opinions, ceiling).decide(mdir, snapshot)
+                with self.slots if self.slots is not None else nullcontext():
+                    r = self._member(member, opinions, ceiling).decide(mdir, snapshot)
             except Exception as exc:  # noqa: BLE001 (one member's failure never stops the round)
                 # a call that ran and failed afterwards still cost what its stream says
                 r = AgentResult(
@@ -467,32 +563,33 @@ class CouncilDecider:
                     cost_uusd=stream_cost_uusd(mdir / "stream.jsonl"),
                     result_seen=True,
                 )
-            done.append(r)
+            done.append((member, r))
             return r
 
         try:
             (round_dir / "stream.jsonl").write_bytes(
                 b""
             )  # the council is called: an interruption is never replayed
-            return self._deliberate(round_dir, snapshot, run, ceiling_uusd, t0)
+            return self._deliberate(round_dir, snapshot, run, t0)
         except Exception as exc:  # noqa: BLE001 (the council's own failure: no decision, the cost is kept)
             res = AgentResult(
                 error=f"council crashed: {type(exc).__name__}: {str(exc)[:200]}",
                 result_seen=True,
-                assistant_seen=any(r.assistant_seen for r in done),
+                assistant_seen=any(r.assistant_seen for _, r in done),
             )
-            res.cost_uusd = sum(
-                max(r.cost_uusd, ceiling_uusd) if _used_model(r) else r.cost_uusd for r in done
-            )
+            res.cost_uusd = sum(self._charged(m, r) for m, r in done)
             res.latency_ms = int((time.monotonic() - t0) * 1000)
             return res
+
+    def _charged(self, m: Member, r: AgentResult) -> int:
+        """What a member's call counts: its cost, or its ceiling when it used the model without saying how much."""
+        return max(r.cost_uusd, self.member_ceiling_uusd(m)) if _used_model(r) else r.cost_uusd
 
     def _deliberate(
         self,
         round_dir: Path,
         snapshot: Mapping[str, Any],
         run: Callable[[Member, list[dict[str, Any]] | None], AgentResult],
-        ceiling_uusd: int,
         t0: float,
     ) -> AgentResult:
         """Stages A, B and C, then the round's result (the opinions, the President's decision, the summed cost)."""
@@ -502,12 +599,12 @@ class CouncilDecider:
         records: list[dict[str, Any]] = []
         seen: list[dict[str, Any]] = []
         for m in STAGE_A:
-            rec, visible = self._record(m, stage_a[m], ceiling_uusd)
+            rec, visible = self._record(m, stage_a[m])
             records.append(rec)
             if visible is not None:
                 seen.append(visible)
         advocate = run(ADVOCATE, list(seen))
-        rec, visible = self._record(ADVOCATE, advocate, ceiling_uusd)
+        rec, visible = self._record(ADVOCATE, advocate)
         records.append(rec)
         if visible is not None:
             seen.append(visible)
@@ -529,12 +626,12 @@ class CouncilDecider:
             assistant_seen=any(r.assistant_seen for r in results),
             result_seen=True,  # the cost below already charges every call that used the model without a result
         )
-        for r in results:
+        for m, r in zip([*STAGE_A, ADVOCATE, PRESIDENT], results, strict=True):
             res.input_tokens += r.input_tokens
             res.output_tokens += r.output_tokens
             res.cache_read_tokens += r.cache_read_tokens
             res.cache_write_tokens += r.cache_write_tokens
-            res.cost_uusd += max(r.cost_uusd, ceiling_uusd) if _used_model(r) else r.cost_uusd
+            res.cost_uusd += self._charged(m, r)
         n = 0
         for m, r in zip([*STAGE_A, ADVOCATE, PRESIDENT], results, strict=True):
             for call in r.tool_calls:
@@ -544,6 +641,10 @@ class CouncilDecider:
         res.council = records
         res.extra = {
             "council": {
+                "name": self.config.name,
+                "members_model": self.config.model,
+                "president_model": self.config.president_model,
+                "prompts_version": PROMPTS_VERSION,
                 "prompts_sha256": prompts_sha256(),
                 "config_sha256": self.config.sha256,
                 "members_ok": sum(1 for r in records if r["opinion"] is not None),
@@ -570,9 +671,7 @@ class CouncilDecider:
         res.latency_ms = int((time.monotonic() - t0) * 1000)
         return res
 
-    def _record(
-        self, m: Member, r: AgentResult, ceiling_uusd: int
-    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    def _record(self, m: Member, r: AgentResult) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """(the `council_opinion` payload, what the next stages read of it or None when it failed)."""
         opinion, error = (None, r.error)
         if r.decision is not None:
@@ -584,7 +683,7 @@ class CouncilDecider:
             "persona_sha256": member_sha256(m),
             "opinion": opinion,
             "error": None if opinion is not None else (error or "no opinion")[:300],
-            "cost_uusd": max(r.cost_uusd, ceiling_uusd) if _used_model(r) else r.cost_uusd,
+            "cost_uusd": self._charged(m, r),
             "input_tokens": r.input_tokens,
             "output_tokens": r.output_tokens,
             "cache_read_tokens": r.cache_read_tokens,
@@ -608,19 +707,29 @@ def main(argv: list[str] | None = None) -> int:
 
     ap = argparse.ArgumentParser(prog="python -m arene.perp.council")
     ap.add_argument("command", choices=["resume"])
+    ap.add_argument("--portfolio", default=None, help="council-perp:<name> (needed when there are several)")
     ap.add_argument("--var", type=Path, default=None)
     args = ap.parse_args(argv)
-    cfg = load_council()
+    names = [c.portfolio for c in load_councils_league().councils]
+    if args.portfolio is None and len(names) != 1:
+        print(f"--portfolio is needed: one of {', '.join(names) or '(none)'}", file=sys.stderr)
+        return 2
+    portfolio = args.portfolio or names[0]
+    if portfolio not in names:
+        print(
+            f"{portfolio}: not a council of config/ligue-conseils.toml ({', '.join(names)})", file=sys.stderr
+        )
+        return 2
     var = (args.var or default_var()).resolve()
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
-    acc = sim.states().get(cfg.portfolio)
+    acc = sim.states().get(portfolio)
     if acc is None or not (acc.halted or acc.frozen_until_ts):
-        print(f"{cfg.portfolio}: not halted nor frozen, nothing to do")
+        print(f"{portfolio}: not halted nor frozen, nothing to do")
         return 0
     sim.append_event(
-        "portfolio_resumed", {"portfolio": cfg.portfolio, "reason": "manual", "until_ts": 0}, int(time.time())
+        "portfolio_resumed", {"portfolio": portfolio, "reason": "manual", "until_ts": 0}, int(time.time())
     )
-    print(f"{cfg.portfolio}: resumed")
+    print(f"{portfolio}: resumed")
     return 0
 
 

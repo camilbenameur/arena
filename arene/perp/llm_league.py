@@ -6,14 +6,16 @@ the `claude -p` calls run in parallel (at most `max_parallel`), then each decisi
 the journal keeps a single writer. A model over its daily budget, or halted, skips the round; a portfolio whose
 round was interrupted after its `round_data` is never called again for that round (no second paid call).
 
-The Haiku council (`arene/perp/council.py`, docs/SPEC-PERP-CONSEIL-HAIKU.md) is one more player when its own
-configuration is loaded (`LlmLeague.council`): it plays with the models (`LlmLeague.players`), under its own
-policy (`policy_of`), and its ten calls run inside its one slot of the pool.
+The councils of the league of the councils (`arene/perp/council.py`, config/ligue-conseils.toml,
+docs/SPEC-LIGUE-CONSEILS.md) are more players when their configuration is loaded (`LlmLeague.councils`): each
+plays with the models (`LlmLeague.players`), under its own policy (`policy_of`), and its eleven calls run inside
+its one slot of the pool; their member processes together are bounded by `max_member_processes`.
 """
 
 from __future__ import annotations
 
 import hashlib
+import threading
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,7 +27,7 @@ from typing import Any
 
 from arene.perp.agent import DEFAULT_WORKDIR, TIMEOUT_RC, AgentDecider, AgentResult, stream_cost_uusd
 from arene.perp.agent_round import finish_agent_round, prepare_agent_round
-from arene.perp.council import CouncilConfig, CouncilDecider, council_record
+from arene.perp.council import CouncilConfig, CouncilDecider, CouncilsLeague, council_record
 
 REPO = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LLM_CONFIG = REPO / "config" / "perp-llm.toml"
@@ -41,7 +43,7 @@ class LlmModel:
     portfolio: str
     model: str
     daily_budget_uusd: int
-    council: bool = False  # the Haiku council: ten calls per round, its own policy
+    council: bool = False  # a council: eleven calls per round, its own policy
 
 
 @dataclass(frozen=True)
@@ -56,17 +58,26 @@ class LlmLeague:
     effort: str | None
     models: tuple[LlmModel, ...]
     sha256: str
-    council: CouncilConfig | None = (
-        None  # loaded on its own (config/perp-conseil.toml): None when off or invalid
-    )
+    # loaded on their own (config/ligue-conseils.toml): None when the league file is invalid or missing
+    councils: CouncilsLeague | None = None
+
+    def council(self, portfolio: str) -> CouncilConfig | None:
+        """The configuration of a council that is loaded (enabled or not), else None."""
+        return self.councils.council(portfolio) if self.councils is not None else None
 
     @property
     def players(self) -> tuple[LlmModel, ...]:
-        """The models, then the council when it is on."""
-        c = self.council
-        if c is None or not c.enabled:
+        """The models, then the councils that are on."""
+        if self.councils is None:
             return self.models
-        return (*self.models, LlmModel(c.portfolio, c.model, c.daily_budget_uusd, council=True))
+        return (
+            *self.models,
+            *(
+                LlmModel(c.portfolio, c.president_model, c.daily_budget_uusd, council=True)
+                for c in self.councils.councils
+                if c.enabled
+            ),
+        )
 
 
 def _usd_to_uusd(v: Any, key: str) -> int:
@@ -237,13 +248,15 @@ def run_llm_round(
     `policy` for all without it."""
     rep = LlmRoundReport([])
     max_call = _usd_to_uusd(league.max_budget_usd, "max_budget_usd")
+    slots = threading.BoundedSemaphore(league.councils.max_member_processes) if league.councils else None
 
     def make(m: LlmModel, ceiling: int) -> Any:
         if decider_factory is not None:
             d = decider_factory(m)
         elif m.council:
-            assert league.council is not None
-            d = CouncilDecider(league.council, DEFAULT_WORKDIR, effort=league.effort)
+            cfg = league.council(m.portfolio)
+            assert cfg is not None
+            d = CouncilDecider(cfg, DEFAULT_WORKDIR, effort=league.effort, slots=slots)
         else:
             d = AgentDecider(
                 m.model, m.portfolio, DEFAULT_WORKDIR, timeout_s=float(league.timeout_s), effort=league.effort
@@ -299,8 +312,10 @@ def run_llm_round(
                 ceiling = min(max_call, remaining)
                 own = triggers.get(m.portfolio) if triggers is not None else None
                 extra: dict[str, Any] = {"llm_config_sha256": league.sha256, "budget_ceiling_uusd": ceiling}
-                if m.council and league.council is not None:
-                    extra["council_config_sha256"] = league.council.sha256
+                cfg = league.council(m.portfolio) if m.council else None
+                if cfg is not None and league.councils is not None:
+                    extra["council_config_sha256"] = cfg.sha256
+                    extra["councils_league_sha256"] = league.councils.sha256
                 ctx = prepare_agent_round(
                     var=var, sim=sim, store=store, decider=make(m, ceiling), view=view, specs=specs,
                     policy=policy_of(m.portfolio) if policy_of is not None else policy,

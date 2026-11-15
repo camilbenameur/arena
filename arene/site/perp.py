@@ -38,7 +38,9 @@ NOTE_MAX = 160
 PANIER = "benchmark-perp:basket-1x"
 TENDANCE = "benchmark-perp:trend"
 ALEATOIRE = "benchmark-perp:random"
-CONSEIL = "council-perp:haiku"
+CONSEIL = "council-perp:haiku"  # le Conseil Haiku : Président Haiku
+CONSEIL_OPUS = "council-perp:opus"  # le Conseil Opus : mêmes dix conseillers Haiku, Président Opus
+PREFIXE_CONSEIL = "council-perp:"
 
 NOMS = {
     "llm-perp:claude-haiku-5-5": "Claude Haiku 5.5",
@@ -46,13 +48,17 @@ NOMS = {
     "llm-perp:claude-opus-5-5": "Claude Opus 5.5",
     "llm-perp:claude-fable-5-2": "Claude Fable 5.2",
     CONSEIL: "Conseil Haiku",
+    CONSEIL_OPUS: "Conseil Opus",
     PANIER: "Témoin panier 1x",
     TENDANCE: "Témoin tendance",
     ALEATOIRE: "Témoin aléatoire",
 }
 ORDRE = list(NOMS)
+SOUS_TITRES = {CONSEIL: "10 Haiku · président Haiku", CONSEIL_OPUS: "10 Haiku · président Opus"}
+BUDGETS_CONSEIL_USD = {CONSEIL: 10, CONSEIL_OPUS: 25}  # budget du jour, en équivalent catalogue
 DESCRIPTIONS = {
-    CONSEIL: "Dix Claude Haiku 5.5 délibèrent à chaque ronde : huit avis indépendants, un avocat du diable, puis un président qui décide.",
+    CONSEIL: "Des Claude Haiku 5.5 délibèrent à chaque ronde : des avis indépendants, un avocat du diable, puis un Président Haiku qui décide.",
+    CONSEIL_OPUS: "Les mêmes conseillers Haiku 5.5 délibèrent à chaque ronde ; c’est un Président Claude Opus 5.5 qui décide.",
     PANIER: "Acheteur à parts égales des 6 contrats, sans levier ni stop, rééquilibré chaque mois : acheter et garder.",
     TENDANCE: "Chaque jour, long sur un contrat qui a monté sur 20 jours, short sinon ; 1/6 du portefeuille par contrat, stop à 10 %.",
     ALEATOIRE: "Tire 0 à 2 décisions au hasard à chaque rendez-vous, avec exactement les mêmes règles de risque que les IA.",
@@ -61,18 +67,20 @@ DESCRIPTIONS = {
 # Le Conseil Haiku (docs/SPEC-PERP-CONSEIL-HAIKU.md) : une catégorie à part, jamais classée avec les 4 LLM neutres.
 MARQUE_CONSEIL = "agressif · levier ≤ 10x · objectif ×2"
 HORS_REGLE_CONSEIL = "Démonstration paper, hors de la règle des particuliers (2x) : ne pourrait pas passer au réel telle quelle."
-# Les membres dans l'ordre des étapes : A (8 avis sans se voir), B (l'Avocat lit A), C (le Président tranche).
+# Les membres dans l'ordre des étapes : A (avis sans se voir), B (l'Avocat lit A), C (le Président tranche).
+# (nom, étape, rôle, sources publiques de la consigne)
 MEMBRES = {
-    "cartographe": ("Le Cartographe", "A", "le régime de chaque contrat"),
-    "suiveur": ("Le Suiveur", "A", "la tendance à suivre"),
-    "chasseur": ("Le Chasseur de cassures", "A", "le mouvement qui démarre"),
-    "contrarien": ("Le Contrarien", "A", "le consensus surchargé"),
-    "carnet": ("Le Lecteur de carnet", "A", "le carnet et le coût d’entrée"),
-    "tresorier": ("Le Trésorier du levier", "A", "la taille et le levier"),
-    "gardien": ("Le Gardien du risque", "A", "les stops et la distance à la ruine"),
-    "memorialiste": ("Le Mémorialiste", "A", "ce que le conseil a déjà raté ou réussi"),
-    "avocat": ("L’Avocat du diable", "B", "attaque le trade le plus soutenu"),
-    "president": ("Le Président", "C", "tranche et décide"),
+    "cartographe": ("Le Cartographe", "A", "le régime de chaque contrat", "crypto-regime-analyzer ; analyste technique de TradingAgents"),
+    "suiveur": ("Le Suiveur", "A", "la tendance à suivre", "breakout-trade-planner"),
+    "chasseur": ("Le Chasseur de cassures", "A", "le mouvement qui démarre", "breakout-trade-planner (momentum burst)"),
+    "contrarien": ("Le Contrarien", "A", "le consensus surchargé", "contrarian-setup-gate ; chercheur baissier de TradingAgents"),
+    "arbitragiste": ("L’Arbitragiste de paires", "A", "la valeur relative : long le fort, short le faible", "pair-trade-screener"),
+    "carnet": ("Le Lecteur de carnet", "A", "le carnet et le coût d’entrée", "HyperGrok (analystes, exécution)"),
+    "tresorier": ("Le Trésorier du levier", "A", "la taille et le levier", "position-sizer, futures-position-sizer"),
+    "gardien": ("Le Gardien du risque", "A", "les stops et la distance à la ruine", "drawdown-circuit-breaker, pre-trade-discipline-gate ; risk manager de HyperGrok"),
+    "memorialiste": ("Le Mémorialiste", "A", "ce que le conseil a déjà raté ou réussi", "signal-postmortem ; Trade Reviewer de HyperGrok"),
+    "avocat": ("L’Avocat du diable", "B", "attaque le trade le plus soutenu", "chercheur baissier et débat de TradingAgents"),
+    "president": ("Le Président", "C", "tranche et décide", "Portfolio Manager de TradingAgents ; Desk Lead de HyperGrok"),
 }
 ORDRE_MEMBRES = list(MEMBRES)
 ARGUMENT_MAX = 700
@@ -204,7 +212,20 @@ def produit(instrument: str | None) -> str | None:
 
 
 def nom(portfolio: str) -> str:
+    if portfolio not in NOMS and portfolio.startswith(PREFIXE_CONSEIL):  # un conseil que le site ne connaît pas encore
+        reste = re.sub(r"[^A-Za-z0-9]+", " ", portfolio[len(PREFIXE_CONSEIL):]).strip()
+        return f"Conseil {reste[:1].upper()}{reste[1:]}" if reste else "Conseil"
     return NOMS.get(portfolio, portfolio.split(":", 1)[-1])
+
+
+def _modele(v: Any) -> str | None:
+    """« claude-opus-5-5 » -> « Opus » ; None si le modèle n'est pas reconnu."""
+    s = str(v).lower() if isinstance(v, str) else ""
+    return next((label for k, label in (("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku"), ("fable", "Fable")) if k in s), None)
+
+
+def _entier(v: Any) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
 
 
 def slug(portfolio: str) -> str:
@@ -339,7 +360,7 @@ def _nombre(v: Any) -> float | None:
 def _avis_membre(p: Mapping[str, Any]) -> dict[str, Any]:
     """Un `council_opinion` tel que le site le montre : position, conviction, taille, stop et niveau par contrat."""
     key = str(p.get("member") or "")
-    nom_m, etape, role = MEMBRES.get(key, (_texte(p.get("name"), 60) or "Membre", str(p.get("stage") or "A"), None))
+    nom_m, etape, role, _src = MEMBRES.get(key, (_texte(p.get("name"), 60) or "Membre", str(p.get("stage") or "A"), None, None))
     op = p.get("opinion") if isinstance(p.get("opinion"), Mapping) else None
     out: dict[str, Any] = {
         "membre": key, "nom": nom_m, "etape": etape, "role": role, "absent": op is None,
@@ -530,7 +551,10 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
 
     def conseil(d: dict[str, Any]) -> dict[str, Any]:
         if d["conseil"] is None:
-            d["conseil"] = {"avis": [], "membres_ok": None, "membres_absents": None, "_outils": {}}
+            d["conseil"] = {
+                "avis": [], "membres_ok": None, "membres_absents": None, "president": None, "cout_president_uusd": None,
+                "modele_membres": None, "consignes": None, "_outils": {},
+            }
         return d["conseil"]
 
     for e in events:
@@ -564,13 +588,19 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             d = ronde(p["round"], e["ts"])
             d["kind"] = p.get("kind") or d["kind"]
             parsed = p.get("parsed") if isinstance(p.get("parsed"), Mapping) else None
-            d["cout_uusd"] = p.get("cost_uusd")  # pour le conseil : ses 10 appels
+            d["cout_uusd"] = p.get("cost_uusd")  # pour un conseil : le coût réel de la ronde (membres et Président)
             cs = p.get("council")
             if isinstance(cs, Mapping):
                 c = conseil(d)
                 c["membres_ok"] = cs.get("members_ok") if isinstance(cs.get("members_ok"), int) else None
                 mf = cs.get("members_failed")
                 c["membres_absents"] = len(mf) if isinstance(mf, list) else None
+                # Champs plus récents : absents des anciennes décisions (Président Haiku, consignes v1).
+                c["president"] = "Haiku" if cs.get("president_model") is None else _modele(cs.get("president_model"))
+                c["cout_president_uusd"] = _entier(cs.get("president_cost_uusd"))
+                c["modele_membres"] = "Haiku" if cs.get("members_model") is None else _modele(cs.get("members_model"))
+                v = cs.get("prompts_version")
+                c["consignes"] = "v1" if v is None else (v if isinstance(v, str) and re.fullmatch(r"v\d{1,3}", v) else None)
             d["latence_ms"] = p.get("latency_ms")
             d["jetons"] = (p.get("input_tokens") or 0) + (p.get("output_tokens") or 0) + (p.get("cache_read_tokens") or 0) + (p.get("cache_write_tokens") or 0)
             if parsed is None:
@@ -751,7 +781,6 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         return {"llm": "llm", "council": "conseil"}.get(str(o.get("kind")), "temoin")
 
     par_genre = {g: sorted((pf for pf, e in opened.items() if genre(e["payload"]) == g), key=rang) for g in ("llm", "conseil", "temoin")}
-    llm_ids = par_genre["llm"]
 
     portfolios = []
     for pf in par_genre["llm"] + par_genre["conseil"] + par_genre["temoin"]:
@@ -791,6 +820,10 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
                     if c and n_delib > DELIBERATIONS_MAX:  # la page reste légère : ~150 rondes par jour, 9 avis chacune
                         c["avis_hors_page"], c["avis"] = len(c["avis"]), []
                 p_out["marque"], p_out["hors_regle"] = MARQUE_CONSEIL, HORS_REGLE_CONSEIL
+                p_out["sous_titre"] = SOUS_TITRES.get(pf)
+                p_out["cout_president_uusd"] = sum((d.get("conseil") or {}).get("cout_president_uusd") or 0 for d in ds)
+                p_out["president"] = next(((d["conseil"] or {}).get("president") for d in ds if d.get("conseil") and d["conseil"].get("president")), None)
+                p_out["budget_usd"] = BUDGETS_CONSEIL_USD.get(pf)
             p_out["decisions"] = ds[:DECISIONS_MAX]
             p_out["n_decisions_total"] = len(ds)
             p_out["cout_uusd"] = sum(d["cout_uusd"] or 0 for d in ds)
@@ -806,39 +839,50 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             p_out["decisions"] = _decisions_aleatoire(events)
         portfolios.append(p_out)
 
-    # Courbe : base 100 au capital, un point toutes les 30 min et le dernier relevé.
-    all_ts = sorted({ts for s in series.values() for ts, _e, _g in s})
-    xs: list[int] = []
-    for ts in all_ts:
-        if not xs or ts // PAS_COURBE_S != xs[-1] // PAS_COURBE_S:
-            xs.append(ts)
-        else:
-            xs[-1] = ts if ts == all_ts[-1] else xs[-1]
-    if all_ts and xs[-1] != all_ts[-1]:
-        xs.append(all_ts[-1])
-    chart_series = []
-    for p_out in portfolios:
-        s = series.get(p_out["id"], [])
-        vals: list[float | None] = []
-        j, last = 0, None
-        for x in xs:
-            while j < len(s) and s[j][0] <= x:
-                last = s[j][1]
-                j += 1
-            vals.append(None if last is None else round(last / p_out["capital_ueur"] * 100, 4))
-        chart_series.append({"id": p_out["id"], "slug": p_out["slug"], "name": p_out["name"], "kind": p_out["kind"], "values": vals})
-    debut = min((e["ts"] for e in opened.values()), default=None)
-    chart = {"x": xs, "kinds": ["veille"] * len(xs), "series": chart_series}
-
     rounds = [e for e in events if e["type"] == "perp_round"]
     done = {e["payload"]["round"] for e in events if e["type"] == "perp_round_done"}
-    live_ts = max(last_eq[pf]["ts"] for pf in last_eq) if last_eq else None
-    return {
+    commun = {
         "venue_mode": next((e["payload"].get("venue_mode", "paper") for e in opened.values()), "paper"),
-        "ouverte_ts": debut, "live_ts": live_ts, "prochain_rdv_ts": prochain_rendez_vous(now),
+        "prochain_rdv_ts": prochain_rendez_vous(now),
         "n_rondes": len(done), "derniere_ronde_ts": max((e["payload"]["round"] for e in rounds), default=None),
-        "llm_presents": bool(llm_ids), "portfolios": portfolios, "chart": chart,
         "journal": {"verify_ok": report.ok, "n_records": report.n_records},
         "cadence_min": ligue_llm.cadence_min if ligue_llm and ligue_llm.enabled else 0,
         "rondes_par_jour": ligue_llm.rounds_per_day if ligue_llm else None,
-    }
+    }  # fmt: skip
+
+    def ligue(pfs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Une ligue : ses portefeuilles, sa courbe (base 100 au capital, un point toutes les 30 min et le dernier relevé)."""
+        ids = {p["id"] for p in pfs}
+        all_ts = sorted({ts for pf in ids for ts, _e, _g in series.get(pf, [])})
+        xs: list[int] = []
+        for ts in all_ts:
+            if not xs or ts // PAS_COURBE_S != xs[-1] // PAS_COURBE_S:
+                xs.append(ts)
+            else:
+                xs[-1] = ts if ts == all_ts[-1] else xs[-1]
+        if all_ts and xs[-1] != all_ts[-1]:
+            xs.append(all_ts[-1])
+        chart_series = []
+        for p_out in pfs:
+            s = series.get(p_out["id"], [])
+            vals: list[float | None] = []
+            j, last = 0, None
+            for x in xs:
+                while j < len(s) and s[j][0] <= x:
+                    last = s[j][1]
+                    j += 1
+                vals.append(None if last is None else round(last / p_out["capital_ueur"] * 100, 4))
+            chart_series.append({"id": p_out["id"], "slug": p_out["slug"], "name": p_out["name"], "kind": p_out["kind"], "values": vals})
+        live = [last_eq[pf]["ts"] for pf in ids if pf in last_eq]
+        return {
+            **commun, "ouverte_ts": min((opened[pf]["ts"] for pf in ids), default=None), "live_ts": max(live, default=None),
+            "llm_presents": any(p["kind"] == "llm" for p in pfs), "portfolios": pfs,
+            "chart": {"x": xs, "kinds": ["veille"] * len(xs), "series": chart_series},
+        }  # fmt: skip
+
+    # Les conseils ont leur ligue : le témoin panier leur sert de référence, sans quitter la ligue dérivés.
+    deriv = ligue([p for p in portfolios if p["kind"] != "conseil"])
+    conseils = [p for p in portfolios if p["kind"] == "conseil"]
+    panier = [p for p in portfolios if p["id"] == PANIER]
+    deriv["conseils"] = ligue(conseils + panier) if conseils else None
+    return deriv
