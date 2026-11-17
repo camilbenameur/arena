@@ -534,15 +534,15 @@ def test_resume_lifts_the_halt(tmp_path, capsys):
 
     var = tmp_path / "var-perp"
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
-    sim.open_portfolio(NAME, "council", 0)
-    sim.append_event("portfolio_halted", {"portfolio": NAME, "reason": "drawdown", "until_ts": 0}, 1)
-    assert main(["resume", "--var", str(var)]) == 2  # two councils: which one?
+    live = load_councils_league().councils[0].portfolio  # the league lists one council (the v4): no --portfolio needed
+    assert live == "council-perp:tendance"
+    sim.open_portfolio(live, "council", 0)
+    sim.append_event("portfolio_halted", {"portfolio": live, "reason": "drawdown", "until_ts": 0}, 1)
     assert main(["resume", "--portfolio", "council-perp:nope", "--var", str(var)]) == 2
-    assert (
-        main(["resume", "--portfolio", NAME, "--var", str(var)]) == 0 and "resumed" in capsys.readouterr().out
-    )
-    assert not PerpSimulator(Journal(var / "journal" / "events.jsonl"), {}).states()[NAME].halted
-    assert main(["resume", "--portfolio", NAME, "--var", str(var)]) == 0
+    assert main(["resume", "--portfolio", NAME, "--var", str(var)]) == 2  # a retired council is not in the league
+    assert main(["resume", "--var", str(var)]) == 0 and "resumed" in capsys.readouterr().out
+    assert not PerpSimulator(Journal(var / "journal" / "events.jsonl"), {}).states()[live].halted
+    assert main(["resume", "--portfolio", live, "--var", str(var)]) == 0
     assert "nothing to do" in capsys.readouterr().out
 
 
@@ -563,7 +563,7 @@ def test_the_league_of_the_councils_config(tmp_path):
     league = load_councils_league(tmp_path / "ligue-conseils.toml")
     assert [c.portfolio for c in league.councils] == ["council-perp:haiku", "council-perp:opus"]
     assert league.errors == () and league.max_member_processes == 4
-    haiku, opus = league.councils
+    haiku, opus = COUNCIL, OPUS  # still loadable, as history
     assert (haiku.name, haiku.model, haiku.president_model) == (
         "Conseil Haiku",
         "claude-haiku-5-5",
@@ -592,8 +592,9 @@ def test_the_league_of_the_councils_config(tmp_path):
     off = TWO_COUNCILS.replace("enabled = true", "enabled = false")
     (tmp_path / "l.toml").write_text(off)
     assert load_councils_league(tmp_path / "l.toml").councils == ()
-    # each council reads its own policy: the league's players
-    lg = dataclasses.replace(BASE, councils=league)
+    # each council reads its own policy: the league's players (the retired two, loaded as history)
+    both_old = CouncilsLeague(True, 4, (haiku, opus), (), "old-league-sha")
+    lg = dataclasses.replace(BASE, councils=both_old)
     assert [m.portfolio for m in lg.players][-2:] == [NAME, OPUS.portfolio]
     assert lg.players[-1].model == "claude-opus-5-5" and lg.council(OPUS.portfolio) is opus
 

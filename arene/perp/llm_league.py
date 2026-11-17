@@ -27,7 +27,7 @@ from typing import Any
 
 from arene.perp.agent import DEFAULT_WORKDIR, TIMEOUT_RC, AgentDecider, AgentResult, stream_cost_uusd
 from arene.perp.agent_round import finish_agent_round, prepare_agent_round
-from arene.perp.council import CouncilConfig, CouncilDecider, CouncilsLeague, council_record
+from arene.perp.council import TREND_KIND, CouncilConfig, CouncilDecider, CouncilsLeague, council_record
 
 REPO = Path(__file__).resolve().parent.parent.parent
 DEFAULT_LLM_CONFIG = REPO / "config" / "perp-llm.toml"
@@ -66,8 +66,16 @@ class LlmLeague:
         return self.councils.council(portfolio) if self.councils is not None else None
 
     @property
+    def trend_councils(self) -> tuple[CouncilConfig, ...]:
+        """The councils v4 that are on: played by the trend phase of the watcher (`arene/perp/trend_council.py`),
+        never by the generic rounds below."""
+        if self.councils is None:
+            return ()
+        return tuple(c for c in self.councils.councils if c.enabled and c.kind == TREND_KIND)
+
+    @property
     def players(self) -> tuple[LlmModel, ...]:
-        """The models, then the councils that are on."""
+        """The models, then the councils that are on (the councils v4 play their own rounds, see above)."""
         if self.councils is None:
             return self.models
         return (
@@ -75,7 +83,7 @@ class LlmLeague:
             *(
                 LlmModel(c.portfolio, c.president_model, c.daily_budget_uusd, council=True)
                 for c in self.councils.councils
-                if c.enabled
+                if c.enabled and c.kind != TREND_KIND
             ),
         )
 

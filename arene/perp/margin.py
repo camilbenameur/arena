@@ -22,13 +22,15 @@ from arene.perp.types import MarginLevel
 from arene.types import ceil_div
 
 LEVERAGED_PREFIX = "council-perp:"
+# the shadow benchmark of the council v4 trades at the council's leverage, with the same margins
+LEVERAGED_NAMES = ("benchmark-perp:moteur-tendance",)
 PPM = 1_000_000
 INITIAL = "initial"
 MAINTENANCE = "maintenance"
 
 
 def leveraged(portfolio: str) -> bool:
-    return portfolio.startswith(LEVERAGED_PREFIX)
+    return portfolio.startswith(LEVERAGED_PREFIX) or portfolio in LEVERAGED_NAMES
 
 
 def rate_ppm(levels: tuple[MarginLevel, ...] | None, notional_uusd: int, kind: str) -> int:

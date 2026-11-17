@@ -43,10 +43,12 @@ import fcntl
 import json
 import os
 import sys
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -58,11 +60,12 @@ from arene.perp import agent_orders as AO
 from arene.perp import benchmarks as B
 from arene.perp import news as N
 from arene.perp import round_quota as RQ
-from arene.perp.agent import AgentDecider
+from arene.perp import trend_council as TC
+from arene.perp.agent import AgentDecider, Runner, _default_runner
 from arene.perp.agent_round import _close_unprotected, _execute
 from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
-from arene.perp.council import CouncilConfigError, load_councils_league, retired_portfolios
+from arene.perp.council import CouncilConfig, CouncilConfigError, load_councils_league, retired_portfolios
 from arene.perp.counters import counters_for
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
@@ -73,6 +76,7 @@ from arene.perp.llm_league import (
     has_budget,
     load_llm_league,
     run_llm_round,
+    spent_today_uusd,
 )
 from arene.perp.margin import leveraged
 from arene.perp.market import market_view, worst_half_spread_bp
@@ -193,6 +197,7 @@ class PerpWatcher:
         decider_factory: Callable[[LlmModel], AgentDecider] | None = None,
         round_offset_s: int = ROUND_OFFSET_S,
         news: NewsConfig | None = None,
+        trend_runner: Runner = _default_runner,
     ) -> None:
         self.var = var
         self.news = news if news is not None and news.enabled else None
@@ -214,17 +219,31 @@ class PerpWatcher:
         self.decider_factory = decider_factory
         self.round_offset_s = round_offset_s
         self._deferred: dict[str, Any] | None = None
+        self._deferred_trend: dict[str, Any] | None = None
+        self.trend_runner = trend_runner
 
     # ------------------------------------------------------------------ helpers
 
     def policy_for(self, portfolio: str) -> PerpPolicy:
         """The council's own policy for the council (docs/SPEC-PERP-CONSEIL-HAIKU.md §5), the league's for every
         other portfolio. A council whose configuration did not load keeps the league's policy (2x, halt at
-        -15 %): stricter, never looser."""
+        -15 %): stricter, never looser. The shadow of the council v4 plays under the policy of that council."""
         c = self.llm.council(portfolio) if self.llm is not None else None
         if c is not None and leveraged(portfolio):
             return c.policy
+        for t in self.llm.trend_councils if self.llm is not None else ():
+            if t.trend is not None and portfolio == t.trend.benchmark:
+                return t.policy
         return self.policy
+
+    def _trend_names(self) -> set[str]:
+        """The portfolios of the councils v4 (the council and its shadow): the engine manages their exits."""
+        out: set[str] = set()
+        for t in self.llm.trend_councils if self.llm is not None else ():
+            out.add(t.portfolio)
+            if t.trend is not None:
+                out.add(t.trend.benchmark)
+        return out
 
     def _append(self, type_: str, payload: dict[str, Any], ts: int) -> None:
         self.sim.append_event(type_, payload, ts)
@@ -271,6 +290,7 @@ class PerpWatcher:
         tick = now_ts // TICK_S * TICK_S
         rep = TickReport(tick)
         self._deferred: dict[str, Any] | None = None
+        self._deferred_trend = None
         with _try_lock(self.var / "watcher.lock") as mine:
             if not mine:
                 rep.skipped = "watcher lock busy"
@@ -286,6 +306,8 @@ class PerpWatcher:
             # under the watcher's: no other tick starts before the round is finished
             if self._deferred is not None:
                 self._llm_phase(**self._deferred, rep=rep)
+            if self._deferred_trend is not None:
+                self._trend_phase(**self._deferred_trend, rep=rep)
         return rep
 
     def _tick_data(self, now_ts: int, tick: int, rep: TickReport) -> None:
@@ -320,6 +342,7 @@ class PerpWatcher:
             assert view is not None
             self._controls(now_ts, view, events, rep)
             self._rounds(now_ts, view, rep, last_minute)
+            self._trend_due(now_ts, view, rep, last_minute)
         else:
             rep.problems.append("market view missing or stale: no equity, no control, no round")
             self._alert_rearmed(
@@ -426,6 +449,166 @@ class PerpWatcher:
             )  # fmt: skip
         if ok:
             self._append("perp_round_done", {"round": round_id}, now_ts)
+
+    # ------------------------------------------------------------------ the council v4
+
+    def _trend_due(self, now_ts: int, view: PerpMarketView, rep: TickReport, cursor: int) -> None:
+        """Decides whether the council v4 plays a round at this tick (docs/SPEC-CONSEIL-V4.md §3), and which:
+        - `barre`: once per bar close (00:00, 04:00, ... UTC), at the first tick after it;
+        - `restauration`: the engine alone, when a brake's validity ended before the next bar;
+        - `veto`: a news item, a macro release or a 2 %-in-1-hour move, with the LLM council (coefficients can
+          only go down).
+        The council ignores the 10-minute cadence and the wake-ups it asks for. The round itself runs after the
+        collector's lock is released (`_trend_phase`). One council at most per tick."""
+        if self.llm is None or not self.llm.trend_councils:
+            return
+        cfg = self.llm.trend_councils[0]
+        events = self._events()
+        end_ts = TC.bar_close(now_ts)
+        kind: str | None = None
+        trigger: dict[str, Any] | None = None
+        if not TC.bar_played(events, cfg.portfolio, end_ts):
+            kind = "barre"
+        elif TC.expired_brakes(events, cfg.portfolio, now_ts):
+            kind = "restauration"
+        veto_allowed, why = self._trend_llm_ok(cfg, events, now_ts)
+        if kind is None and veto_allowed and TC.latest_engine(events, cfg.portfolio, end_ts) is not None:
+            trigger = self._trend_veto_trigger(cfg, events, now_ts, cursor)
+            kind = "veto" if trigger is not None else None
+        if kind is None:
+            return
+        if spot_cycle_soon(now_ts) or spot_busy(self.spot_paths.lock):
+            rep.notes.append("spot league cycle soon or running: the council v4 waits for the next tick")
+            return
+        blocked = self._kill_and_dormance(now_ts, view, events, rep)
+        self._deferred_trend = {
+            "cfg": cfg, "kind": kind, "trigger": trigger, "now_ts": now_ts, "view": view, "blocked": blocked,
+            "veto_allowed": veto_allowed and kind != "restauration", "no_veto_reason": why,
+        }  # fmt: skip
+
+    def _trend_llm_ok(
+        self, cfg: CouncilConfig, events: list[dict[str, Any]], now_ts: int
+    ) -> tuple[bool, str | None]:
+        """May the council call its LLMs now? (False, why) when the engine must play alone."""
+        assert self.llm is not None
+        if not self.llm.enabled:
+            return False, "llm_league_off"
+        model = LlmModel(cfg.portfolio, cfg.president_model, cfg.daily_budget_uusd, council=True)
+        if not has_budget(model, events, now_ts):
+            return False, "daily_budget"
+        return True, None
+
+    def _trend_veto_trigger(
+        self, cfg: CouncilConfig, events: list[dict[str, Any]], now_ts: int, cursor: int
+    ) -> dict[str, Any] | None:
+        """The reason of a veto round, or None: a Kraken announcement or a macro release the council has not
+        seen, or a market move of 2 % in an hour (kept pending for an hour). Within the quota, not just after a
+        round (15 minutes), and the portfolio not halted."""
+        assert self.llm is not None
+        name = cfg.portfolio
+        st = self.sim.states().get(name)
+        if st is not None and st.halted:
+            return None
+        if self.quota(events, name, now_ts)["extra_left"] <= 0:
+            return None
+        last = RQ.last_played(events, name)
+        if last is not None and now_ts - last < WAKE_COOLDOWN_S:
+            return None
+        if self.news is not None:
+            info: dict[str, Any] = {}
+            due = N.due_releases(self.news, last, now_ts, ASKED_EARLY_S, RELEASE_LAPSE_S)
+            if due:
+                info["releases"] = [{"id": e.id, "label": e.label, "ts": e.ts} for e in due]
+            fresh = N.unseen_news(events, last, now_ts, NEWS_PENDING_S)
+            if fresh:
+                info["announcements"] = [
+                    {"kind": n["kind"], "status": n["status"], "title": n.get("title", ""), "key": n["key"]}
+                    for n in fresh[-3:]
+                ]
+            if info:
+                return {"kind": "calendar" if due else "news", **info}
+        if self.llm.wakeups:
+            pend = [
+                p for p in events
+                if p["type"] == "perp_wake_pending" and now_ts - p["ts"] < WAKE_PENDING_S
+                and (last is None or p["ts"] > last)
+                and abs(self._move_bp(p["payload"]["instrument"], cursor) or 0) >= WAKE_FADE_BP
+            ]  # fmt: skip
+            if pend:
+                best = max(pend, key=lambda p: abs(p["payload"]["move_bp"]))
+                return {"kind": "wakeup", **best["payload"], "pending_ts": best["ts"]}
+        return None
+
+    def _trend_phase(
+        self,
+        *,
+        cfg: CouncilConfig,
+        kind: str,
+        trigger: dict[str, Any] | None,
+        now_ts: int,
+        view: PerpMarketView,
+        blocked: bool,
+        veto_allowed: bool,
+        no_veto_reason: str | None,
+        rep: TickReport,
+    ) -> None:
+        """One round of the council v4, after the collector's lock: the engine, the shadow, the veto council, the
+        orders. Decisions are executed on a market view read again after the calls, as in `_llm_phase`."""
+        assert self.llm is not None
+        rep.rounds.append(f"trend:{kind}:{TC.bar_close(now_ts)}")
+        t0 = time.monotonic()
+        events = self._events()
+        remaining = cfg.daily_budget_uusd - spent_today_uusd(events, cfg.portfolio, now_ts)
+        max_call = int(Decimal(self.llm.max_budget_usd) * 1_000_000)
+        slots = (
+            threading.BoundedSemaphore(self.llm.councils.max_member_processes) if self.llm.councils else None
+        )
+
+        def refresh() -> tuple[PerpMarketView, int] | None:
+            now2 = now_ts + int(time.monotonic() - t0)
+            v2 = market_view(self.store, self.symbols, now2)
+            return (v2, now2) if self._is_fresh(v2, now2) else None
+
+        try:
+            res = TC.run_trend_round(
+                cfg=cfg,
+                kind=kind,
+                trigger=trigger,
+                now_ts=now_ts,
+                var=self.var,
+                sim=self.sim,
+                store=self.store,
+                view=view,
+                specs=self.specs,
+                config_sha256=self.cfg.sha256,
+                entries_blocked=lambda: blocked or self._kill_active(),
+                refresh=refresh,
+                news=self.news,
+                llm_sha256=self.llm.sha256,
+                league_sha256=self.llm.councils.sha256 if self.llm.councils else "",
+                effort=self.llm.effort,
+                ceiling_uusd=max(1, min(max_call, remaining)),
+                veto_allowed=veto_allowed,
+                no_veto_reason=no_veto_reason,
+                runner=self.trend_runner,
+                slots=slots,
+            )
+        except Exception as exc:  # noqa: BLE001 (positions stay as they are; the next tick tries again)
+            message = f"trend round {kind}: {type(exc).__name__}: {exc}"[:500]
+            rep.problems.append(message)
+            self._alert_rearmed(self._events(), "action", "perp_trend_round_failed", message, now_ts)
+            return
+        rep.notes += res.notes
+        rep.problems += res.problems
+        if any("trend engine" in p for p in res.problems):
+            self._alert_rearmed(
+                self._events(), "action", "perp_trend_engine_failed", "; ".join(res.problems)[:900], now_ts
+            )
+        if res.failed and res.called:
+            self._alert_rearmed(
+                self._events(), "action", "perp_llm_no_decision",
+                f"perp league: the council v4 {kind} round was not decided", now_ts,
+            )  # fmt: skip
 
     # ------------------------------------------------------------------ minutes and funding
 
@@ -661,8 +844,8 @@ class PerpWatcher:
                     self._alert("info", "perp_portfolio_frozen", f"{name}: loss over 24 h, frozen", now_ts)
             except PerpLedgerError as exc:
                 rep.problems.append(f"{name} controls: {exc}")
-        try:
-            self.sim.close_expired(now_ts, quotes, fx, portfolios=deciding)
+        try:  # the engine of the council v4 manages its own exits: no 7-day cut of its trends
+            self.sim.close_expired(now_ts, quotes, fx, portfolios=deciding - self._trend_names())
         except PerpLedgerError as exc:
             rep.problems.append(f"max holding: {exc}")
 
