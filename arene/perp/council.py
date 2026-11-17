@@ -813,15 +813,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--portfolio is needed: one of {', '.join(names) or '(none)'}", file=sys.stderr)
         return 2
     portfolio = args.portfolio or names[0]
-    if portfolio not in names:
-        print(
-            f"{portfolio}: not a council of config/ligue-conseils.toml ({', '.join(names)})", file=sys.stderr
-        )
-        return 2
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
     acc = sim.states().get(portfolio)
     if acc is not None and acc.retired:
         print(f"{portfolio}: retired, it never plays again", file=sys.stderr)
+        return 2
+    if portfolio not in names:
+        print(
+            f"{portfolio}: not a council of config/ligue-conseils.toml ({', '.join(names)})", file=sys.stderr
+        )
         return 2
     if acc is None or not (acc.halted or acc.frozen_until_ts):
         print(f"{portfolio}: not halted nor frozen, nothing to do")

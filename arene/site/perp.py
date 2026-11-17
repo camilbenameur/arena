@@ -115,8 +115,9 @@ MEMBRES_V4 = {
     "controleur": ("Le Contrôleur de données", "A", "prix incohérents, trous, vue périmée", "consigne v4"),
     "avocat_risque": ("L’Avocat du risque", "A", "concentration et drawdown", "consigne v4"),
 }
-ORDRE_MEMBRES = [*MEMBRES, *MEMBRES_V4]
+ORDRE_MEMBRES = list(MEMBRES)
 TOUS_MEMBRES = {**MEMBRES, **MEMBRES_V4}
+ORDRE_TOUS = list(TOUS_MEMBRES)
 ARGUMENT_MAX = 700
 
 ACTIONS = {"open_long": "Ouvre un long", "open_short": "Ouvre un short", "reduce": "Réduit", "close": "Ferme"}
@@ -799,7 +800,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             outils = c.pop("_outils")
             for a in c["avis"]:
                 a["outils"] = outils.get(a["membre"], [])
-            c["avis"].sort(key=lambda a: ORDRE_MEMBRES.index(a["membre"]) if a["membre"] in MEMBRES else 99)
+            c["avis"].sort(key=lambda a: ORDRE_TOUS.index(a["membre"]) if a["membre"] in TOUS_MEMBRES else 99)
     return sorted([*rondes.values(), *declenches.values()], key=lambda d: (d["ts"] if d["kind"] == "ordre" else d["round"]), reverse=True)
 
 
