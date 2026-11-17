@@ -142,7 +142,7 @@ def _spot_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
         )
         rows.append({
             "nom": p["name"], "href": f"modele/{p['slug']}.html", "rend": p["total_return"], "st": st.get(p["id"]),
-            "sous": sous, "ref": temoin, "id": p["id"],
+            "sous": sous, "ref": temoin, "id": p["id"], "archive": p.get("archive"),
         })  # fmt: skip
     return _classer(rows)
 
@@ -159,6 +159,10 @@ def _carte(
         f'<p class="ligue-quoi">{quoi}</p>{spark}{scores(haut, label=label, mini=True)}'
         f'<p class="ligue-lien"><a href="{href}">Voir la ligue, les décisions et leurs raisons<span aria-hidden="true">→</span></a></p></article>'
     )
+
+
+def _liste_et(mots: list[str]) -> str:
+    return mots[0] if len(mots) == 1 else ", ".join(mots[:-1]) + " et " + mots[-1]
 
 
 def accueil_page(data: dict[str, Any]) -> str:
@@ -179,9 +183,18 @@ def accueil_page(data: dict[str, Any]) -> str:
             rows=rows, chart=cons["chart"], label="Classement de la ligue des conseils",
         ))  # fmt: skip
     rows = _perp_rows(perp)
+    solos = [p for p in perp["portfolios"] if p["kind"] == "llm"]
+    actifs = [p["name"].replace("Claude ", "") for p in solos if not p.get("archive")]
+    quoi_solo = f"Haiku, Sonnet, Opus et Fable décident chacun seul, à la hausse ou à la baisse. Levier jusqu’à 2, {capital} fictifs chacun."
+    if solos and actifs and len(actifs) < len(solos):
+        arch = [p["name"].replace("Claude ", "") for p in solos if p.get("archive")]
+        quoi_solo = (
+            f"{_liste_et(actifs)} décident chacun seul, à la hausse ou à la baisse. Levier jusqu’à 2, {capital} fictifs chacun. "
+            f"{_liste_et(arch)} : archivé, en pointillés."
+        )
     cartes.append(_carte(
         href="derives.html", titre="IA seules",
-        quoi=f"Haiku, Sonnet, Opus et Fable décident chacun seul, à la hausse ou à la baisse. Levier jusqu’à 2, {capital} fictifs chacun.",
+        quoi=quoi_solo,
         rows=rows, chart=perp["chart"], label="Classement de la ligue des IA seules",
     ))  # fmt: skip
     if data.get("portfolios"):

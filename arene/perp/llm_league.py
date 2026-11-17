@@ -14,10 +14,11 @@ its one slot of the pool; their member processes together are bounded by `max_me
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import threading
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
 from dataclasses import dataclass
@@ -60,6 +61,13 @@ class LlmLeague:
     sha256: str
     # loaded on their own (config/ligue-conseils.toml): None when the league file is invalid or missing
     councils: CouncilsLeague | None = None
+
+    def without(self, retired: Collection[str]) -> LlmLeague:
+        """The league minus the retired models (`portfolio_retired`): never opened, called, woken nor valued again,
+        even though the file still lists them (the journal decides; the entry stays to render their history)."""
+        if not any(m.portfolio in retired for m in self.models):
+            return self
+        return dataclasses.replace(self, models=tuple(m for m in self.models if m.portfolio not in retired))
 
     def council(self, portfolio: str) -> CouncilConfig | None:
         """The configuration of a council that is loaded (enabled or not), else None."""

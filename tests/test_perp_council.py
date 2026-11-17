@@ -764,7 +764,7 @@ def test_retire_refuses_a_non_council_and_waits_for_the_watcher_lock(tmp_path, m
 
     w = _retire_world(tmp_path, monkeypatch)
     with pytest.raises(RetireError, match="only a council"):
-        retire_portfolio(w.var, HAIKU, T0 + 120)
+        retire_portfolio(w.var, "benchmark-perp:basket-1x", T0 + 120)
     fd = os.open(w.var / "watcher.lock", os.O_CREAT | os.O_RDWR)
     fcntl.flock(fd, fcntl.LOCK_EX)  # a tick is running
     try:

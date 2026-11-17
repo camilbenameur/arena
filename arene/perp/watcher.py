@@ -1581,6 +1581,7 @@ def main(argv: list[str] | None = None) -> int:
                 now_ts,
             )
         if llm is not None:
+            llm = llm.without(retired_portfolios(journal.events()))  # a retired model is never played again
             errors: list[str] = []
             try:  # a bad council config disables that council only; a bad league file, the councils only
                 councils = load_councils_league().without(retired_portfolios(journal.events()))

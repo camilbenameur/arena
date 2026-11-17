@@ -1,4 +1,8 @@
-"""Retiring a council (the owner, 17/11/2026: « les conseils actuels deviennent de la data »).
+"""Retiring a portfolio that plays: a council (17/11/2026: « les conseils actuels deviennent de la data ») or a
+solo model of the LLM league (17/11/2026: « On va passer Fable en pointillé aussi, en archive »).
+
+`python -m arene.perp.retire --portfolio llm-perp:<model>` (or `council-perp:<name>`; the council command
+`python -m arene.perp.council retire` is the same thing).
 
 `retire_portfolio` takes the watcher's lock (no round is running, none starts), flattens the portfolio at market
 on a fresh market view (reason `retired`), ends its pending agent alerts and entry orders, then journals
@@ -26,6 +30,8 @@ from arene.perp.market import market_view
 from arene.perp.sim import PerpSimulator
 from arene.perp.store import PerpDataStore
 
+LLM_PREFIX = "llm-perp:"
+RETIRABLE_PREFIXES = (LEVERAGED_PREFIX, LLM_PREFIX)  # the benchmarks are the league's references: never retired
 LOCK_WAIT_S = 1200  # a round can hold the watcher lock for a few minutes: wait for it, never race it
 VIEW_MAX_AGE_S = 900
 
@@ -69,8 +75,8 @@ def retire_portfolio(
     from arene.perp.config import load_perp_config
     from arene.perp.watcher import load_specs
 
-    if not portfolio.startswith(LEVERAGED_PREFIX):
-        raise RetireError(f"{portfolio}: only a council ({LEVERAGED_PREFIX}...) can be retired")
+    if not portfolio.startswith(RETIRABLE_PREFIXES) or portfolio.endswith(":essai"):
+        raise RetireError(f"{portfolio}: only a council ({LEVERAGED_PREFIX}...) or a model ({LLM_PREFIX}...) can be retired")
     cfg = load_perp_config()
     symbols = [i.kraken_symbol for i in cfg.instruments]
     journal = Journal(var / "journal" / "events.jsonl")
@@ -118,3 +124,32 @@ def retire_portfolio(
             now_ts,
         )
     return {"status": "retired", "fills": fills, "orders_ended": len(todo)}
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import sys
+
+    from arene.perp.config import default_var
+
+    ap = argparse.ArgumentParser(prog="python -m arene.perp.retire")
+    ap.add_argument("--portfolio", required=True, help="llm-perp:<model> or council-perp:<name>")
+    ap.add_argument("--var", type=Path, default=None)
+    ap.add_argument("--reason", default="manual", help="why (journaled)")
+    ap.add_argument("--note", default="", help="free note (journaled, never published)")
+    args = ap.parse_args(argv)
+    var = (args.var or default_var()).resolve()
+    try:
+        out = retire_portfolio(var, args.portfolio, int(time.time()), reason=args.reason, note=args.note)
+    except RetireError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 3
+    if out["status"] == "already_retired":
+        print(f"{args.portfolio}: already retired, nothing to do")
+    else:
+        print(f"{args.portfolio}: retired ({out['fills']} position(s) flattened, {out['orders_ended']} order(s) ended)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
