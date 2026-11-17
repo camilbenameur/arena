@@ -92,7 +92,7 @@ def _objectif_jour(capital: int, equity: int, ouvert_ts: int, now: int) -> dict[
 
 
 # Le Conseil Haiku (docs/SPEC-PERP-CONSEIL-HAIKU.md) : une catégorie à part, jamais classée avec les 4 LLM neutres.
-MARQUE_CONSEIL = "agressif · levier ≤ 10x · objectif ×2"
+MARQUE_CONSEIL = "levier ≤ 10x"
 HORS_REGLE_CONSEIL = "Démonstration paper, hors de la règle des particuliers (2x) : ne pourrait pas passer au réel telle quelle."
 # Les membres dans l'ordre des étapes : A (avis sans se voir), B (l'Avocat lit A), C (le Président tranche).
 # (nom, étape, rôle, sources publiques de la consigne)

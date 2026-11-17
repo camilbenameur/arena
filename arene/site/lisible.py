@@ -142,6 +142,8 @@ def votes(d: dict[str, Any]) -> dict[str, Any] | None:
 
     {"instrument", "pour": n (même sens que la majorité), "contre": n, "plat": n, "absents": n, "sens": "long"|"short",
      "avocat": {"instrument", "sens"} | None, "total": n}. None sans avis publiés."""
+    if d.get("tendance"):  # the trend council's members brake, they do not vote a direction
+        return None
     c = d.get("conseil") or {}
     avis = [a for a in c.get("avis") or [] if a.get("etape") == "A"]
     if not avis:
