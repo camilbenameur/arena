@@ -752,13 +752,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--portfolio is needed: one of {', '.join(names) or '(none)'}", file=sys.stderr)
         return 2
     portfolio = args.portfolio or names[0]
-    if portfolio not in names:
-        print(
-            f"{portfolio}: not a council of config/ligue-conseils.toml ({', '.join(names)})", file=sys.stderr
-        )
-        return 2
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
     acc = sim.states().get(portfolio)
+    if acc is None and portfolio not in names:  # a council taken out of the league file stays resumable
+        print(f"{portfolio}: not a council of the journal nor of config/ligue-conseils.toml", file=sys.stderr)
+        return 2
     if acc is not None and acc.retired:
         print(f"{portfolio}: retired, it never plays again", file=sys.stderr)
         return 2
