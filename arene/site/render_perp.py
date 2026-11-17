@@ -1299,7 +1299,7 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 def _methode_tendance(budget: str) -> str:
     """Les règles du Conseil Tendance (docs/SPEC-CONSEIL-V4.md et docs/CONSEIL-V4-RECHERCHE.md)."""
     return f"""<section aria-labelledby="m-conseils"><h2 id="m-conseils">Le Conseil Tendance : méthode</h2>
-<p>Le propriétaire a demandé, le 17/11/2026, un conseil qui génère du revenu net « de l’ordre de 10{NBSP}% par jour ». Dix pour cent par jour, composés, font ×17 en un mois : aucune stratégie connue ne tient ce rythme. La page affiche donc l’objectif et le rendement par jour réalisé, côte à côte.</p>
+<p>La demande du 17/11/2026 était un conseil qui génère du revenu net « de l’ordre de 10{NBSP}% par jour ». Dix pour cent par jour, composés, font ×17 en un mois : aucune stratégie connue ne tient ce rythme. La page affiche donc l’objectif et le rendement par jour réalisé, côte à côte.</p>
 <p>Les anciens conseils (Haiku et Opus) perdaient : avis sans avantage, tailles énormes, une nouvelle décision toutes les 10 minutes. Le Conseil Tendance inverse les rôles : <strong>un moteur décide, les IA ne peuvent que freiner, le code exécute.</strong> {e(P.HORS_REGLE_CONSEIL)}</p>
 <ul class="liste-simple">
 <li><strong>Le moteur</strong> : un suivi de tendance lent (moyennes mobiles de 2 et 6 jours sur des barres de 4 heures, long et short, taille réglée sur la volatilité, échelle 2x), choisi sur 146 essais de quatre familles de stratégies et gelé avant la lecture du contrôle. Sur 31 jours de contrôle en baisse franche il a fait +21{NBSP}% (reculs jusqu’à −25{NBSP}%) ; en marché sans tendance il tourne autour de zéro. Une seule stratégie, un seul épisode de chaque type : l’avantage est plausible, il n’est pas prouvé.</li>
