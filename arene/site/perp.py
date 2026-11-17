@@ -927,7 +927,8 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         t, p = e["type"], e["payload"]
         pf = p.get("portfolio")
         if t == "portfolio_retired" and pf not in retires:
-            retires[pf] = {"ts": e["ts"], "raison": _texte(p.get("reason"), 80), "note": _texte(p.get("note"), 300)}
+            # the operator's free-text note stays in the journal: it may name people (never published)
+            retires[pf] = {"ts": e["ts"], "raison": _texte(p.get("reason"), 80)}
         if t == "funding":
             funding.setdefault(pf, []).append(int(p.get("amount_ueur") or 0))
         elif t == "perp_fill":

@@ -1315,7 +1315,7 @@ def _methode_tendance(budget: str) -> str:
 <div><dt>Rythme</dt><dd>48 ouvertures ou ajustements par 24{NBSP}h au plus, sans délai entre deux ; ni gel quotidien, ni budget de frais (les frais restent réels et comptés).</dd></div>
 <div><dt>Arrêt</dt><dd>À −60{NBSP}% depuis son plus haut : positions fermées, plus aucune ronde. Seul l’opérateur de l’arène peut le relancer, à la main.</dd></div>
 {budget}</dl>
-<p class="muted">Recherche : <code>docs/CONSEIL-V4-RECHERCHE.md</code> ; conception : <code>docs/SPEC-CONSEIL-V4.md</code>. Marchés, veille et journal sont ceux de la <a href="derives.html">ligue des IA seules</a>.</p>
+<p class="muted">Marchés, veille et journal sont ceux de la <a href="derives.html">ligue des IA seules</a>.</p>
 </section>
 """
 

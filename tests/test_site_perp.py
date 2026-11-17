@@ -654,7 +654,7 @@ def test_conseils_archives_courbe_en_pointilles_arretee_au_retrait(site_archives
     d = _perp(site)["conseils"]
     fin = F.T0 + 2 * 86_400 - 3_600
     par_id = {p["id"]: p for p in d["portfolios"]}
-    assert par_id[F.CONSEIL]["archive"] == {"ts": fin, "raison": "refonte", "note": "tout permis"}
+    assert par_id[F.CONSEIL]["archive"] == {"ts": fin, "raison": "refonte"}  # the note stays in the journal, never published
     assert par_id[F.TEMOINS[0]]["archive"] is None
     series = {s["id"]: s for s in d["chart"]["series"]}
     assert series[F.CONSEIL]["archive_ts"] == fin and "archive_ts" not in series[F.TEMOINS[0]]
