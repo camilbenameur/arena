@@ -3,7 +3,7 @@
 # the aggressive policy (config/policy-perp-conseil.toml). They share the engine, journal, market data and watcher
 # of the perp league, and its triggers and round quota (config/perp-llm.toml); the site shows them apart.
 # Hashed (sha256 of the bytes) and journaled with each council round.
-enabled = true
+enabled = false  # 17/11/2026: the two councils are retired (the owner: « les conseils actuels deviennent de la data »)
 # `claude` member processes at the same time across all the councils of a round (each council also keeps its own
 # `members_parallel`): about 300 MB each, and the the host has about 3 GB free. With the 4 LLM portfolios, at most
 # 3 + 4 processes, as with the one council before.
