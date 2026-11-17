@@ -67,9 +67,12 @@ XRP_BRUT_ABSURDE = 987_654_321  # quote brut rejeté : ne doit jamais devenir un
 LINK_REVEIL_ABSURDE = 777_777_777_777  # quote_reveil : ignoré pour les marks
 
 
-def synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = False, saison_a: int | None = None) -> Journal:
+def synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = False, saison_a: int | None = None,
+                      retire_fable_apres: int | None = None) -> Journal:
+    """`retire_fable_apres` : Fable (avec_fable) est retiré à la fin de ce cycle, positions vendues au bid
+    (`portfolio_retired`), puis n'a plus d'equity."""
     with mock.patch("arene.journal.os.fsync"):  # 3 000 écritures : sans fsync le test reste rapide
-        return _synthetic_journal(path, avec_fable, veille, saison_a)
+        return _synthetic_journal(path, avec_fable, veille, saison_a, retire_fable_apres)
 
 
 def _bids(i: int) -> dict[str, int]:
@@ -92,7 +95,8 @@ def _veille(j: Journal, tick: int, i: int, *, bruts: dict | None = None, rejets:
     }, tick)  # fmt: skip
 
 
-def _synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = False, saison_a: int | None = None) -> Journal:
+def _synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = False, saison_a: int | None = None,
+                       retire_fable_apres: int | None = None) -> Journal:
     j = Journal(path)
     j.append("config_loaded", {"policy_sha256": "a" * 64, "config_sha256": "b" * 64, "prompt_sha256": "c" * 64,
                                "git_head": "d" * 40}, T0 - 600)  # fmt: skip
@@ -169,7 +173,8 @@ def _synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = Fals
                                        "parsed": {"actions": [], "justification": "attendre"}, "parse_error": None,
                                        "input_tokens": 3000, "output_tokens": 200, "cost_uusd": 16_000,
                                        "latency_ms": 1200}, ts)  # fmt: skip
-        if avec_fable and i >= FABLE_DEBUT:
+        fable_joue = avec_fable and i >= FABLE_DEBUT and not (retire_fable_apres is not None and i > retire_fable_apres)
+        if fable_joue:
             fp = {"actions": [], "justification": "attendre encore"}
             if i == FABLE_DEBUT + 5:
                 _intent(j, FABLE, c, "BTC/EUR", "buy", 1000, "f45", ts, qty=qty100)
@@ -182,12 +187,22 @@ def _synthetic_journal(path: Path, avec_fable: bool = False, veille: bool = Fals
         events = list(j.iter_events())
         states = replay(events)
         marks = {s: sum(_mid(s, i)) // 2 for s in SYMBOLS}
-        for p in LLMS + TEMOINS + ([FABLE] if avec_fable and i >= FABLE_DEBUT else []):
+        for p in LLMS + TEMOINS + ([FABLE] if fable_joue else []):
             st = states[p]
             j.append("equity", {"portfolio": p, "cycle": c, "cash_ueur": st.cash_ueur,
                                 "positions_value_ueur": equity_ueur(st, marks) - st.cash_ueur,
                                 "equity_ueur": equity_ueur(st, marks)}, ts + 5)  # fmt: skip
         j.append("cycle_completed", {"cycle": c}, ts + 10)
+        if avec_fable and retire_fable_apres == i:  # retrait de Fable : vente au bid, puis `portfolio_retired`
+            rts = c + 3_000
+            quotes = {}
+            for sym, pos in sorted(replay(j.iter_events())[FABLE].positions.items()):
+                bid = _mid(sym, i)[0] * 9_995 // 10_000
+                quotes[sym] = list(_mid(sym, i))
+                _fill(j, FABLE, sym, "sell", pos.qty, bid, rts, f"exit:{FABLE}:{sym}:{rts}:retired", reason="retired")
+            j.append("portfolio_retired", {"portfolio": FABLE, "ts": rts, "reason": "archive", "note": "NOTE_PRIVEE",
+                                           "equity_ueur": replay(j.iter_events())[FABLE].cash_ueur, "fills": len(quotes),
+                                           "quotes": quotes}, rts)  # fmt: skip
         if veille and i == REVEIL_CYCLE:
             _reveil(j, c, i)
         if veille and i == N_CYCLES - 1:

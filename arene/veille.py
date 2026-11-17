@@ -40,7 +40,7 @@ from arene.data.kraken import KrakenError
 from arene.data.store import BarStore
 from arene.deciders.llm import prompt_sha256
 from arene.journal import Journal, intent_from_payload, verify
-from arene.ledger import equity_ueur, replay
+from arene.ledger import equity_ueur, replay, retired_portfolios
 from arene.ops.heartbeat import Heartbeat
 from arene.ops.notify import Notifier
 from arene.paths import Paths
@@ -615,6 +615,7 @@ class _Veille:
 
         # 5. événement veille, après les stops
         states = replay(self.log.events)
+        retires = retired_portfolios(self.log.events)  # `arene retire` : leur valeur est figée, plus de relevé
         marks = {s: _mid(b, a) for s, (b, a) in qd.items()}
         bids = {s: b for s, (b, _a) in qd.items()}
         for s in instruments:  # symbole écarté : valorisé à son dernier quote valide
@@ -633,7 +634,7 @@ class _Veille:
                 "variations_bp": dict(sorted(variations.items())),
                 "clotures_1m": {s: b[-1].close for s, b in sorted(minute_bars.items())},
                 "confirmes": sorted(confirmes),
-                "equity": {p: equity_ueur(st, marks, bids) for p, st in sorted(states.items())},
+                "equity": {p: equity_ueur(st, marks, bids) for p, st in sorted(states.items()) if p not in retires},
                 "stops": rep.stops,
                 "reveil": launch,
                 "refus": rep.refus,

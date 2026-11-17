@@ -110,6 +110,16 @@ def replay(events: Iterable[Mapping[str, Any]]) -> dict[str, PortfolioState]:
     return states
 
 
+def retired_portfolios(events: Iterable[Mapping[str, Any]]) -> frozenset[str]:
+    """Portefeuilles retirés de la ligue (`portfolio_retired`, `arene retire`) : à plat pour de bon, ni le cycle ni
+    la veille ne les jouent ni ne les valorisent plus. Le journal décide, jamais la configuration."""
+    return frozenset(
+        rec["payload"]["portfolio"]
+        for rec in events
+        if rec["type"] == "portfolio_retired" and isinstance(rec["payload"].get("portfolio"), str)
+    )
+
+
 def positions_value_ueur(
     state: PortfolioState, marks: Mapping[str, int], bids: Mapping[str, int] | None = None
 ) -> int:

@@ -56,6 +56,7 @@ from arene.ledger import (
     orders_last_minute,
     positions_value_ueur,
     replay,
+    retired_portfolios,
     trades_last_24h,
 )
 from arene.ops import anthropic_key, dormance, killswitch
@@ -269,6 +270,7 @@ class _Runner:
         self.fault_injector = fault_injector
         self.on_portfolio_done = on_portfolio_done
         self.alerts: list[tuple[str, str]] = []
+        self.retired: frozenset[str] = frozenset()  # lus dans le journal par `_config_and_portfolios`
         self.t = 0  # cycle_ts
         # Réglages que la ronde de réveil (arene/veille.py) surcharge ; au cycle ils restent aux valeurs d'origine.
         self.prefetched_quotes: dict[str, Quote] | None = None  # quotes du tick, sinon ticker Kraken
@@ -396,8 +398,9 @@ class _Runner:
             if version_change:
                 self.alert("info", "claude_cli_version", f"claude --version : {last['claude_cli_version']} -> {self._claude_version}")
         opened = {e["payload"]["portfolio"] for e in self._events_of("portfolio_opened")}
-        self.llm_portfolios = tuple(m.portfolio for m in self.cfg.models)
-        self.temoin_portfolios = tuple(self.cfg.temoins.portfolios)
+        self.retired = retired_portfolios(self.log.events)  # `arene retire` : plus joué, plus valorisé, même listé en config
+        self.llm_portfolios = tuple(m.portfolio for m in self.cfg.models if m.portfolio not in self.retired)
+        self.temoin_portfolios = tuple(p for p in self.cfg.temoins.portfolios if p not in self.retired)
         for name, kind in [(p, "llm") for p in self.llm_portfolios] + [(p, "temoin") for p in self.temoin_portfolios]:
             if name not in opened:
                 self.wn(
@@ -967,7 +970,7 @@ class _Runner:
         t = self.t
         have = {e["payload"]["portfolio"] for e in self._events_of("equity") if e["payload"]["cycle"] == t}
         for p, st in sorted(self.states().items()):
-            if p in have:
+            if p in have or p in self.retired:  # un portefeuille retiré garde son dernier equity (`portfolio_retired`)
                 continue
             pos = positions_value_ueur(st, self.marks, self.bids)
             self.w(

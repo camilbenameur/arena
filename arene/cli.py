@@ -18,7 +18,7 @@ from arene import cycle as cyc
 from arene import veille as vei
 from arene.config import ConfigError, load_config
 from arene.journal import Journal, JournalError, verify
-from arene.ledger import rebuild_sqlite, replay
+from arene.ledger import rebuild_sqlite, replay, retired_portfolios
 from arene.ops import anthropic_key, dormance, killswitch
 from arene.ops.notify import Notifier
 from arene.paths import Paths
@@ -156,8 +156,27 @@ def cmd_resume(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
     if a.portfolio not in states:
         print(f"portefeuille inconnu : {a.portfolio} (connus : {', '.join(sorted(states))})", file=sys.stderr)
         return 2
+    if a.portfolio in retired_portfolios(j.events()):
+        print(f"{a.portfolio} est retiré de la ligue (archive) : il ne rejoue jamais.", file=sys.stderr)
+        return 2
     j.append("portfolio_resumed", {"portfolio": a.portfolio, "reason": "manual", "until_ts": 0}, now)
     print(f"{a.portfolio} repris : gel et arrêt levés, ses décisions reprennent au prochain cycle.")
+    return 0
+
+
+def cmd_retire(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
+    from arene.retire import RetireError, retire_portfolio
+
+    try:
+        out = retire_portfolio(paths, clients, a.portfolio, now, reason=a.reason, note=a.note)
+    except RetireError as exc:
+        print(f"retrait refusé : {exc}", file=sys.stderr)
+        return 1
+    if out["status"] == "already_retired":
+        print(f"{a.portfolio} : déjà retiré, rien à faire.")
+    else:
+        print(f"{a.portfolio} retiré : {out['fills']} position(s) vendue(s) au bid, valeur figée {_eur(out['equity_ueur'])}.")
+        print("Plus de cycle ni de réveil pour lui ; son rendement reste sur le site, en pointillés.")
     return 0
 
 
@@ -192,6 +211,8 @@ def _status_saison(paths: Paths, ev: list[dict], now: int) -> None:
         for e in ev:
             if e["type"] == "equity":
                 last[e["payload"]["portfolio"]] = e["payload"]["equity_ueur"]
+            elif e["type"] == "portfolio_retired":
+                last[e["payload"]["portfolio"]] = e["payload"]["equity_ueur"]
     print("  performance depuis la référence (equity au bid) :")
     for p, b in sorted(base.items()):
         cur = last.get(p, b)
@@ -216,10 +237,14 @@ def cmd_status(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
     states = replay(ev)
     eq = {e["payload"]["portfolio"]: e["payload"]["equity_ueur"] for e in ev if e["type"] == "equity"}
     capital = {e["payload"]["portfolio"]: e["payload"]["capital_ueur"] for e in ev if e["type"] == "portfolio_opened"}
+    retirés = retired_portfolios(ev)
+    for e in ev:
+        if e["type"] == "portfolio_retired":  # la valeur figée au retrait (après la vente), pas le dernier cycle
+            eq[e["payload"]["portfolio"]] = e["payload"]["equity_ueur"]
     print("equity (au bid) :")
     for p, st in sorted(states.items()):
         cur = eq.get(p, capital.get(p, 0))
-        flag = " ARRÊTÉ" if st.halted else " GELÉ" if st.frozen_until_ts > now else ""
+        flag = " RETIRÉ" if p in retirés else " ARRÊTÉ" if st.halted else " GELÉ" if st.frozen_until_ts > now else ""
         pct = (cur - capital[p]) * 100 / capital[p] if capital.get(p) else 0
         print(f"  {p:28s} {_eur(cur):>16s} {pct:+6.2f} %  positions={len(st.positions)}{flag}")
     _status_saison(paths, ev, now)
@@ -302,6 +327,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("ack", help="confirme la présence de l'opérateur (réarme la dormance)")
     r = sub.add_parser("resume", help="reprend un portefeuille gelé ou arrêté")
     r.add_argument("portfolio")
+    rt = sub.add_parser("retire", help="retire un modèle de la ligue : vend tout au bid, archive (irréversible)")
+    rt.add_argument("portfolio")
+    rt.add_argument("--reason", default="manual", help="raison (journalisée)")
+    rt.add_argument("--note", default="", help="note libre (journalisée, jamais publiée)")
     sub.add_parser("status", help="résumé lisible de l'état")
     sub.add_parser("verify", help="vérifie la chaîne du journal")
     sub.add_parser("rebuild-ledger", help="reconstruit var/ledger.sqlite depuis le journal")
@@ -318,6 +347,7 @@ COMMANDS: dict[str, Callable[..., int]] = {
     "unkill": cmd_unkill,
     "ack": cmd_ack,
     "resume": cmd_resume,
+    "retire": cmd_retire,
     "status": cmd_status,
     "verify": cmd_verify,
     "rebuild-ledger": cmd_rebuild_ledger,
