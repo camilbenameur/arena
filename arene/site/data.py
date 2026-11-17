@@ -423,6 +423,11 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
     capital = {e["payload"]["portfolio"]: e["payload"]["capital_ueur"] for e in events if e["type"] == "portfolio_opened"}
     kinds = {e["payload"]["portfolio"]: e["payload"].get("kind", "llm") for e in events if e["type"] == "portfolio_opened"}
     ids = sorted(capital, key=lambda p: (0 if kinds[p] == "llm" else 1, list(NOMS).index(p) if p in NOMS else 99, p))
+    # Portefeuilles retirés (`arene retire`) : vendus au bid, valeur figée dans l'événement. La note libre n'est jamais lue.
+    retires: dict[str, dict[str, Any]] = {}
+    for e in events:
+        if e["type"] == "portfolio_retired" and e["payload"]["portfolio"] not in retires:
+            retires[e["payload"]["portfolio"]] = {"ts": e["ts"], "equity_ueur": e["payload"]["equity_ueur"]}
     reveils = _reveils(events)
     saison = _saison(events, config, now)
     veilles = [e["payload"] for e in events if e["type"] == "veille"]
@@ -544,7 +549,8 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
         series = serie(pf)
         n = len(series) - 1
         vivante = live["equity"].get(pf) if live else None
-        final = vivante if vivante is not None else series[-1]
+        archive = retires.get(pf)
+        final = archive["equity_ueur"] if archive else vivante if vivante is not None else series[-1]
         rets = stats.returns(series)
         enough = n >= MIN_CYCLES_STATS
         sh = stats.sharpe(rets) if len(rets) >= 2 else None
@@ -573,7 +579,7 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
             "id": pf, "slug": slug(pf), "name": nom(pf), "kind": kinds[pf], "description": DESCRIPTIONS.get(pf),
             "capital_ueur": capital[pf], "base_ueur": start, "equity_ueur": final, "equity_live": vivante is not None,
             "base100": final / start * 100 if start else 100.0,
-            "n_cycles": n, "total_return": tr, "max_drawdown": stats.max_drawdown(series + ([final] if vivante is not None else [])),
+            "n_cycles": n, "total_return": tr, "max_drawdown": stats.max_drawdown(series + ([final] if vivante is not None or archive else [])),
             "sharpe": sh if enough else None, "sharpe_ci": list(ci) if ci else None, "too_early": not enough,
             "fees_paid_ueur": st.fees_paid_ueur, "realized_pnl_ueur": st.realized_pnl_ueur,
             "n_trades": len(trades.get(pf, ())), "api_cost_uusd": costs[pf] if kinds[pf] == "llm" else None,
@@ -589,7 +595,7 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
             "skipped": dict(skipped.get(pf, {})), "rejects": dict(rejects.get(pf, {})),
             "decisions_total": len(decisions.get(pf, ())),
             "decisions": decisions.get(pf, [])[:DECISIONS_MAX],
-            "series_ueur": series,
+            "series_ueur": series, "archive": archive,
         })  # fmt: skip
 
     # Courbe : départ de la période, chaque cycle (equity du cycle), un relevé de veille toutes les 30 min entre les
@@ -613,7 +619,15 @@ def compute(journal_path: Path, config: Config, policy: Policy, now_ts: int | No
         b0 = p["base_ueur"]
         vals: list[float | None] = ([None if p["late"] else 100.0]) if x0 is not None else []
         vals += [round(pts[t][1][p["id"]] / b0 * 100, 4) if p["id"] in pts[t][1] and b0 else None for t in xs]
-        chart.append({"id": p["id"], "name": p["name"], "kind": p["kind"], "values": vals})
+        serie_c = {"id": p["id"], "name": p["name"], "kind": p["kind"], "values": vals}
+        if p["archive"]:  # courbe figée : rien après le retrait, dont la dernière valeur est celle de la vente
+            fin = p["archive"]["ts"]
+            vals[:] = [None if (t > fin and i > 0) else v for i, (t, v) in enumerate(zip(x, vals, strict=True))]
+            dernier = max((i for i, v in enumerate(vals) if v is not None), default=None)
+            if dernier is not None and b0:
+                vals[dernier] = round(p["equity_ueur"] / b0 * 100, 4)
+            serie_c["archive_ts"] = fin
+        chart.append(serie_c)
 
     rodage = None
     if ref is not None:

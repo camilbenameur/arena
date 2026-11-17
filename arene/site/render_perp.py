@@ -530,9 +530,11 @@ def index_page(data: dict[str, Any]) -> str:
 
     perp = data["perp"]
     pfs = perp["portfolios"]
-    llms = [p for p in pfs if p["kind"] == "llm"]
+    tous_llms = [p for p in pfs if p["kind"] == "llm"]
+    llms = [p for p in tous_llms if not p.get("archive")]  # les archivés ne jouent plus : ils ne sont plus comptés
+    archives = [p for p in tous_llms if p.get("archive")]
     capital = pfs[0]["capital_ueur"] if pfs else 1_000_000_000
-    n_tem = len(pfs) - len(llms)
+    n_tem = len(pfs) - len(tous_llms)
     direct_pfs = [p for p in pfs if _direct_pf(p)]
     noms = [nom_court(p["name"]).replace("Claude ", "") for p in llms]
     if llms:
@@ -541,6 +543,9 @@ def index_page(data: dict[str, Any]) -> str:
             f"{e(_liste_et(noms))} décident chacune seule, plusieurs fois par heure, avec un levier de 2 au plus, "
             f"sur les prix réels de Kraken. {_nombre(n_tem)} règles fixes sans IA servent de témoins ; la référence est le panier acheté et gardé."
         )
+        if archives:
+            noms_arch = _liste_et([nom_court(p["name"]).replace("Claude ", "") for p in archives])
+            chapo += f" {e(noms_arch)}, archivé{'s' if len(archives) > 1 else ''}, reste{'nt' if len(archives) > 1 else ''} en pointillés."
     else:
         titre = f"Des IA Claude tradent {eur(capital, decimals=0)} fictifs chacune en contrats crypto."
         chapo = f"Témoins seuls pour l’instant ; les IA entrent au rendez-vous de {heure(perp['prochain_rdv_ts'])}."
@@ -551,7 +556,7 @@ def index_page(data: dict[str, Any]) -> str:
         titre=titre, chapo=chapo,
         classement=A.scores(A._perp_rows(perp), label="Classement de la ligue des IA seules, rendement net"),
         apres=_releve(data, perp, direct_pfs),
-        courbe=_chart_block(perp["chart"]),
+        courbe=_chart_block(perp["chart"]) + _archives(tous_llms),
     ) + f"""
 {_dernieres(perp)}
 <section aria-labelledby="titre-comparatif">
@@ -565,8 +570,8 @@ def index_page(data: dict[str, Any]) -> str:
     ch = perp["chart"]
     return layout(
         title="IA seules", body=body, root="", active="derives", data=data, ligue="perp", chemin="derives.html",
-        titre_complet="Ligue des IA seules : quatre IA Claude tradent de l’argent fictif",
-        desc=f"Haiku, Sonnet, Opus et Fable tradent chacune {eur(capital, decimals=0)} fictifs en contrats crypto, en simulation sur les prix de Kraken, face à des stratégies sans IA. Classement et décisions expliquées.",
+        titre_complet=f"Ligue des IA seules : {_nombre(len(llms)).lower()} IA Claude tradent de l’argent fictif" if llms else "Ligue des IA seules",
+        desc=f"{_liste_et(noms) if noms else 'Haiku, Sonnet, Opus et Fable'} tradent chacune {eur(capital, decimals=0)} fictifs en contrats crypto, en simulation sur les prix de Kraken, face à des stratégies sans IA. Classement et décisions expliquées.",
         scripts=(_chart_scripts("", ch, None, dernier="Dernier relevé") if courbe_visible(ch) else "") + _direct_scripts("", perp, direct_pfs),
         direct=bool(direct_pfs),
     )  # fmt: skip
@@ -605,13 +610,14 @@ def _experience(conseils: list[dict[str, Any]]) -> str:
 
 
 def _archives(pfs: list[dict[str, Any]]) -> str:
-    """Les conseils retirés de la ligue : leurs données restent, leur courbe est en pointillés et s'arrête au retrait."""
+    """Les portefeuilles retirés de la ligue : leurs données restent, leur courbe est en pointillés et s'arrête au retrait."""
     arch = [p for p in pfs if p.get("archive")]
     if not arch:
         return ""
     noms = _liste_et([f"{p['name']} (le {jj_mm(p['archive']['ts'])})" for p in arch])
+    quoi = "conseils archivés" if all(p["kind"] == "conseil" for p in arch) else "portefeuilles archivés"
     return (
-        '<p class="arrivee">Courbes en pointillés : conseils archivés, retirés de la ligue avec leurs positions fermées. '
+        f'<p class="arrivee">Courbes en pointillés : {quoi}, retirés de la ligue avec leurs positions fermées. '
         f"Leur rendement est figé à leur retrait : {e(noms)}.</p>"
     )
 
@@ -1173,10 +1179,11 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     alertes = ""
     st = p.get("statut")
     if p.get("archive"):
+        solo = p["kind"] == "llm"
         alertes = (
-            f'<p class="alerte info"><strong>Conseil archivé</strong> le {quand(p["archive"]["ts"])}. '
-            "Ses positions ont été fermées au marché ; il ne joue plus et ses chiffres sont figés. "
-            "Sa courbe reste, en pointillés, dans la ligue des conseils.</p>"
+            f'<p class="alerte info"><strong>{"IA archivée" if solo else "Conseil archivé"}</strong> le {quand(p["archive"]["ts"])}. '
+            f"Ses positions ont été fermées au marché ; {'elle' if solo else 'il'} ne joue plus et ses chiffres sont figés. "
+            f"Sa courbe reste, en pointillés, dans la ligue {'des IA seules' if solo else 'des conseils'}.</p>"
         )
     elif st and st["etat"] == "arrete" and conseil:
         alertes = (

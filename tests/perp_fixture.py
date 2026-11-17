@@ -85,9 +85,11 @@ class Gen:
         self.add("conditional_order", {"portfolio": pf, "instrument": inst, "kind": kind, "price_uusd": px, "ts": ts}, ts)
 
 
-def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bool = False) -> Path:
+def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bool = False,
+          archive_fable: bool = False) -> Path:
     """`ruine` : le Conseil Haiku finit arrêté (`portfolio_halted`, ruine à -90 %) ; `conseils=False` : aucun conseil ;
-    `archive` : les deux conseils sont retirés une heure avant la fin (positions fermées, `portfolio_retired`)."""
+    `archive` : les deux conseils sont retirés une heure avant la fin (positions fermées, `portfolio_retired`) ;
+    `archive_fable` : de même pour l'IA seule Fable."""
     g = Gen(path)
     for pf in TEMOINS + LLMS:
         g.add("portfolio_opened", {"portfolio": pf, "kind": "llm" if pf in LLMS else "benchmark", "league": "perp",
@@ -126,6 +128,11 @@ def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bo
                 for inst, pos in list(g.book.states[pf].positions.items()):
                     g.fill(pf, inst, -pos.qty, ts, "retired")
                 g.add("portfolio_retired", {"portfolio": pf, "ts": ts, "reason": "refonte", "note": "tout permis"}, ts)
+        if archive_fable and ts == fin - 3_600:
+            pf = "llm-perp:claude-fable-5-2"
+            for inst, pos in list(g.book.states[pf].positions.items()):
+                g.fill(pf, inst, -pos.qty, ts, "retired")
+            g.add("portfolio_retired", {"portfolio": pf, "ts": ts, "reason": "archive", "note": "texte libre privé"}, ts)
         if conseils and ruine and ts == fin:
             g.add("portfolio_halted", {"portfolio": CONSEIL, "reason": "drawdown", "until_ts": 0}, ts)
         if ts in rdvs or ts == wake:

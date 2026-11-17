@@ -27,7 +27,7 @@ NOMBRES_MIN = {1: "un", 2: "deux", 3: "trois", 4: "quatre", 5: "cinq", 6: "six",
 
 def description(data: dict[str, Any]) -> str:
     """Méta-description : le nombre de modèles et de témoins vient du journal, pas d'une constante."""
-    n_llm = sum(1 for p in data.get("portfolios", ()) if p["kind"] == "llm")
+    n_llm = sum(1 for p in data.get("portfolios", ()) if p["kind"] == "llm" and not p.get("archive"))
     n_tem = sum(1 for p in data.get("portfolios", ()) if p["kind"] != "llm")
     llm = f"{NOMBRES_MIN.get(n_llm, n_llm)} modèle{'s' if n_llm > 1 else ''} d’IA"
     gere = "gèrent chacun un portefeuille" if n_llm > 1 else "gère un portefeuille"
@@ -445,7 +445,7 @@ def _chart_block(chart: dict[str, Any], *, focus_name: str | None = None, focus:
     periode = f"du {when(chart['x'][1])} au {when(chart['x'][-1])}"
     fin = "Valeurs en direct" if (chart.get("kinds") or [""])[-1] == "veille" else "Au dernier cycle"
     derniers = "; ".join(
-        f"{s['name']} {pct((s['values'][-1] - 100) / 100) if s['values'][-1] is not None else '—'}"
+        f"{s['name']}{' (archivé)' if s.get('archive_ts') else ''} {pct((dernier_valeur(s['values']) - 100) / 100) if dernier_valeur(s['values']) is not None else '—'}"
         for s in chart["series"]
     )
     if focus_name and len(chart["series"]) == 1:
@@ -565,7 +565,9 @@ def overview_table(data: dict[str, Any]) -> str:
     rows = []
     for p in data["portfolios"]:
         statut = ""
-        if p["halted"]:
+        if p.get("archive"):
+            statut = f' <span class="pastille neutre">archivé le {jj_mm(p["archive"]["ts"])}</span>'
+        elif p["halted"]:
             statut = ' <span class="pastille perte-bg">arrêté</span>'
         elif p["frozen_until_ts"]:
             statut = ' <span class="pastille warn">gelé</span>'
@@ -573,9 +575,10 @@ def overview_table(data: dict[str, Any]) -> str:
         verdict_html = f'<span class="verdict-ligne">{verdict}</span>' if verdict else ""
         if p.get("late") and p.get("start_ts"):
             verdict_html += f'<small class="desc">depuis le {quand(p["start_ts"], annee=False)}</small>'
-        inactif = " inactif" if jamais_decide(p) else ""
+        inactif = " inactif" if jamais_decide(p) and not p.get("archive") else ""
+        arch = " archive" if p.get("archive") else ""
         rows.append(
-            f'<tr class="{e(p["kind"])}{inactif}"><th scope="row"><a href="modele/{e(p["slug"])}.html">{e(p["name"])}</a>{statut}{verdict_html}</th>'
+            f'<tr class="{e(p["kind"])}{inactif}{arch}"><th scope="row"><a href="modele/{e(p["slug"])}.html">{e(p["name"])}</a>{statut}{verdict_html}</th>'
             f'<td class="n cle"><span class="{tone(p["total_return"])}">{pct(p["total_return"])}</span>{_svg_barre(p["total_return"], vmax)}</td>'
             f'<td class="n">{_rank_cell(p)}</td>'
             f'<td class="n">{eur(p["equity_ueur"])}</td>'
@@ -587,7 +590,8 @@ def overview_table(data: dict[str, Any]) -> str:
         )
 
     def groupe(llm: bool, titre: str) -> str:
-        lignes = [r for r, p in zip(rows, data["portfolios"], strict=True) if (p["kind"] == "llm") == llm]
+        voulus = [(r, p) for r, p in zip(rows, data["portfolios"], strict=True) if (p["kind"] == "llm") == llm]
+        lignes = [r for r, _p in sorted(voulus, key=lambda rp: bool(rp[1].get("archive")))]  # les archivés après les actifs
         if not lignes:
             return ""
         return f'<tbody><tr class="groupe"><th scope="rowgroup" colspan="{8 - tous_tot}">{titre}</th></tr>{"".join(lignes)}</tbody>'
@@ -770,9 +774,20 @@ def _dernier_saut(p: dict[str, Any]) -> str | None:
     return d["skip_reason"] if d and d["kind"] == "skipped" else None
 
 
+def _archives(archives: list[dict[str, Any]]) -> str:
+    """Les modèles retirés de la ligue : leurs données restent, leur courbe est en pointillés et s'arrête au retrait."""
+    if not archives:
+        return ""
+    noms = ", ".join(f"{p['name']} (le {jj_mm(p['archive']['ts'])})" for p in archives)
+    return (
+        '<p class="arrivee">Courbes en pointillés : modèles archivés, retirés de la ligue avec leurs positions vendues. '
+        f"Leur rendement est figé à leur retrait : {e(noms)}.</p>"
+    )
+
+
 def index_page(data: dict[str, Any]) -> str:
     nc, mc = data["n_cycles"], data["min_cycles_stats"]
-    llms = [p for p in data["portfolios"] if p["kind"] == "llm"]
+    llms = [p for p in data["portfolios"] if p["kind"] == "llm" and not p.get("archive")]  # les archivés ne jouent plus
     verdict = _verdict(data)
     m = data["method"]
     dist = data["distribution"]
@@ -803,6 +818,14 @@ def index_page(data: dict[str, Any]) -> str:
         "Elles décident toutes les 4 h sur les prix réels de Kraken, frais compris, sans pouvoir parier à la baisse. "
         "Des règles fixes sans IA servent de témoins, dont le panier acheté et gardé."
     )
+    archives = [p for p in data["portfolios"] if p.get("archive")]
+    if archives:
+        noms_arch = ", ".join(nom_court(p["name"]).replace("Claude ", "") for p in archives)
+        pl = len(archives) > 1
+        chapo += (
+            f" {e(noms_arch)}, archivé{'s' if pl else ''}, ne joue{'nt' if pl else ''} plus : "
+            f"{'leurs courbes restent' if pl else 'sa courbe reste'} en pointillés."
+        )
     etat = f"""{_saison_tete(data)}
   {_avancee(data, verdict) if nc else f'<p class="avancee"><strong>{e(verdict)}</strong></p>'}
   {_releve(data)}
@@ -810,7 +833,7 @@ def index_page(data: dict[str, Any]) -> str:
     body = A.une(
         titre=titre, chapo=chapo,
         classement=A.scores(A._spot_rows(data), label="Classement de la ligue comptant, rendement net") + f'<div class="etat etat-une">{etat}</div>',
-        courbe=_chart_block(data["chart"]),
+        courbe=_chart_block(data["chart"]) + _archives(archives),
     ) + f"""
 <section aria-labelledby="titre-comparatif">
   <h2 id="titre-comparatif">Tous les portefeuilles <span class="h-note">{depuis}frais compris</span></h2>
@@ -890,7 +913,7 @@ def _codes(reasons: list[str]) -> str:
 
 
 def _motif(reason: str) -> str:
-    return {"intent": "ordre", "stop": "stop touché", "max_holding": "détention maximale", "kill_switch": "coupe-circuit"}.get(
+    return {"intent": "ordre", "stop": "stop touché", "max_holding": "détention maximale", "kill_switch": "coupe-circuit", "retired": "archivé, positions vendues"}.get(
         reason, reason
     )
 
@@ -1066,17 +1089,23 @@ def model_page(data: dict[str, Any], p: dict[str, Any], baseline_chart: dict[str
         ]
     stats_html = "".join(communs + extra)
     alertes = []
-    if p["halted"]:
+    if p.get("archive"):
+        alertes.append(
+            f'<p class="alerte info"><strong>IA archivée</strong> le {quand(p["archive"]["ts"])}. '
+            "Ses positions ont été vendues au marché ; elle ne joue plus et ses chiffres sont figés. "
+            "Sa courbe reste, en pointillés, dans la ligue comptant.</p>"
+        )
+    elif p["halted"]:
         alertes.append('<p class="alerte perte-bg">Portefeuille arrêté : drawdown maximal atteint, positions mises à plat.</p>')
     elif p["frozen_until_ts"]:
         alertes.append(f'<p class="alerte warn">Portefeuille gelé jusqu’au {quand(p["frozen_until_ts"])}.</p>')
-    if jamais_decide(p):
+    if jamais_decide(p) and not p.get("archive"):
         raison = _raison_sauts(p)
         pourquoi = f" : {e(raison)}" if raison else ""
         alertes.append(
             f'<p class="alerte warn">Ce modèle n’a encore jamais décidé{pourquoi}. Ses chiffres sont ceux d’un portefeuille resté en cash.</p>'
         )
-    verdict = "" if jamais_decide(p) else _verdict_hasard(p, mc)  # l'alerte le dit déjà
+    verdict = "" if jamais_decide(p) or p.get("archive") else _verdict_hasard(p, mc)  # l'alerte le dit déjà
     resume = []
     if p["rejects"]:
         resume.append(
