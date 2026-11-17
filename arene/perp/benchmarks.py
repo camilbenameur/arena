@@ -25,6 +25,9 @@ from arene.types import MICRO, QTY_SCALE
 BASKET = "benchmark-perp:basket-1x"
 TREND = "benchmark-perp:trend"
 RANDOM = "benchmark-perp:random"
+# The shadow of the council v4 (docs/SPEC-CONSEIL-V4.md §6): the frozen engine's target at 2x, no LLM. It is not in
+# `ALL`: the watcher opens it only when the council v4 is configured.
+MOTEUR = "benchmark-perp:moteur-tendance"
 ALL = (BASKET, TREND, RANDOM)
 REFERENCES = (BASKET, TREND)
 TREND_LOOKBACK_DAYS = 20

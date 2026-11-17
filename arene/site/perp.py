@@ -45,7 +45,10 @@ TENDANCE = "benchmark-perp:trend"
 ALEATOIRE = "benchmark-perp:random"
 CONSEIL = "council-perp:haiku"  # le Conseil Haiku : Président Haiku
 CONSEIL_OPUS = "council-perp:opus"  # le Conseil Opus : mêmes dix conseillers Haiku, Président Opus
+CONSEIL_TENDANCE = "council-perp:tendance"  # le Conseil Tendance (v4) : le moteur décide, les LLM freinent
+MOTEUR = "benchmark-perp:moteur-tendance"  # son témoin : le même moteur, sans LLM
 PREFIXE_CONSEIL = "council-perp:"
+OBJECTIF_JOUR_PCT = 10  # l'objectif fixé (17/11/2026) : « l'ordre de 10 % par jour »
 
 NOMS = {
     "llm-perp:claude-haiku-5-5": "Claude Haiku 5.5",
@@ -54,20 +57,39 @@ NOMS = {
     "llm-perp:claude-fable-5-2": "Claude Fable 5.2",
     CONSEIL: "Conseil Haiku",
     CONSEIL_OPUS: "Conseil Opus",
+    CONSEIL_TENDANCE: "Conseil Tendance",
+    MOTEUR: "Témoin moteur seul",
     PANIER: "Témoin panier 1x",
     TENDANCE: "Témoin tendance",
     ALEATOIRE: "Témoin aléatoire",
 }
 ORDRE = list(NOMS)
-SOUS_TITRES = {CONSEIL: "10 Haiku · président Haiku", CONSEIL_OPUS: "10 Haiku · président Opus"}
-BUDGETS_CONSEIL_USD = {CONSEIL: 10, CONSEIL_OPUS: 25}  # budget du jour, en équivalent catalogue
+SOUS_TITRES = {
+    CONSEIL: "10 Haiku · président Haiku",
+    CONSEIL_OPUS: "10 Haiku · président Opus",
+    CONSEIL_TENDANCE: "moteur de tendance · 3 Haiku et un président Opus qui freinent",
+}
+BUDGETS_CONSEIL_USD = {CONSEIL: 10, CONSEIL_OPUS: 25, CONSEIL_TENDANCE: 5}  # budget du jour, en équivalent catalogue
 DESCRIPTIONS = {
     CONSEIL: "Des Claude Haiku 5.5 délibèrent à chaque ronde : des avis indépendants, un avocat du diable, puis un Président Haiku qui décide.",
     CONSEIL_OPUS: "Les mêmes conseillers Haiku 5.5 délibèrent à chaque ronde ; c’est un Président Claude Opus 5.5 qui décide.",
+    CONSEIL_TENDANCE: "Un moteur de suivi de tendance (moyennes mobiles 2 j / 6 j, long et short, taille réglée sur la volatilité, échelle 2x) donne la cible de chaque contrat à chaque barre de 4 h. Trois Haiku et un Président Opus peuvent seulement freiner : un coefficient de 1, 0,5 ou 0 par contrat.",
+    MOTEUR: "Le même moteur de tendance à 2x, sans IA, par le même chemin d’exécution et sur les mêmes rondes de 4 h : l’écart avec le Conseil Tendance mesure ce que les IA ajoutent ou retirent.",
     PANIER: "Acheteur à parts égales des 6 contrats, sans levier ni stop, rééquilibré chaque mois : acheter et garder.",
     TENDANCE: "Chaque jour, long sur un contrat qui a monté sur 20 jours, short sinon ; 1/6 du portefeuille par contrat, stop à 10 %.",
     ALEATOIRE: "Tire 0 à 2 décisions au hasard à chaque rendez-vous, avec exactement les mêmes règles de risque que les IA.",
 }
+
+MARQUE_TENDANCE = "moteur de tendance · levier ≤ 10x · les IA ne peuvent que freiner"
+
+
+def _objectif_jour(capital: int, equity: int, ouvert_ts: int, now: int) -> dict[str, Any]:
+    """L'objectif fixé (10 %/jour) face au rendement par jour réalisé, côte à côte et sans fard : le taux journalier
+    composé depuis l'ouverture (au moins un jour compté : un portefeuille de quelques heures montre son rendement du jour)."""
+    jours = max((now - ouvert_ts) / 86_400, 1.0)
+    realise = (equity / capital) ** (1 / jours) - 1 if capital > 0 and equity > 0 else -1.0
+    return {"objectif_pct": OBJECTIF_JOUR_PCT, "realise_pct": round(100 * realise, 3), "jours": round(jours, 1)}
+
 
 # Le Conseil Haiku (docs/SPEC-PERP-CONSEIL-HAIKU.md) : une catégorie à part, jamais classée avec les 4 LLM neutres.
 MARQUE_CONSEIL = "agressif · levier ≤ 10x · objectif ×2"
@@ -87,7 +109,15 @@ MEMBRES = {
     "avocat": ("L’Avocat du diable", "B", "attaque le trade le plus soutenu", "chercheur baissier et débat de TradingAgents"),
     "president": ("Le Président", "C", "tranche et décide", "Portfolio Manager de TradingAgents ; Desk Lead de HyperGrok"),
 }
+# Les trois conseillers du Conseil Tendance (v4) : ils ne peuvent que proposer de freiner le moteur.
+MEMBRES_V4 = {
+    "veilleur": ("Le Veilleur d’actualités", "A", "annonces de Kraken et publications macro", "consigne v4"),
+    "controleur": ("Le Contrôleur de données", "A", "prix incohérents, trous, vue périmée", "consigne v4"),
+    "avocat_risque": ("L’Avocat du risque", "A", "concentration et drawdown", "consigne v4"),
+}
 ORDRE_MEMBRES = list(MEMBRES)
+TOUS_MEMBRES = {**MEMBRES, **MEMBRES_V4}
+ORDRE_TOUS = list(TOUS_MEMBRES)
 ARGUMENT_MAX = 700
 
 ACTIONS = {"open_long": "Ouvre un long", "open_short": "Ouvre un short", "reduce": "Réduit", "close": "Ferme"}
@@ -179,6 +209,14 @@ CODES_CONSEIL = {
     "MAX_LEVERAGE": "levier au-delà de 10",
     "MAX_TRADE_LOSS": "perte au stop au-delà de 25 % du portefeuille",
     "MAX_OPEN_RISK": "pertes cumulées aux stops au-delà de 60 %",
+}
+# Et aux bornes de la politique du Conseil Tendance et de son témoin (config/policy-perp-conseil-v4.toml).
+CODES_TENDANCE = {
+    **CODES_CONSEIL,
+    "DAILY_TRADES": "48 ouvertures ou ajustements déjà faits en 24 h",
+    "MAX_ORDER_SIZE": "ordre au-delà de 400 % du portefeuille",
+    "MAX_POSITION": "position au-delà de 500 % du portefeuille",
+    "MAX_OPEN_RISK": "pertes cumulées aux stops au-delà de 59 %",
 }
 
 OUTILS = {
@@ -400,7 +438,7 @@ def _nombre(v: Any) -> float | None:
 def _avis_membre(p: Mapping[str, Any]) -> dict[str, Any]:
     """Un `council_opinion` tel que le site le montre : position, conviction, taille, stop et niveau par contrat."""
     key = str(p.get("member") or "")
-    nom_m, etape, role, _src = MEMBRES.get(key, (_texte(p.get("name"), 60) or "Membre", str(p.get("stage") or "A"), None, None))
+    nom_m, etape, role, _src = TOUS_MEMBRES.get(key, (_texte(p.get("name"), 60) or "Membre", str(p.get("stage") or "A"), None, None))
     op = p.get("opinion") if isinstance(p.get("opinion"), Mapping) else None
     out: dict[str, Any] = {
         "membre": key, "nom": nom_m, "etape": etape, "role": role, "absent": op is None,
@@ -425,7 +463,41 @@ def _avis_membre(p: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(c, Mapping) and c.get("sens") in ("long", "short"):
         out["cible"] = {"instrument": court(c.get("instrument")), "sens": c["sens"]}
     out["argument"] = _texte(op.get("argument"), ARGUMENT_MAX)
+    props = op.get("propositions")
+    if isinstance(props, list):  # un conseiller du Conseil Tendance : des freinages proposés (0 ou 0,5), jamais un avis de marché
+        out["propositions"] = [
+            {"instrument": court(x.get("instrument")), "coefficient": x.get("coefficient") if x.get("coefficient") in ("0", "0.5") else None,
+             "raison": _texte(x.get("raison"), 200)}
+            for x in props if isinstance(x, Mapping)
+        ]  # fmt: skip
     return out
+
+
+COEFFICIENTS = ("0", "0.5", "1")
+
+
+def _tendance_ronde(t: Any) -> dict[str, Any] | None:
+    """Ce que le Conseil Tendance a fait d'une ronde (`agent_decision.trend`) : les cibles du moteur (en % du
+    portefeuille, signées), les coefficients du conseil avec leur raison, et si le conseil a été appelé. Rien d'autre."""
+    if not isinstance(t, Mapping):
+        return None
+
+    def pcts(raw: Any) -> dict[str, float]:
+        return {court(k): v / 100 for k, v in (raw or {}).items() if isinstance(v, int) and not isinstance(v, bool)} if isinstance(raw, Mapping) else {}
+
+    coefs = {}
+    for k, c in (t.get("coefficients") or {}).items() if isinstance(t.get("coefficients"), Mapping) else ():
+        if isinstance(c, Mapping) and c.get("c") in COEFFICIENTS:
+            coefs[court(k)] = {"coefficient": c["c"], "raison": _texte(c.get("why"), 200), "jusqu_a_ts": _entier(c.get("until_ts"))}
+    off = t.get("council_off")
+    return {
+        "type": t.get("kind") if t.get("kind") in ("barre", "veto", "restauration") else None,
+        "barre_ts": _entier(t.get("bar_end_ts")), "cibles_pct": pcts(t.get("targets_bp")), "finales_pct": pcts(t.get("final_bp")),
+        "coefficients": coefs, "conseil_appele": bool(t.get("council_called")),
+        "conseil_absent": {"nothing_to_brake": "rien à freiner", "daily_budget": "budget du jour atteint", "llm_league_off": "IA coupées", "restauration": "fin d’un freinage"}.get(str(off)) if off else None,
+        "president_ok": bool(t.get("president_ok")),
+        "donnees_incompletes": sorted(court(k) for k in t.get("held") or {}) if isinstance(t.get("held"), Mapping) else [],
+    }  # fmt: skip
 
 
 def _outil_args(tool: str, raw: Any) -> str:
@@ -585,7 +657,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             rondes[r] = {
                 "round": r, "ts": ts, "kind": "rendezvous", "declencheur": None, "statut": "en_cours", "saut": None,
                 "justification": None, "actions": [], "outils": [], "erreur": None, "cout_uusd": None,
-                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None, "conseil": None,
+                "latence_ms": None, "jetons": None, "pose": None, "rappel_ts": None, "conseil": None, "tendance": None,
             }  # fmt: skip
         return rondes[r]
 
@@ -605,6 +677,13 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             d = ronde(p["round"], e["ts"])
             d["kind"] = p.get("kind") or "rendezvous"
             d["declencheur"] = _declencheur(p.get("trigger"), d["kind"]) if d["kind"] in ("wakeup", "alert", "scheduled", "cadence", "news", "calendar") else None
+            if d["kind"] == "veto":  # une ronde de veto du Conseil Tendance : son déclencheur est un réveil, une annonce ou une publication
+                try:
+                    brut = json.loads(p.get("trigger")) if isinstance(p.get("trigger"), str) else p.get("trigger")
+                    k = brut.get("kind") if isinstance(brut, Mapping) and brut.get("kind") in ("wakeup", "news", "calendar") else "wakeup"
+                    d["declencheur"] = _declencheur(brut, k)
+                except ValueError:
+                    d["declencheur"] = None
         elif t == "tool_call":
             d = ronde(p["round"], e["ts"])
             tool = str(p.get("tool") or "").removeprefix("mcp__arene__")
@@ -641,6 +720,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
                 c["modele_membres"] = "Haiku" if cs.get("members_model") is None else _modele(cs.get("members_model"))
                 v = cs.get("prompts_version")
                 c["consignes"] = "v1" if v is None else (v if isinstance(v, str) and re.fullmatch(r"v\d{1,3}", v) else None)
+            d["tendance"] = _tendance_ronde(p.get("trend"))
             d["latence_ms"] = p.get("latency_ms")
             d["jetons"] = (p.get("input_tokens") or 0) + (p.get("output_tokens") or 0) + (p.get("cache_read_tokens") or 0) + (p.get("cache_write_tokens") or 0)
             if parsed is None:
@@ -685,6 +765,12 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
         elif t == "perp_verdict" and str(p.get("intent_id")) in ordres:
             a = declenche(str(p["intent_id"]), e["ts"], None)["actions"][0]
             a["verdict"] = {"approuve": bool(p.get("approved")), "motifs": [str(c) for c in p.get("reasons") or []]}
+        elif t == "perp_verdict" and courante is not None and p.get("retry_of") is not None:
+            a = par_intent.get(str(p["retry_of"]))  # l'entrée refusée pour sa taille, retentée plus petite : la même action
+            if a is not None:
+                a["verdict"] = {"approuve": bool(p.get("approved")), "motifs": [str(c) for c in p.get("reasons") or []]}
+                a["reduite"] = (a.get("reduite") or 0) + 1
+                par_intent[str(p.get("intent_id"))] = a
         elif t == "perp_verdict" and courante is not None:
             libres = courante.get("_libres") or []
             a = next((x for x in libres if x["verdict"] is None and x["instrument"] == court(p.get("instrument")) and x["action"] == p.get("action")), None)
@@ -714,7 +800,7 @@ def _decisions_llm(events: list[dict[str, Any]], pf: str) -> list[dict[str, Any]
             outils = c.pop("_outils")
             for a in c["avis"]:
                 a["outils"] = outils.get(a["membre"], [])
-            c["avis"].sort(key=lambda a: ORDRE_MEMBRES.index(a["membre"]) if a["membre"] in MEMBRES else 99)
+            c["avis"].sort(key=lambda a: ORDRE_TOUS.index(a["membre"]) if a["membre"] in TOUS_MEMBRES else 99)
     return sorted([*rondes.values(), *declenches.values()], key=lambda d: (d["ts"] if d["kind"] == "ordre" else d["round"]), reverse=True)
 
 
@@ -897,17 +983,21 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             "cout_uusd": None, "n_rondes": 0, "n_ordres": 0, "fx": list(fx) if fx else None,
             "archive": retires.get(pf),
         }  # fmt: skip
+        if pf in (CONSEIL_TENDANCE, MOTEUR):
+            p_out["objectif_jour"] = _objectif_jour(capital, equity, opened[pf]["ts"], now)
+        if pf == MOTEUR:
+            p_out["marque"] = MARQUE_TENDANCE
         if kind in ("llm", "conseil"):
             ds = _decisions_llm(events, pf)  # toutes : les totaux portent sur le journal entier
             if kind == "conseil":
                 n_delib = 0
                 for d in ds:
-                    d["regles"] = "conseil"  # ses refus se lisent aux bornes de sa propre politique
+                    d["regles"] = "tendance" if pf == CONSEIL_TENDANCE else "conseil"  # ses refus se lisent aux bornes de sa propre politique
                     c = d.get("conseil")
                     n_delib += 1 if c else 0
                     if c and n_delib > DELIBERATIONS_MAX:  # la page reste légère : ~150 rondes par jour, 9 avis chacune
                         c["avis_hors_page"], c["avis"] = len(c["avis"]), []
-                p_out["marque"], p_out["hors_regle"] = MARQUE_CONSEIL, HORS_REGLE_CONSEIL
+                p_out["marque"], p_out["hors_regle"] = (MARQUE_TENDANCE if pf == CONSEIL_TENDANCE else MARQUE_CONSEIL), HORS_REGLE_CONSEIL
                 p_out["sous_titre"] = SOUS_TITRES.get(pf)
                 p_out["cout_president_uusd"] = sum((d.get("conseil") or {}).get("cout_president_uusd") or 0 for d in ds)
                 p_out["president"] = next(((d["conseil"] or {}).get("president") for d in ds if d.get("conseil") and d["conseil"].get("president")), None)
@@ -978,9 +1068,11 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             "chart": {"x": xs, "kinds": ["veille"] * len(xs), "series": chart_series},
         }  # fmt: skip
 
-    # Les conseils ont leur ligue : le témoin panier leur sert de référence, sans quitter la ligue dérivés.
-    deriv = ligue([p for p in portfolios if p["kind"] != "conseil"])
+    # Les conseils ont leur ligue : le témoin panier leur sert de référence, sans quitter la ligue dérivés ; le
+    # témoin « moteur seul » est un témoin de cette ligue seulement.
+    deriv = ligue([p for p in portfolios if p["kind"] != "conseil" and p["id"] != MOTEUR])
     conseils = [p for p in portfolios if p["kind"] == "conseil"]
     panier = [p for p in portfolios if p["id"] == PANIER]
-    deriv["conseils"] = ligue(conseils + panier) if conseils else None
+    moteur = [p for p in portfolios if p["id"] == MOTEUR]
+    deriv["conseils"] = ligue(conseils + panier + moteur) if conseils else None
     return deriv

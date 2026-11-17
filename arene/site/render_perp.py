@@ -120,6 +120,12 @@ def _pastille_ronde(d: dict[str, Any]) -> str:
         "calendar",
     ):  # un autre déclencheur qui portait aussi une annonce ou une publication
         avec = f' <span class="pastille discret" title="{e(_news_titre(n))}">{"annonce de Kraken" if n["annonces"] else "publication macro"} jointe</span>'
+    if k == "barre":
+        return '<span class="pastille discret">clôture de barre 4 h</span> '
+    if k == "restauration":
+        return '<span class="pastille discret">fin d’un freinage</span> '
+    if k == "veto":
+        return f'<span class="pastille reveil">veto · {e(declencheur(d.get("declencheur")))}</span> '
     if k == "cadence":
         return f'<span class="pastille discret">appel régulier</span>{avec} '
     if k == "scheduled":
@@ -305,7 +311,7 @@ def _depuis(perp: dict[str, Any], p: dict[str, Any]) -> str:
 
 def _dossier(p: dict[str, Any]) -> str:
     """Le dossier de la page d'un portefeuille : les conseils ont le leur, le témoin panier reste aux dérivés."""
-    return "conseils" if p["kind"] == "conseil" else "derives"
+    return "conseils" if p["kind"] == "conseil" or p["id"] == P.MOTEUR else "derives"
 
 
 def _hors_regle_court(p: dict[str, Any]) -> str:
@@ -313,7 +319,7 @@ def _hors_regle_court(p: dict[str, Any]) -> str:
 
 
 def _codes(d: dict[str, Any]) -> dict[str, str]:
-    return P.CODES_CONSEIL if d.get("regles") == "conseil" else P.CODES
+    return {"conseil": P.CODES_CONSEIL, "tendance": P.CODES_TENDANCE}.get(str(d.get("regles")), P.CODES)
 
 
 def _funding_cell(p: dict[str, Any]) -> str:
@@ -569,6 +575,8 @@ def index_page(data: dict[str, Any]) -> str:
 def _desc_pf(p: dict[str, Any]) -> str:
     """Méta-description d'une page de portefeuille : qui, quoi, son rendement, en simulation."""
     qui = {"conseil": "Un conseil de dix IA Claude Haiku et un président", "llm": "Une IA Claude seule"}.get(p["kind"], "Une règle fixe sans IA, témoin")
+    if p["id"] == P.CONSEIL_TENDANCE:
+        qui = "Un moteur de tendance que trois IA Claude Haiku et un président Opus peuvent seulement freiner"
     return (
         f"{p['name']} : {qui[:1].lower() + qui[1:]}, {eur(p['capital_ueur'], decimals=0)} fictifs en contrats crypto sur les prix de Kraken. "
         f"Rendement net {pct(p['rendement'])}, chaque décision expliquée. Simulation."
@@ -620,6 +628,18 @@ def _arrivees(pfs: list[dict[str, Any]]) -> str:
     )
 
 
+def _etapes_tendance() -> str:
+    return f"""
+<section class="etapes" aria-labelledby="titre-etapes">
+  <h2 id="titre-etapes">Comment le Conseil Tendance décide</h2>
+  <ol class="etapes-liste">
+  <li><span class="etape-num">1</span><p><strong>Le moteur décide.</strong> À chaque clôture de barre de 4 heures (00:00, 04:00, 08:00…, UTC), il donne la cible de chaque contrat : long, short ou à plat, avec une taille réglée sur la volatilité.</p></li>
+  <li><span class="etape-num">2</span><p><strong>Les IA peuvent freiner.</strong> Trois Haiku (actualités, données, risque) conseillent, un Président Opus fixe un coefficient de 1, 0,5 ou 0 par contrat. Il ne peut ni augmenter, ni inverser, ni ouvrir : sans avis, le moteur joue seul.</p></li>
+  <li><span class="etape-num">3</span><p><strong>Le code exécute</strong> l’écart entre la cible et la position, seulement s’il dépasse 5{NBSP}% du portefeuille, avec un stop à 5{NBSP}%. Le garde-fou peut refuser ; l’ordre est alors réduit jusqu’à passer.</p></li>
+  </ol>
+</section>"""
+
+
 def conseils_page(data: dict[str, Any]) -> str:
     """Accueil de la ligue des conseils (page du post LinkedIn) : la phrase, le classement et la courbe, puis les
     dernières décisions en clair ; le tableau complet, les actualités et la méthode viennent après."""
@@ -631,7 +651,18 @@ def conseils_page(data: dict[str, Any]) -> str:
     capital = pfs[0]["capital_ueur"] if pfs else 1_000_000_000
     direct_pfs = [p for p in pfs if _direct_pf(p)]
     n = len(conseils)
-    if n >= 2:
+    tendance = any(p["id"] == P.CONSEIL_TENDANCE for p in conseils)
+    if tendance:
+        titre = f"Un conseil d’IA Claude freine un moteur de tendance : {eur(capital, decimals=0)} fictifs."
+        chapo = (
+            "Un moteur de suivi de tendance décide de chaque position toutes les 4 heures ; trois Claude Haiku et un Président Opus "
+            "ne peuvent que le freiner (un coefficient de 1, 0,5 ou 0 par contrat). Objectif fixé : l’ordre de 10 % par jour ; le rendement "
+            "réalisé s’affiche à côté, face à un témoin « moteur seul » sans IA."
+        ) + (
+            " Les anciens conseils Haiku et Opus, retirés le 17/11, restent archivés : leur courbe est en pointillé."
+            if any(p["id"] != P.CONSEIL_TENDANCE for p in conseils) else ""
+        )
+    elif n >= 2:
         titre = f"{_nombre(n)} conseils d’IA Claude tradent {eur(capital, decimals=0)} fictifs chacun. Seul leur président change."
         chapo = (
             "Dix conseillers Claude Haiku donnent leur avis sur des contrats crypto, plusieurs fois par heure ; "
@@ -646,7 +677,7 @@ def conseils_page(data: dict[str, Any]) -> str:
         classement=A.scores(A._perp_rows(perp), label="Classement de la ligue des conseils, rendement net"),
         apres=_releve(data, perp, direct_pfs),
         courbe=_chart_block(perp["chart"], ligue="conseils") + _arrivees(conseils) + _archives(conseils),
-    ) + f"""
+    ) + (_etapes_tendance() if tendance else "") + ("" if tendance else """
 <section class="etapes" aria-labelledby="titre-etapes">
   <h2 id="titre-etapes">Comment un conseil décide</h2>
   <ol class="etapes-liste">
@@ -654,7 +685,7 @@ def conseils_page(data: dict[str, Any]) -> str:
   <li><span class="etape-num">2</span><p><strong>L’avocat du diable</strong> lit ces avis et attaque le pari le plus soutenu.</p></li>
   <li><span class="etape-num">3</span><p><strong>Le président tranche</strong> et passe les ordres. Un garde-fou automatique peut les refuser.</p></li>
   </ol>
-</section>
+</section>""") + f"""
 {_dernieres(perp, "Ce qu’ils viennent de décider")}
 <section aria-labelledby="titre-comparatif">
   <h2 id="titre-comparatif">Le détail des portefeuilles <span class="h-note">frais et funding compris</span></h2>
@@ -671,8 +702,14 @@ def conseils_page(data: dict[str, Any]) -> str:
     return layout(
         title="Conseils d’IA", body=body, root="", active="conseils", data=data, ligue="conseils", chemin="conseils.html",
         image="apercu-conseils.png",
-        titre_complet="Deux conseils d’IA Claude tradent de l’argent fictif : Haiku ou Opus à la présidence ?",
-        desc="Dix Claude Haiku délibèrent, un président Haiku ou Opus tranche : deux conseils d’IA tradent 1 000 € fictifs chacun sur les prix réels de Kraken. Classement en direct, chaque décision expliquée.",
+        titre_complet=(
+            "Un conseil d’IA Claude freine un moteur de tendance, sur de l’argent fictif"
+            if tendance else "Deux conseils d’IA Claude tradent de l’argent fictif : Haiku ou Opus à la présidence ?"
+        ),
+        desc=(
+            "Un moteur de tendance décide, trois Claude Haiku et un président Opus ne peuvent que le freiner : 1 000 € fictifs sur les prix réels de Kraken, face à un témoin moteur seul. Classement en direct, chaque décision expliquée."
+            if tendance else "Dix Claude Haiku délibèrent, un président Haiku ou Opus tranche : deux conseils d’IA tradent 1 000 € fictifs chacun sur les prix réels de Kraken. Classement en direct, chaque décision expliquée."
+        ),
         scripts=(_chart_scripts("", ch, None, dernier="Dernier relevé") if courbe_visible(ch) else "") + _direct_scripts("", perp, direct_pfs),
         direct=bool(direct_pfs),
     )  # fmt: skip
@@ -826,7 +863,15 @@ def _membre(a: dict[str, Any]) -> str:
     cible = ""
     if a.get("cible"):
         cible = f'<p class="cible"><span class="etiquette">Attaque</span>le {e(a["cible"]["sens"])} {e(a["cible"]["instrument"])}</p>'
-    avis = "".join(f"<li>{_avis_ligne(x)}</li>" for x in a["avis"]) or '<li class="muted">aucune position conseillée</li>'
+    if "propositions" in a:  # un conseiller du Conseil Tendance : des freinages, pas des avis de marché
+        avis = "".join(
+            f"<li><strong>{e(x['instrument'])}</strong> ×{e((x['coefficient'] or '?').replace('.', ','))}"
+            + (f" · {e(x['raison'])}" if x.get("raison") else "")
+            + "</li>"
+            for x in a["propositions"]
+        ) or '<li class="muted">aucun freinage proposé</li>'
+    else:
+        avis = "".join(f"<li>{_avis_ligne(x)}</li>" for x in a["avis"]) or '<li class="muted">aucune position conseillée</li>'
     arg = f'<p class="argument">{e(a["argument"])}</p>' if a.get("argument") else ""
     outils = f'<p class="outils"><span class="etiquette">A consulté</span>{_outils_txt(a["outils"])}</p>' if a.get("outils") else ""
     return f'<li class="membre">{tete}{cible}<ul class="avis-positions">{avis}</ul>{arg}{outils}</li>'
@@ -918,6 +963,48 @@ def _maj_txt(s: str) -> str:
     return s[:1].upper() + s[1:]
 
 
+def _signe_pct(v: float) -> str:
+    return f"{'+' if v > 0 else (MINUS if v < 0 else '')}{abs(round(v)):.0f}{NBSP}%"
+
+
+def _moteur_ligne(d: dict[str, Any]) -> str:
+    """La ligne d'une ronde du Conseil Tendance : les cibles du moteur, les coefficients du conseil avec leur raison,
+    les ordres passés. Rien pour les autres portefeuilles."""
+    t = d.get("tendance")
+    if not t:
+        return ""
+    cibles = ", ".join(f"{e(i)} {_signe_pct(v)}" for i, v in t["cibles_pct"].items()) or "aucune cible"
+    inc = f" · données incomplètes, position gardée : {e(', '.join(t['donnees_incompletes']))}" if t.get("donnees_incompletes") else ""
+    lignes = [f'<p class="dec-moteur"><span class="etiquette">Cibles du moteur</span>{cibles}{inc}</p>']
+    if t["coefficients"]:
+        coefs = " ; ".join(
+            f"{e(i)} ×{e(c['coefficient'].replace('.', ','))}" + (f" ({e(c['raison'])})" if c.get("raison") else "")
+            for i, c in t["coefficients"].items()
+        )
+    elif t.get("conseil_absent"):
+        coefs = f"le moteur seul ({e(t['conseil_absent'])})"
+    elif t["conseil_appele"] and not t["president_ok"]:
+        coefs = "le moteur seul (le Président n’a pas rendu de décision)"
+    else:
+        coefs = "aucun frein : on suit le moteur"
+    lignes.append(f'<p class="dec-moteur"><span class="etiquette">Coefficients du conseil</span>{coefs}</p>')
+    ordres = []
+    for a in d.get("actions") or []:
+        if a.get("ecartee") or not a.get("action"):
+            continue
+        txt = f"{P.ACTIONS.get(a['action'], a['action']).lower()} {e(a['instrument'])}"
+        if a.get("taille_pct") is not None:
+            txt += f" {pc(a['taille_pct'])}"
+        v = a.get("verdict")
+        if v is not None and not v.get("approuve"):
+            txt += " (refusé)"
+        elif a.get("reduite"):
+            txt += f" (réduit {a['reduite']} fois pour passer le garde-fou)"
+        ordres.append(txt)
+    lignes.append(f'<p class="dec-moteur"><span class="etiquette">Ordres</span>{"; ".join(ordres) if ordres else "aucun : tous les écarts sont dans la bande de 5 %"}</p>')
+    return "".join(lignes)
+
+
 def _decision(d: dict[str, Any], *, qui: str = "") -> str:
     """Une décision en carte : ce qui a été décidé et pourquoi, en une ligne chacun ; le détail technique replié."""
     ronde = _pastille_ronde(d)
@@ -925,7 +1012,7 @@ def _decision(d: dict[str, Any], *, qui: str = "") -> str:
     q = L.quoi(d)
     calme = d["statut"] == "decidee" and not d["actions"] and d["kind"] != "ordre"
     classe = "decision carte-dec" + (" calme" if calme else "") + (" ratee" if d["statut"] in ("sautee", "echec") else "")
-    corps = f'<p class="dec-quoi">{e(q)}</p>'
+    corps = f'<p class="dec-quoi">{e(q)}</p>' + _moteur_ligne(d)
     pq = L.pourquoi(d)
     if pq:
         corps += f'<p class="dec-pourquoi"><span class="dec-mot">{e(pq[0])}</span> {e(pq[1])}</p>'
@@ -1036,8 +1123,21 @@ def _operations(p: dict[str, Any]) -> str:
     )
 
 
+def _objectif_jour(p: dict[str, Any]) -> str:
+    """« objectif : 10 %/jour · réalisé : 0,4 %/jour » : côte à côte et sans fard (Conseil Tendance et son témoin)."""
+    o = p.get("objectif_jour")
+    if not o:
+        return ""
+    realise = f"{o['realise_pct']:+.2f}".replace(".", ",").replace("-", MINUS)
+    return (
+        f'<p class="objectif-jour">objectif : {o["objectif_pct"]}{NBSP}%/jour · réalisé : {realise}{NBSP}%/jour '
+        f'<span class="muted">(taux journalier composé depuis l’ouverture, {str(o["jours"]).replace(".", ",")} jours)</span></p>'
+    )
+
+
 def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     conseil = p["kind"] == "conseil"
+    ligue_c = conseil or p["id"] == P.MOTEUR  # le témoin « moteur seul » vit dans la ligue des conseils
     _RESUME_SEUL.clear()
     avec_avis = [d for d in p.get("decisions") or [] if (d.get("conseil") or {}).get("avis")]
     _RESUME_SEUL.update(id(d) for d in avec_avis[AVIS_DETAILLES:])
@@ -1089,7 +1189,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         jusqu = f" jusqu’au {quand(st['jusqu'])}" if st.get("jusqu") else ""
         cause = " après une liquidation" if st.get("raison") == "margin_closeout" else ""
         alertes = f'<p class="alerte warn">Portefeuille gelé{cause}{jusqu} : aucune nouvelle ouverture.</p>'
-    perp = data["perp"]["conseils"] if conseil else data["perp"]  # la ligue du portefeuille
+    perp = data["perp"]["conseils"] if ligue_c else data["perp"]  # la ligue du portefeuille
     chart = _ref_chart(perp, p["id"])
     direct_pfs = [p] if _direct_pf(p) else []
     # Le panier, seule autre courbe de la page, suit lui aussi le prix du moment (il n'a pas de chiffre ici).
@@ -1109,7 +1209,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     else:
         decisions = ""
         operations = f'<section aria-labelledby="titre-operations"><h2 id="titre-operations">Opérations</h2>{_operations(p)}</section>'
-    if conseil:
+    if ligue_c:
         fil = '<a href="../conseils.html"><span aria-hidden="true">← </span>Ligue des conseils</a>'
     else:
         fil = f'<a href="../derives.html"><span aria-hidden="true">← </span>Ligue dérivés</a><span class="fil-sep" aria-hidden="true">/</span><span>{"Modèles d’IA" if llm else "Témoins"}</span>'
@@ -1120,6 +1220,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
   {f'<p class="sous-titre">{e(p["sous_titre"])}</p>' if p.get("sous_titre") else ""}
   {f'<p class="marque-conseil">{e(p["marque"])}</p>' if p.get("marque") else ""}
   {f'<p class="chapo">{e(p["description"])}</p>' if p.get("description") else ""}
+  {_objectif_jour(p)}
   {f'<p class="hors-regle">{e(p["hors_regle"])} <a href="../conseils.html#m-conseils">Ses règles</a></p>' if p.get("hors_regle") else ""}
 </header>
 {alertes}
@@ -1131,9 +1232,9 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 {operations}
 """
     return layout(
-        title=f"{p['name']} · {'conseils' if conseil else 'dérivés'}", body=body, root="../", active=p["id"], data=data,
-        ligue="conseils" if conseil else "perp", chemin=f"{_dossier(p)}/{p['slug']}.html",
-        image="apercu-conseils.png" if conseil else "apercu.png",
+        title=f"{p['name']} · {'conseils' if ligue_c else 'dérivés'}", body=body, root="../", active=p["id"], data=data,
+        ligue="conseils" if ligue_c else "perp", chemin=f"{_dossier(p)}/{p['slug']}.html",
+        image="apercu-conseils.png" if ligue_c else "apercu.png",
         desc=_desc_pf(p),
         scripts=(_chart_scripts("../", chart, p["id"], dernier="Dernier relevé") if courbe_visible(chart) else "") + _direct_scripts("../", perp, direct_pfs),
         direct=bool(direct_pfs),
@@ -1195,6 +1296,30 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 """
 
 
+def _methode_tendance(budget: str) -> str:
+    """Les règles du Conseil Tendance (docs/SPEC-CONSEIL-V4.md et docs/CONSEIL-V4-RECHERCHE.md)."""
+    return f"""<section aria-labelledby="m-conseils"><h2 id="m-conseils">Le Conseil Tendance : méthode</h2>
+<p>Le propriétaire a demandé, le 17/11/2026, un conseil qui génère du revenu net « de l’ordre de 10{NBSP}% par jour ». Dix pour cent par jour, composés, font ×17 en un mois : aucune stratégie connue ne tient ce rythme. La page affiche donc l’objectif et le rendement par jour réalisé, côte à côte.</p>
+<p>Les anciens conseils (Haiku et Opus) perdaient : avis sans avantage, tailles énormes, une nouvelle décision toutes les 10 minutes. Le Conseil Tendance inverse les rôles : <strong>un moteur décide, les IA ne peuvent que freiner, le code exécute.</strong> {e(P.HORS_REGLE_CONSEIL)}</p>
+<ul class="liste-simple">
+<li><strong>Le moteur</strong> : un suivi de tendance lent (moyennes mobiles de 2 et 6 jours sur des barres de 4 heures, long et short, taille réglée sur la volatilité, échelle 2x), choisi sur 146 essais de quatre familles de stratégies et gelé avant la lecture du contrôle. Sur 31 jours de contrôle en baisse franche il a fait +21{NBSP}% (reculs jusqu’à −25{NBSP}%) ; en marché sans tendance il tourne autour de zéro. Une seule stratégie, un seul épisode de chaque type : l’avantage est plausible, il n’est pas prouvé.</li>
+<li><strong>Les IA</strong> : trois Haiku (actualités, données, risque) conseillent, un Président Opus fixe pour chaque contrat un coefficient de 1, 0,5 ou 0 qui multiplie la cible du moteur. Ils ne peuvent ni augmenter, ni inverser, ni ouvrir une position que le moteur n’a pas. Le Président échoue ou dépasse son délai : le moteur joue seul.</li>
+<li><strong>Le rythme</strong> : une ronde à chaque clôture de barre de 4 heures (00:00, 04:00… UTC), plus une ronde de veto sur une annonce de Kraken, une publication macro ou un mouvement de 2{NBSP}% en une heure, qui ne peut que baisser les coefficients. Ni appel toutes les 10 minutes, ni rappel demandé par une IA.</li>
+<li><strong>L’exécution</strong> : un ordre seulement si l’écart entre la cible et la position dépasse 5{NBSP}% du portefeuille ; un stop à 5{NBSP}% sur chaque position. Si le garde-fou refuse un ordre pour sa taille, le code le retente plus petit.</li>
+<li><strong>Le témoin « moteur seul »</strong> joue la même cible, sans IA, par le même chemin et sur les mêmes rondes : l’écart avec le Conseil Tendance mesure ce que les IA ajoutent ou retirent.</li>
+</ul>
+<dl class="regles">
+<div><dt>Levier</dt><dd>10 au plus, avec les marges de Kraken ; l’échelle du moteur donne environ 1,4 en moyenne, avec des pointes vers 4 à 6. Un ordre jusqu’à 400{NBSP}% de la valeur du portefeuille.</dd></div>
+<div><dt>Stop</dt><dd>5{NBSP}% sur chaque position ; perte au stop de 25{NBSP}% du portefeuille au plus par position, 59{NBSP}% pour tous les stops réunis.</dd></div>
+<div><dt>Coût</dt><dd>Le coût d’un aller-retour ne dépasse pas un tiers du mouvement attendu. Celui du moteur est mesuré hors ligne (+2,47{NBSP}% brut par trade sur les 64 jours d’entraînement), pas déclaré.</dd></div>
+<div><dt>Rythme</dt><dd>48 ouvertures ou ajustements par 24{NBSP}h au plus, sans délai entre deux ; ni gel quotidien, ni budget de frais (les frais restent réels et comptés).</dd></div>
+<div><dt>Arrêt</dt><dd>À −60{NBSP}% depuis son plus haut : positions fermées, plus aucune ronde. Seul l’opérateur de l’arène peut le relancer, à la main.</dd></div>
+{budget}</dl>
+<p class="muted">Recherche : <code>docs/CONSEIL-V4-RECHERCHE.md</code> ; conception : <code>docs/SPEC-CONSEIL-V4.md</code>. Marchés, veille et journal sont ceux de la <a href="derives.html">ligue des IA seules</a>.</p>
+</section>
+"""
+
+
 def methode_conseils(data: dict[str, Any]) -> str:
     """Les règles de la ligue des conseils (section de sa page d'accueil)."""
     perp = data["perp"]["conseils"]
@@ -1210,6 +1335,8 @@ def methode_conseils(data: dict[str, Any]) -> str:
         f"<div><dt>Budget du jour</dt><dd>{budgets}, en équivalent catalogue. Une ronde qui ne tient plus dans le budget est sautée.</dd></div>\n"
         if budgets else ""
     )
+    if any(c["id"] == P.CONSEIL_TENDANCE for c in conseils):
+        return _methode_tendance(budget)
     return f"""<section aria-labelledby="m-conseils"><h2 id="m-conseils">Les conseils : méthode</h2>
 <p>Un conseil est un portefeuille décidé par dix Claude Haiku 5.5 qui délibèrent à chaque ronde, puis par un Président, avec un mandat agressif : doubler la mise en quelques jours. Les conseils jouent les mêmes rondes que les IA des dérivés (rendez-vous, appel régulier, réveils, alertes, rappels) ; une ronde compte pour un appel dans le plafond du jour, et son coût est la somme des appels de la ronde.</p>
 <p>Les conseils ne diffèrent que par leur Président : Haiku pour le Conseil Haiku, Opus pour le Conseil Opus. <strong>{e(P.HORS_REGLE_CONSEIL)}</strong> Ils ne sont donc jamais classés avec les IA des dérivés, qui jouent toutes avec les mêmes règles.</p>

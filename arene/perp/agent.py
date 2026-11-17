@@ -354,11 +354,18 @@ def _parse_orders(
 
 
 def parse_decision(
-    data: Any, portfolio: str, round_id: int, now_ts: int, *, max_size_pct: int | None = None
+    data: Any,
+    portfolio: str,
+    round_id: int,
+    now_ts: int,
+    *,
+    max_size_pct: int | None = None,
+    max_actions: int = 2,
 ) -> tuple[dict[str, Any] | None, str | None, list[PerpIntent]]:
     """(journalable parsed decision | None, error | None, intents). Never raises.
 
     `max_size_pct`: the upper bound of `size_pct` when it is not 100 (the council); riskd judges the rest.
+    `max_actions`: the longest list of actions (2; the council v4 rebalances up to six contracts at once).
 
     Each action is validated on its own: an invalid action is dropped and its error kept in the parsed
     decision (`action_errors`), so one bad entry never discards a close in the same decision. The same holds
@@ -379,8 +386,8 @@ def parse_decision(
                 "an object {actions, justification, alerts?, entry_orders?, next_wakeup_min?} is expected"
             )
         raw_actions = data.get("actions")
-        if not isinstance(raw_actions, list) or len(raw_actions) > 2:
-            raise ValueError("actions: a list of 0 to 2 elements is expected")
+        if not isinstance(raw_actions, list) or len(raw_actions) > max_actions:
+            raise ValueError(f"actions: a list of 0 to {max_actions} elements is expected")
         raw_orders = {}
         for key in ("alerts", "entry_orders"):
             raw_orders[key] = data.get(key) if data.get(key) is not None else []

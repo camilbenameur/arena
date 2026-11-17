@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -43,7 +43,18 @@ from arene.perp.ledger import (
 from arene.perp.mcp_server import eur, pct_e12_hour, qty, usd
 from arene.perp.news import NewsConfig
 from arene.perp.policy import AGGRESSIVE, PerpPolicy
-from arene.perp.riskd import PerpMarketView, evaluate_perp
+from arene.perp.riskd import (
+    INITIAL_MARGIN,
+    LIQUIDATION_BEFORE_STOP,
+    MAX_LEVERAGE,
+    MAX_OPEN_RISK,
+    MAX_ORDER_SIZE,
+    MAX_POSITION,
+    MAX_TRADE_LOSS,
+    PerpIntent,
+    PerpMarketView,
+    evaluate_perp,
+)
 from arene.perp.round_data import build_round
 from arene.perp.sim import PerpSimulator
 from arene.perp.store import PerpDataStore
@@ -452,8 +463,10 @@ def finish_agent_round(
     parsed, perr, intents = (None, res.error, [])
     if res.decision is not None:
         parsed, perr, intents = parse_decision(
-            res.decision, name, round_id, now_ts, max_size_pct=getattr(ctx.decider, "max_size_pct", None)
-        )
+            res.decision, name, round_id, now_ts,
+            max_size_pct=getattr(ctx.decider, "max_size_pct", None),
+            max_actions=getattr(ctx.decider, "max_actions", 2),
+        )  # fmt: skip
     sim.append_event(
         "agent_decision",
         {
@@ -486,45 +499,10 @@ def finish_agent_round(
         },
         now_ts,
     )
-    quotes = {s: (m.bid_uusd, m.ask_uusd) for s, m in view.instruments.items()}
-    marks = {s: m.mark_uusd for s, m in view.instruments.items()}
-    fx = (view.fx_bid, view.fx_ask)
-    for it in intents:
-        if not execute:  # no fresh market view after the call: journaled, never executed at stale prices
-            sim.append_event(
-                "perp_execution",
-                {
-                    "intent_id": it.intent_id,
-                    "portfolio": name,
-                    "instrument": it.instrument,
-                    "status": "not_executed_view_stale",
-                    "error": None,
-                },
-                now_ts,
-            )
-            continue
-        acc = sim.states()[name]
-        c = counters_for(sim.journal.events(), name, now_ts)
-        v = evaluate_perp(
-            it, acc, view, ctx.specs, c, ctx.policy, sim.params, now_ts, _blocked(ctx.entries_blocked)
-        )
-        sim.append_event(
-            "perp_verdict",
-            {
-                "intent_id": it.intent_id,
-                "portfolio": name,
-                "instrument": it.instrument,
-                "action": it.action,
-                "approved": v.approved,
-                "reasons": list(v.reasons),
-                "qty": v.qty,
-                "policy_sha256": v.policy_sha256,
-                "error": v.error,
-            },
-            now_ts,
-        )
-        if v.approved:
-            _execute(sim, name, it.intent_id, it.instrument, it.action, v, quotes, marks, fx, now_ts)
+    run_intents(
+        sim, name, intents, view, ctx.specs, ctx.policy, now_ts, ctx.entries_blocked,
+        execute=execute, shrink=bool(getattr(ctx.decider, "shrink_on_refusal", False)),
+    )  # fmt: skip
     # only a valid decision applied on a fresh market replaces the pending set (without a fresh view, its levels
     # could not be checked on the market of the moment: the set in place stays, like after no decision)
     if parsed is not None and perr is None and execute:
@@ -544,6 +522,105 @@ def finish_agent_round(
                     },
                     now_ts,
                 )
+
+
+# Refusals a smaller order may cure (the council v4 retries them smaller): size, loss at the stop, leverage, margin.
+SHRINKABLE = frozenset(
+    {
+        MAX_TRADE_LOSS, MAX_OPEN_RISK, LIQUIDATION_BEFORE_STOP, MAX_LEVERAGE, INITIAL_MARGIN, MAX_POSITION,
+        MAX_ORDER_SIZE,
+    }
+)  # fmt: skip
+SHRINK_TRIES = 8  # each try keeps 3/4 of the size: 8 tries go down to a tenth
+SHRINK_NUM, SHRINK_DEN = 3, 4
+
+
+def run_intents(
+    sim: PerpSimulator,
+    name: str,
+    intents: Sequence[PerpIntent],
+    view: PerpMarketView,
+    specs: Mapping[str, InstrumentSpec],
+    policy: PerpPolicy,
+    now_ts: int,
+    entries_blocked: bool | Callable[[], bool],
+    *,
+    execute: bool = True,
+    shrink: bool = False,
+) -> None:
+    """Judges each intent by riskd (`perp_verdict`) on the state at that moment, then executes the approved ones
+    (`perp_execution`). One path for the agents and for the shadow benchmark of the council v4.
+
+    `shrink`: an entry refused only for its size (`SHRINKABLE`) is retried with 3/4 of the size, at most
+    `SHRINK_TRIES` times, instead of being dropped; each try has its own verdict (`retry_of`, `shrink_step`)."""
+    quotes = {s: (m.bid_uusd, m.ask_uusd) for s, m in view.instruments.items()}
+    marks = {s: m.mark_uusd for s, m in view.instruments.items()}
+    fx = (view.fx_bid, view.fx_ask)
+    for it in intents:
+        if not execute:  # no fresh market view after the call: journaled, never executed at stale prices
+            sim.append_event(
+                "perp_execution",
+                {
+                    "intent_id": it.intent_id,
+                    "portfolio": name,
+                    "instrument": it.instrument,
+                    "status": "not_executed_view_stale",
+                    "error": None,
+                },
+                now_ts,
+            )
+            continue
+        attempt, step = it, 0
+        while True:
+            acc = sim.states()[name]
+            c = counters_for(sim.journal.events(), name, now_ts)
+            v = evaluate_perp(
+                attempt, acc, view, specs, c, policy, sim.params, now_ts, _blocked(entries_blocked)
+            )
+            sim.append_event(
+                "perp_verdict",
+                {
+                    "intent_id": attempt.intent_id,
+                    "portfolio": name,
+                    "instrument": attempt.instrument,
+                    "action": attempt.action,
+                    "approved": v.approved,
+                    "reasons": list(v.reasons),
+                    "qty": v.qty,
+                    "policy_sha256": v.policy_sha256,
+                    "error": v.error,
+                    **({"retry_of": it.intent_id, "shrink_step": step, "size_bp": attempt.size_bp} if step else {}),
+                },
+                now_ts,
+            )  # fmt: skip
+            if v.approved:
+                _execute(
+                    sim,
+                    name,
+                    attempt.intent_id,
+                    attempt.instrument,
+                    attempt.action,
+                    v,
+                    quotes,
+                    marks,
+                    fx,
+                    now_ts,
+                )
+                break
+            if (
+                not shrink
+                or not attempt.action.startswith("open")
+                or not v.reasons
+                or not set(v.reasons) <= SHRINKABLE
+                or step >= SHRINK_TRIES
+                or not attempt.size_bp
+            ):
+                break
+            step += 1
+            smaller = attempt.size_bp * SHRINK_NUM // SHRINK_DEN
+            if smaller <= 0:
+                break
+            attempt = replace(attempt, intent_id=f"{it.intent_id}:s{step}", size_bp=smaller)
 
 
 def _set_wakeup(ctx: RoundContext, parsed: Mapping[str, Any]) -> None:

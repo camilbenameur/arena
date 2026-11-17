@@ -309,6 +309,27 @@ def council_record(events: Sequence[Mapping[str, Any]], portfolio: str, now_ts: 
 # ---------------------------------------------------------------------- configuration
 
 
+TREND_KIND = (
+    "trend-v4"  # the council v4 (docs/SPEC-CONSEIL-V4.md): the engine decides, the LLMs may only brake
+)
+TREND_MEMBERS = 3  # Haiku members of the veto council
+TREND_BENCHMARK = "benchmark-perp:moteur-tendance"
+
+
+@dataclass(frozen=True)
+class TrendSettings:
+    """What the council v4 adds to a council's configuration (`kind = "trend-v4"`)."""
+
+    benchmark: str  # its shadow: the same engine target, no LLM
+    rebalance_band_bp: (
+        int  # an order only when the target is farther than this from the position (bp of equity)
+    )
+    stop_pct: str  # the protective stop the code puts on every position (percent, decimal text)
+    expected_move_bp: int  # the engine's measured mean gross move per trade (riskd's edge rule), TRAIN period
+    expected_move_source: str  # where that number comes from
+    horizon_h: int  # the holding time declared with it (riskd's funding cost), at most 168
+
+
 @dataclass(frozen=True)
 class CouncilConfig:
     enabled: bool
@@ -323,6 +344,8 @@ class CouncilConfig:
     member_max_tool_calls: int
     policy: PerpPolicy
     sha256: str
+    kind: str = "council-v3"  # "trend-v4": the council v4, see `TrendSettings`
+    trend: TrendSettings | None = None
 
 
 def _usd_to_uusd(v: Any, key: str) -> int:
@@ -345,6 +368,14 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
         "enabled", "portfolio", "name", "model", "president_model", "daily_budget_usd", "members_parallel",
         "member_timeout_s", "president_timeout_s", "member_max_tool_calls", "policy",
     }  # fmt: skip
+    trend_keys = {
+        "kind", "benchmark", "rebalance_band_bp", "stop_pct", "expected_move_bp", "expected_move_source", "horizon_h",
+    }  # fmt: skip
+    kind = data.get("kind", "council-v3")
+    if kind not in ("council-v3", TREND_KIND):
+        raise CouncilConfigError(f"kind: council-v3 (absent) or {TREND_KIND}")
+    if kind == TREND_KIND:
+        expected |= trend_keys
     if set(data) != expected:
         raise CouncilConfigError(f"keys: expected {sorted(expected)}, got {sorted(data)}")
     if type(data["enabled"]) is not bool:
@@ -355,6 +386,8 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
         raise CouncilConfigError(f"model: the advisers of a council are Haiku ({MEMBERS_MODEL})")
     if data["president_model"] not in PRESIDENT_MODELS:
         raise CouncilConfigError(f"president_model: one of {sorted(PRESIDENT_MODELS)}")
+    if kind == TREND_KIND and data["president_model"] != "claude-opus-5-5":
+        raise CouncilConfigError("president_model: the President of the council v4 is Opus (claude-opus-5-5)")
     if not isinstance(data["name"], str) or not 1 <= len(data["name"]) <= 40:
         raise CouncilConfigError("name: a display name of 1 to 40 characters")
     if type(data["members_parallel"]) is not int or not 1 <= data["members_parallel"] <= 8:
@@ -384,7 +417,35 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
         data["member_max_tool_calls"],
         policy,
         hashlib.sha256(raw).hexdigest(),
+        kind=kind,
+        trend=_trend_settings(data) if kind == TREND_KIND else None,
     )
+
+
+def _trend_settings(data: Mapping[str, Any]) -> TrendSettings:
+    """The keys of a `kind = "trend-v4"` council, checked (fail closed: any doubt refuses the file)."""
+    if data["benchmark"] != TREND_BENCHMARK:
+        raise CouncilConfigError(f"benchmark: {TREND_BENCHMARK}")
+    band = data["rebalance_band_bp"]
+    if type(band) is not int or not 100 <= band <= 2000:
+        raise CouncilConfigError("rebalance_band_bp: an integer from 100 to 2000")
+    try:
+        stop = Decimal(str(data["stop_pct"]))
+    except InvalidOperation as exc:
+        raise CouncilConfigError("stop_pct: a decimal text") from exc
+    if not isinstance(data["stop_pct"], str) or not stop.is_finite() or not 1 <= stop <= 15:
+        raise CouncilConfigError("stop_pct: a decimal text from 1 to 15")
+    move = data["expected_move_bp"]
+    if type(move) is not int or not 1 <= move <= 3000:
+        raise CouncilConfigError("expected_move_bp: an integer from 1 to 3000")
+    if not isinstance(data["expected_move_source"], str) or len(data["expected_move_source"]) < 20:
+        raise CouncilConfigError(
+            "expected_move_source: where the number was measured (20 characters at least)"
+        )
+    hours = data["horizon_h"]
+    if type(hours) is not int or not 1 <= hours <= 168:
+        raise CouncilConfigError("horizon_h: an integer from 1 to 168")
+    return TrendSettings(data["benchmark"], band, data["stop_pct"], move, data["expected_move_source"], hours)
 
 
 @dataclass(frozen=True)
@@ -759,6 +820,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if acc is not None and acc.retired:
         print(f"{portfolio}: retired, it never plays again", file=sys.stderr)
+        return 2
+    if portfolio not in names:
+        print(
+            f"{portfolio}: not a council of config/ligue-conseils.toml ({', '.join(names)})", file=sys.stderr
+        )
         return 2
     if acc is None or not (acc.halted or acc.frozen_until_ts):
         print(f"{portfolio}: not halted nor frozen, nothing to do")

@@ -101,7 +101,7 @@ def build(
             if conseils:  # la ligue des conseils : même journal, sa propre page et une page par conseil
                 _write(tmp / "conseils.html", render_perp.conseils_page(data))
                 for p in conseils["portfolios"]:
-                    if p["kind"] == "conseil":
+                    if p["kind"] == "conseil" or p["id"] == "benchmark-perp:moteur-tendance":  # et son témoin « moteur seul »
                         _write(tmp / "conseils" / f"{p['slug']}.html", render_perp.portfolio_page(data, p))
                 _json(tmp / "data" / "conseils.json", {**meta, **conseils})
             _json(tmp / "data" / "derives.json", {**meta, **{k: v for k, v in perp.items() if k != "conseils"}})  # déjà filtré par site.perp
