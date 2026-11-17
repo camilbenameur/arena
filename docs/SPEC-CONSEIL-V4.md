@@ -1,6 +1,6 @@
 # Conseil v4 « Conseil Tendance » : spécification
 
-Demande du propriétaire (17/11/2026) : « refonte avec tout permis du conseil [...] Avoir un conseil qui génére du revenu net, l'ordre de 10% par jour ».
+La demande du 17/11/2026 : « refonte avec tout permis du conseil [...] Avoir un conseil qui génére du revenu net, l'ordre de 10% par jour ».
 
 Recherche et choix du moteur : `docs/CONSEIL-V4-RECHERCHE.md`.
 
@@ -74,7 +74,7 @@ Si le Président échoue ou dépasse son délai, les coefficients valent 1 : on 
   - la cible du moteur par contrat ;
   - les coefficients du conseil et leur raison ;
   - les ordres passés.
-- Il affiche, côte à côte et sans fard, l'objectif fixé (10 %/j) et le rendement par jour réalisé.
+- Il affiche, côte à côte et sans fard, l'objectif (1 %/j depuis le 17/11, d'abord 10 %/j) et le rendement par jour réalisé.
 
 ## 8. Le coût
 
