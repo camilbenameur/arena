@@ -294,6 +294,8 @@ class PerpSimulator:
         fx: tuple[int, int],
         ts: int,
     ) -> None:
+        if acc.retired:
+            raise PerpLedgerError(f"{acc.portfolio} is retired: no entry")
         if acc.halted:
             raise PerpLedgerError(f"{acc.portfolio} is halted: no entry")
         if ts < acc.frozen_until_ts:
@@ -588,10 +590,10 @@ class PerpSimulator:
     def flatten(
         self, portfolio: str, ts: int, quotes: Mapping[str, tuple[int, int]], fx: tuple[int, int], reason: str
     ) -> list[dict]:
-        """Closes every position of `portfolio` at market (reason `halt` or `kill_switch`). A position without
+        """Closes every position of `portfolio` at market (reason `halt`, `kill_switch` or `retired`). A position without
         a quote raises: a silent no-op would leave a halted portfolio exposed."""
-        if reason not in ("halt", "kill_switch"):
-            raise PerpLedgerError(f"flatten reason must be halt or kill_switch, got {reason!r}")
+        if reason not in ("halt", "kill_switch", "retired"):
+            raise PerpLedgerError(f"flatten reason must be halt, kill_switch or retired, got {reason!r}")
         out = []
         with self._locked():
             acc = self._book.account(portfolio)

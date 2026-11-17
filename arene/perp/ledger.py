@@ -34,6 +34,7 @@ FILL_REASONS = (
     "halt",
     "kill_switch",
     "no_stop",  # a deciding portfolio's position found without a stop is closed at once
+    "retired",  # a council taken out of the league (`python -m arene.perp.council retire`): flat, then archived
 )
 
 
@@ -139,11 +140,16 @@ class MarginAccount:
     absorbed_deficit_ueur: int = 0
     frozen_until_ts: int = 0
     halted: bool = False
+    retired_ts: int | None = None  # `portfolio_retired`: flat for good, never opens or plays again
     margin_closeouts: int = 0
     missing_funding: int = 0
     last_fill_ts: int = 0
     qty_history: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     funding_cursor: dict[str, int] = field(default_factory=dict)  # last settled stamp per instrument
+
+    @property
+    def retired(self) -> bool:
+        return self.retired_ts is not None
 
     def invariant_ok(self) -> bool:
         expected = (
@@ -373,6 +379,12 @@ class PerpBook:
         elif t == "portfolio_resumed":
             acc = self.account(p["portfolio"])
             acc.halted, acc.frozen_until_ts = False, 0
+        elif t == "portfolio_retired":
+            acc = self.account(p["portfolio"])
+            if acc.positions:
+                raise PerpLedgerError(f"{acc.portfolio}: cannot be retired with open positions")
+            if acc.retired_ts is None:  # a second event keeps the first retirement date
+                acc.retired_ts = _int(ts, "ts")
 
 
 def replay(events: Iterable[Mapping[str, Any]]) -> dict[str, MarginAccount]:

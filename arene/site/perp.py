@@ -101,6 +101,7 @@ RAISONS_FILL = {
     "halt": "arrêt sur drawdown",
     "kill_switch": "coupe-circuit",
     "no_stop": "position sans stop fermée",
+    "retired": "conseil archivé, positions fermées",
 }
 
 EXECUTIONS = {
@@ -115,7 +116,7 @@ EXECUTIONS = {
     "not_executed_refused_on_resume": "non exécuté : refusé à la reprise",
 }
 
-FINS = {"expired": "expiré", "replaced": "remplacé", "portfolio_halted": "annulé (portefeuille arrêté)"}
+FINS = {"expired": "expiré", "replaced": "remplacé", "portfolio_halted": "annulé (portefeuille arrêté)", "portfolio_retired": "annulé (conseil archivé)"}
 HISTORIQUE_MAX = 12
 
 SAUTS = {
@@ -835,9 +836,12 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
     funding: dict[str, list[int]] = {}
     fills: dict[str, list[dict[str, Any]]] = {}
     statut: dict[str, dict[str, Any]] = {}
+    retires: dict[str, dict[str, Any]] = {}  # portefeuilles archivés (portfolio_retired) : leurs données sont figées
     for e in events:
         t, p = e["type"], e["payload"]
         pf = p.get("portfolio")
+        if t == "portfolio_retired" and pf not in retires:
+            retires[pf] = {"ts": e["ts"], "raison": _texte(p.get("reason"), 80), "note": _texte(p.get("note"), 300)}
         if t == "funding":
             funding.setdefault(pf, []).append(int(p.get("amount_ueur") or 0))
         elif t == "perp_fill":
@@ -891,6 +895,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             "funding_net_ueur": sum(f), "n_operations": len(fills.get(pf, [])), "statut": st,
             "operations": list(reversed(fills.get(pf, [])))[:OPERATIONS_MAX], "decisions": [],
             "cout_uusd": None, "n_rondes": 0, "n_ordres": 0, "fx": list(fx) if fx else None,
+            "archive": retires.get(pf),
         }  # fmt: skip
         if kind in ("llm", "conseil"):
             ds = _decisions_llm(events, pf)  # toutes : les totaux portent sur le journal entier
@@ -917,7 +922,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             except (KeyError, TypeError, ValueError):  # un événement mal formé ne casse pas la page
                 p_out["attente"] = None
             p_out["n_ordres"] = sum(1 for d in ds for a in d["actions"] if a["fills"])
-            p_out["rythme"] = _rythme(events, pf, now, ds, ligue_llm, st)
+            p_out["rythme"] = _rythme(events, pf, now, ds, ligue_llm, {"etat": "arrete"} if pf in retires else st)  # archivé : plus d'appel prévu
         elif pf == ALEATOIRE:
             p_out["decisions"] = _decisions_aleatoire(events)
         portfolios.append(p_out)
@@ -946,17 +951,26 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
                 xs[-1] = ts if ts == all_ts[-1] else xs[-1]
         if all_ts and xs[-1] != all_ts[-1]:
             xs.append(all_ts[-1])
+        for p_out in pfs:  # la courbe d'un archivé s'arrête à son retrait : ce point doit exister
+            fin = (p_out.get("archive") or {}).get("ts")
+            if fin is not None and fin not in xs and xs and xs[0] < fin < xs[-1]:
+                xs.append(fin)
+                xs.sort()
         chart_series = []
         for p_out in pfs:
             s = series.get(p_out["id"], [])
             vals: list[float | None] = []
             j, last = 0, None
+            fin = (p_out.get("archive") or {}).get("ts")
             for x in xs:
                 while j < len(s) and s[j][0] <= x:
                     last = s[j][1]
                     j += 1
-                vals.append(None if last is None else round(last / p_out["capital_ueur"] * 100, 4))
-            chart_series.append({"id": p_out["id"], "slug": p_out["slug"], "name": p_out["name"], "kind": p_out["kind"], "values": vals})
+                vals.append(None if last is None or (fin is not None and x > fin) else round(last / p_out["capital_ueur"] * 100, 4))
+            serie = {"id": p_out["id"], "slug": p_out["slug"], "name": p_out["name"], "kind": p_out["kind"], "values": vals}
+            if fin is not None:
+                serie["archive_ts"] = fin
+            chart_series.append(serie)
         live = [last_eq[pf]["ts"] for pf in ids if pf in last_eq]
         return {
             **commun, "ouverte_ts": min((opened[pf]["ts"] for pf in ids), default=None), "live_ts": max(live, default=None),

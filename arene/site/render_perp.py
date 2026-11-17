@@ -21,6 +21,8 @@ from arene.site.render import (
     _chart_scripts,
     _group,
     _legende,
+    dernier_valeur,
+    jj_mm,
     _stat,
     e,
     empiler,
@@ -283,6 +285,9 @@ def _positions_cell(p: dict[str, Any]) -> str:
 
 
 def _statut(p: dict[str, Any]) -> str:
+    arch = p.get("archive")
+    if arch:
+        return f' <span class="pastille neutre">archivé le {jj_mm(arch["ts"])}</span>'
     st = p.get("statut")
     if not st:
         return ""
@@ -383,7 +388,8 @@ def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name:
     if not courbe_visible(chart):
         return '<p class="vide vide-court">La courbe apparaît après 1{NBSP}h{NBSP}30 de relevés. Les valeurs sont dans le tableau.</p>'.replace("{NBSP}", NBSP)
     derniers = "; ".join(
-        f"{s['name']} {pct((s['values'][-1] - 100) / 100) if s['values'][-1] is not None else '—'}" for s in chart["series"]
+        f"{s['name']}{' (archivé)' if s.get('archive_ts') else ''} {pct((dernier_valeur(s['values']) - 100) / 100) if dernier_valeur(s['values']) is not None else '—'}"
+        for s in chart["series"]
     )
     periode = f"du {when(chart['x'][0])} au {when(chart['x'][-1])}"
     if focus_name:
@@ -412,7 +418,7 @@ def _tableau(perp: dict[str, Any], *, conseils: bool = False) -> str:
     def ligne(p: dict[str, Any]) -> str:
         sous = f'<small class="desc">{e(p["sous_titre"])}</small>' if p.get("sous_titre") else ""
         return (
-            f'<tr class="{e(p["kind"])}"><th scope="row"><a href="{_dossier(p)}/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{sous}{_depuis(perp, p)}{_hors_regle_court(p)}</th>'
+            f'<tr class="{e(p["kind"])}{" archive" if p.get("archive") else ""}"><th scope="row"><a href="{_dossier(p)}/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{sous}{_depuis(perp, p)}{_hors_regle_court(p)}</th>'
             f'<td class="n cle"><span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>{_svg_barre(p["rendement"], vmax)}</td>'
             f'<td class="n"><span{_crochet(p, "val")}>{eur(p["equity_ueur"])}</span></td>'
             f'<td class="n">{levier(p["levier"])}</td>'
@@ -421,7 +427,7 @@ def _tableau(perp: dict[str, Any], *, conseils: bool = False) -> str:
         )
 
     def groupe(kind: str, titre: str, n_col: int, note: str = "") -> str:
-        lignes = [ligne(p) for p in pfs if p["kind"] == kind]
+        lignes = [ligne(p) for p in sorted((p for p in pfs if p["kind"] == kind), key=lambda p: bool(p.get("archive")))]
         if not lignes:
             return ""
         note = f' <span class="h-note">{e(note)}</span>' if note else ""
@@ -590,12 +596,24 @@ def _experience(conseils: list[dict[str, Any]]) -> str:
     )
 
 
+def _archives(pfs: list[dict[str, Any]]) -> str:
+    """Les conseils retirés de la ligue : leurs données restent, leur courbe est en pointillés et s'arrête au retrait."""
+    arch = [p for p in pfs if p.get("archive")]
+    if not arch:
+        return ""
+    noms = _liste_et([f"{p['name']} (le {jj_mm(p['archive']['ts'])})" for p in arch])
+    return (
+        '<p class="arrivee">Courbes en pointillés : conseils archivés, retirés de la ligue avec leurs positions fermées. '
+        f"Leur rendement est figé à leur retrait : {e(noms)}.</p>"
+    )
+
+
 def _arrivees(pfs: list[dict[str, Any]]) -> str:
     """Un portefeuille entré après les autres : sa courbe commence à son arrivée, et on le dit sous le graphique."""
     if len(pfs) < 2:
         return ""
     debut = min(p["ouvert_ts"] for p in pfs)
-    tard = [p for p in pfs if p["ouvert_ts"] - debut > 3_600]
+    tard = [p for p in pfs if p["ouvert_ts"] - debut > 3_600 and not p.get("archive")]
     return "".join(
         f'<p class="arrivee">Le {e(p["name"])} a rejoint la ligue le {quand(p["ouvert_ts"], annee=False)} : sa courbe commence là.</p>'
         for p in tard
@@ -627,7 +645,7 @@ def conseils_page(data: dict[str, Any]) -> str:
         titre=titre, chapo=chapo,
         classement=A.scores(A._perp_rows(perp), label="Classement de la ligue des conseils, rendement net"),
         apres=_releve(data, perp, direct_pfs),
-        courbe=_chart_block(perp["chart"], ligue="conseils") + _arrivees(conseils),
+        courbe=_chart_block(perp["chart"], ligue="conseils") + _arrivees(conseils) + _archives(conseils),
     ) + f"""
 <section class="etapes" aria-labelledby="titre-etapes">
   <h2 id="titre-etapes">Comment un conseil décide</h2>
@@ -1054,7 +1072,13 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         stats.append(_stat("Opérations", str(p["n_operations"])))
     alertes = ""
     st = p.get("statut")
-    if st and st["etat"] == "arrete" and conseil:
+    if p.get("archive"):
+        alertes = (
+            f'<p class="alerte info"><strong>Conseil archivé</strong> le {quand(p["archive"]["ts"])}. '
+            "Ses positions ont été fermées au marché ; il ne joue plus et ses chiffres sont figés. "
+            "Sa courbe reste, en pointillés, dans la ligue des conseils.</p>"
+        )
+    elif st and st["etat"] == "arrete" and conseil:
         alertes = (
             f'<p class="alerte perte-bg"><strong>Conseil arrêté</strong> le {quand(st["ts"]) if st.get("ts") else "—"} : ruine, baisse de 90{NBSP}% depuis son plus haut. '
             "Ses positions sont fermées et il ne joue plus. Seul l’opérateur de l’arène peut le relancer, à la main.</p>"
@@ -1103,7 +1127,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 <section aria-labelledby="titre-courbe"><h2 id="titre-courbe">Rendement net <span class="h-note">frais et funding compris</span></h2>{_chart_block(chart, focus=p["id"], focus_name=p["name"])}</section>
 <section aria-labelledby="titre-positions"><h2 id="titre-positions">Positions <span class="h-note">fictives, prix en dollars</span></h2>{direct_etat}{_positions(p)}</section>
 {decisions}
-{_attente(p) if llm else ""}
+{_attente(p) if llm and not p.get("archive") else ""}
 {operations}
 """
     return layout(

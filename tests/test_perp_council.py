@@ -549,8 +549,18 @@ def test_resume_lifts_the_halt(tmp_path, capsys):
 # ---------------------------------------------------------------------- the league of the councils
 
 
+# The league file as it was while both councils played (the live file no longer lists them once retired).
+TWO_COUNCILS = """enabled = true
+max_member_processes = 4
+councils = ["perp-conseil.toml", "perp-conseil-opus.toml"]
+"""
+
+
 def test_the_league_of_the_councils_config(tmp_path):
-    league = load_councils_league()
+    (tmp_path / "ligue-conseils.toml").write_text(TWO_COUNCILS)
+    for f in ("policy-perp-conseil.toml", "perp-conseil.toml", "perp-conseil-opus.toml"):
+        (tmp_path / f).write_text(Path("config", f).read_text())
+    league = load_councils_league(tmp_path / "ligue-conseils.toml")
     assert [c.portfolio for c in league.councils] == ["council-perp:haiku", "council-perp:opus"]
     assert league.errors == () and league.max_member_processes == 4
     haiku, opus = league.councils
@@ -569,19 +579,17 @@ def test_the_league_of_the_councils_config(tmp_path):
     assert opus.daily_budget_uusd == 25_000_000 and haiku.daily_budget_uusd == 10_000_000
     assert opus.president_timeout_s == 240 and haiku.president_timeout_s == 90
     # a bad council is left out alone; a bad league file is an error
-    for f in ("policy-perp-conseil.toml", "perp-conseil.toml", "perp-conseil-opus.toml"):
-        (tmp_path / f).write_text(Path("config", f).read_text())
     opus_bad = (
         Path("config/perp-conseil-opus.toml").read_text().replace("claude-opus-5-5", "claude-fable-5-2")
     )
     (tmp_path / "perp-conseil-opus.toml").write_text(opus_bad)
-    (tmp_path / "l.toml").write_text(Path("config/ligue-conseils.toml").read_text())
+    (tmp_path / "l.toml").write_text(TWO_COUNCILS)
     got = load_councils_league(tmp_path / "l.toml")
     assert [c.portfolio for c in got.councils] == [NAME] and "president_model" in got.errors[0]
-    (tmp_path / "l.toml").write_text(Path("config/ligue-conseils.toml").read_text() + "extra = 1\n")
+    (tmp_path / "l.toml").write_text(TWO_COUNCILS + "extra = 1\n")
     with pytest.raises(CouncilConfigError):
         load_councils_league(tmp_path / "l.toml")
-    off = Path("config/ligue-conseils.toml").read_text().replace("enabled = true", "enabled = false")
+    off = TWO_COUNCILS.replace("enabled = true", "enabled = false")
     (tmp_path / "l.toml").write_text(off)
     assert load_councils_league(tmp_path / "l.toml").councils == ()
     # each council reads its own policy: the league's players
@@ -673,3 +681,129 @@ def test_a_council_that_never_played_is_due_at_the_next_tick(tmp_path):
     )
     rnd = [p for p in payloads(w, "perp_round") if p["kind"] == "private"][-1]
     assert rnd["portfolios"] == [OPUS.portfolio] and rnd["triggers"][OPUS.portfolio]["last_round_ts"] is None
+
+
+# ---------------------------------------------------------------------- retiring a council (17/11/2026)
+
+
+def _retire_world(tmp_path, monkeypatch, *, position: bool = True):
+    """A watcher world with the Haiku council opened, holding one long with a stop and one pending alert."""
+    import arene.perp.watcher as W
+
+    monkeypatch.setattr(W, "load_specs", lambda var, symbols, now_ts, client=None: SPECS)
+    w = World(tmp_path, llm=dataclasses.replace(LEAGUE, models=()))
+    sim = w.w.sim
+    sim.open_portfolio(NAME, "council", T0)
+    px = w.prices["PF_XBTUSD"]
+    if position:
+        sim.market_order("c-open", NAME, "PF_XBTUSD", 6_280_000, (px, px + 1_000_000), (1_100_000, 1_100_100), T0 + 30)
+        sim.set_conditional(NAME, "PF_XBTUSD", "stop", px * 95 // 100, T0 + 31)
+    sim.append_event(
+        "agent_orders_set",
+        {
+            "portfolio": NAME, "round": T0, "created_ts": T0 + 40, "rejected": [], "entry_orders": [],
+            "alerts": [
+                {"id": "a1", "instrument": "PF_XBTUSD", "condition": "below", "price_uusd": px * 9 // 10,
+                 "note": "", "expires_ts": T0 + 86_400}
+            ],
+        },
+        T0 + 40,
+    )  # fmt: skip
+    return w
+
+
+def test_retire_flattens_journals_and_replays(tmp_path, monkeypatch):
+    from arene.perp.retire import retire_portfolio
+
+    w = _retire_world(tmp_path, monkeypatch)
+    assert w.w.sim.states()[NAME].positions
+    out = retire_portfolio(w.var, NAME, T0 + 120)
+    assert out == {"status": "retired", "fills": 1, "orders_ended": 1}
+    [fill] = [p for p in payloads(w, "perp_fill", NAME) if p["reason"] == "retired"]
+    assert fill["qty"] == -6_280_000
+    [ended] = payloads(w, "agent_order_ended", NAME)
+    assert ended["id"] == "a1" and ended["reason"] == "portfolio_retired"
+    [ev] = [e for e in w.events("portfolio_retired")]
+    assert ev["payload"] == {"portfolio": NAME, "ts": T0 + 120, "reason": "manual", "note": ""}
+    # a last measure of the portfolio, then the retirement closes the journal of the council
+    assert [e["type"] for e in w.events()][-1] == "portfolio_retired"
+    assert any(p["ts"] == T0 + 120 for p in payloads(w, "perp_equity", NAME))
+    acc = replay(w.events())[NAME]  # the whole journal replays, the account is flat and retired
+    assert acc.retired and acc.retired_ts == T0 + 120 and not acc.positions and acc.invariant_ok()
+    px = w.prices["PF_XBTUSD"]
+    with pytest.raises(Exception, match="retired"):  # never opens again
+        w.w.sim.market_order("c-again", NAME, "PF_XBTUSD", 1_000_000, (px, px + 1_000_000), (1_100_000, 1_100_100), T0 + 200)
+
+
+def test_retire_is_idempotent(tmp_path, monkeypatch):
+    from arene.perp.retire import retire_portfolio
+
+    w = _retire_world(tmp_path, monkeypatch)
+    retire_portfolio(w.var, NAME, T0 + 120)
+    n = len(w.events())
+    assert retire_portfolio(w.var, NAME, T0 + 500) == {"status": "already_retired", "fills": 0, "orders_ended": 0}
+    assert len(w.events()) == n
+
+
+def test_retire_fails_closed_without_a_fresh_quote(tmp_path, monkeypatch):
+    from arene.perp.retire import RetireError, retire_portfolio
+
+    w = _retire_world(tmp_path, monkeypatch)
+    n = len(w.events())
+    with pytest.raises(RetireError, match="no fresh quote"):
+        retire_portfolio(w.var, NAME, T0 + 5_000)  # the last snapshot is 83 minutes old
+    assert len(w.events()) == n and not replay(w.events())[NAME].retired
+
+
+def test_retire_refuses_a_non_council_and_waits_for_the_watcher_lock(tmp_path, monkeypatch):
+    import fcntl
+    import os
+
+    from arene.perp.retire import RetireError, retire_portfolio
+
+    w = _retire_world(tmp_path, monkeypatch)
+    with pytest.raises(RetireError, match="only a council"):
+        retire_portfolio(w.var, HAIKU, T0 + 120)
+    fd = os.open(w.var / "watcher.lock", os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX)  # a tick is running
+    try:
+        n = len(w.events())
+        with pytest.raises(RetireError, match="lock still busy"):
+            retire_portfolio(w.var, NAME, T0 + 120, lock_wait_s=0.2)
+        assert len(w.events()) == n
+    finally:
+        os.close(fd)
+
+
+def test_retire_cli_and_the_resume_refusal(tmp_path, monkeypatch, capsys):
+    from arene.perp.council import main
+
+    w = _retire_world(tmp_path, monkeypatch, position=False)
+    assert main(["retire", "--var", str(w.var)]) == 2  # which council?
+    assert main(["retire", "--portfolio", NAME, "--var", str(w.var), "--reason", "refonte", "--note", "17/11"]) == 0
+    assert "retired (0 position(s) flattened, 1 order(s) ended)" in capsys.readouterr().out
+    assert main(["retire", "--portfolio", NAME, "--var", str(w.var)]) == 0
+    assert "already retired" in capsys.readouterr().out
+    [ev] = w.events("portfolio_retired")
+    assert ev["payload"]["reason"] == "refonte" and ev["payload"]["note"] == "17/11"
+    assert main(["resume", "--portfolio", NAME, "--var", str(w.var)]) == 2  # a retired council never plays again
+    assert "never plays again" in capsys.readouterr().err
+
+
+def test_a_retired_council_is_skipped_by_the_league_even_if_listed(tmp_path, monkeypatch):
+    from arene.perp.council import retired_portfolios
+
+    both = CouncilsLeague(True, 4, (COUNCIL, OPUS), (), "league-sha")
+    assert both.without(frozenset()) is both
+    assert [c.portfolio for c in both.without({NAME}).councils] == [OPUS.portfolio]
+    w = _retire_world(tmp_path, monkeypatch, position=False)
+    w.w.sim.append_event("portfolio_retired", {"portfolio": NAME, "ts": T0 + 60, "reason": "manual", "note": ""}, T0 + 60)
+    assert retired_portfolios(w.events()) == {NAME}
+    # the file is still listed (the watcher is built with the league as is): the round never calls it
+    calls: list[str] = []
+    w.w.llm = dataclasses.replace(LEAGUE, models=(), councils=ONLY_HAIKU)
+    w.w.decider_factory = council_factory(tmp_path, calls)
+    rep = w.w.tick(T0 + 120)
+    assert not calls and not payloads(w, "agent_decision", NAME) and not payloads(w, "perp_llm_skipped", NAME)
+    assert not rep.problems, rep.problems
+    assert not [p for p in payloads(w, "perp_equity", NAME) if p["ts"] > T0 + 60]  # no more measure either

@@ -300,8 +300,8 @@ def run_llm_round(
     played = started | skipped
     prepared = []
     for m in models:
-        if m.portfolio in played:
-            continue
+        if m.portfolio in played or states[m.portfolio].retired:
+            continue  # a retired council is never called, even if its file is still listed
         remaining = m.daily_budget_uusd - spent_today_uusd(events, m.portfolio, now_ts)
         reason = None
         if states[m.portfolio].halted:

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from arene.site import render as R
-from arene.site.render import NBSP, e, eur, layout, pct, tone
+from arene.site.render import NBSP, e, eur, jj_mm, layout, pct, tone
 
 
 def couleurs(chart: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -20,7 +20,7 @@ def couleurs(chart: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def pastille(st: dict[str, Any] | None) -> str:
     if not st:
         return '<span class="sw sw-ref" aria-hidden="true"></span>'
-    pointille = " sw-ref" if st.get("dash") else ""
+    pointille = " sw-archive" if st.get("archive") else " sw-ref" if st.get("dash") else ""
     return f'<span class="sw c{e(st["color"])}{pointille}" aria-hidden="true"></span>'
 
 
@@ -28,6 +28,9 @@ def _ex_aequo(rows: list[dict[str, Any]]) -> None:
     """Rangs ex æquo : deux rendements égaux (au centième de pour cent affiché) ont le même rang."""
     prec, rang = None, 0
     for i, r in enumerate(rows, 1):
+        if r.get("archive"):  # un conseil archivé ne se classe plus : sa valeur est figée à son retrait
+            r["rang"] = None
+            continue
         v = None if r.get("rend") is None else round(r["rend"] * 10_000)
         if v != prec:
             rang, prec = i, v
@@ -43,9 +46,11 @@ def scores(rows: list[dict[str, Any]], *, label: str, mini: bool = False) -> str
     for r in rows:
         rang = str(r["rang"]) if r.get("rang") else "—"
         sous = f'<span class="sc-sous">{e(r["sous"])}</span>' if r.get("sous") else ""
+        if r.get("archive"):
+            sous += f'<span class="sc-sous sc-archive"><span class="tag-archive">archivé</span> retiré le {jj_mm(r["archive"]["ts"])}</span>'
         val = f'<span class="sc-eur">{r["valeur"]}</span>' if r.get("valeur") else ""
         items.append(
-            f'<li class="sc{" sc-ref" if r.get("ref") else ""}"><span class="sc-rang">{rang}</span>{pastille(r.get("st"))}'
+            f'<li class="sc{" sc-ref" if r.get("ref") else ""}{" sc-archive-ligne" if r.get("archive") else ""}"><span class="sc-rang">{rang}</span>{pastille(r.get("st"))}'
             f'<span class="sc-nom"><a href="{e(r["href"])}">{e(r["nom"])}</a>{sous}</span>'
             f'<span class="sc-val"><span class="{tone(r.get("rend"))}"{r.get("attrs", "")}>{pct(r.get("rend"))}</span>{val}</span></li>'
         )
@@ -85,7 +90,7 @@ def sparkline(chart: dict[str, Any], ids: list[str]) -> str:
             if v is not None
         )
         st = styles.get(s["id"]) or {}
-        pointille = " spark-ref" if st.get("dash") else ""
+        pointille = " spark-archive" if st.get("archive") else " spark-ref" if st.get("dash") else ""
         lignes.append(
             f'<polyline class="spark-l s{e(st.get("color", "--muted"))}{pointille}" points="{pts}"/>'
         )
@@ -105,7 +110,7 @@ SOUS_TEMOINS = {
 
 def _classer(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Un seul classement, IA et témoins mêlés : si une règle sans IA mène, ça se voit (rien de caché)."""
-    rows.sort(key=lambda r: -(r["rend"] if r["rend"] is not None else -9.0))
+    rows.sort(key=lambda r: (bool(r.get("archive")), -(r["rend"] if r["rend"] is not None else -9.0)))
     _ex_aequo(rows)
     return rows
 
@@ -120,7 +125,7 @@ def _perp_rows(ligue: dict[str, Any]) -> list[dict[str, Any]]:
         rows.append({
             "nom": p["name"], "href": f"{RP._dossier(p)}/{p['slug']}.html", "rend": p["rendement"], "st": st.get(p["id"]),
             "sous": SOUS_TEMOINS.get(p["id"], "sans IA") if temoin else (p.get("sous_titre") or ""),
-            "ref": temoin, "attrs": RP._crochet(p, "rend"), "id": p["id"],
+            "ref": temoin, "attrs": RP._crochet(p, "rend"), "id": p["id"], "archive": p.get("archive"),
         })  # fmt: skip
     return _classer(rows)
 
@@ -164,9 +169,13 @@ def accueil_page(data: dict[str, Any]) -> str:
     cons = perp.get("conseils")
     if cons:
         rows = _perp_rows(cons)
+        archives = [r for r in rows if r.get("archive")]
+        quoi = f"Dix Claude Haiku donnent leur avis, un président tranche : Haiku pour l’un, Opus pour l’autre. Levier jusqu’à 10, {capital} fictifs chacun."
+        if archives and len(archives) == sum(1 for p in cons["portfolios"] if p["kind"] == "conseil"):
+            quoi = "Les deux premiers conseils, Président Haiku et Président Opus, sont archivés : leurs courbes restent en pointillés."
         cartes.append(_carte(
             href="conseils.html", titre="Conseils d’IA",
-            quoi=f"Dix Claude Haiku donnent leur avis, un président tranche : Haiku pour l’un, Opus pour l’autre. Levier jusqu’à 10, {capital} fictifs chacun.",
+            quoi=quoi,
             rows=rows, chart=cons["chart"], label="Classement de la ligue des conseils",
         ))  # fmt: skip
     rows = _perp_rows(perp)

@@ -85,8 +85,9 @@ class Gen:
         self.add("conditional_order", {"portfolio": pf, "instrument": inst, "kind": kind, "price_uusd": px, "ts": ts}, ts)
 
 
-def build(path: Path, *, ruine: bool = False, conseils: bool = True) -> Path:
-    """`ruine` : le Conseil Haiku finit arrêté (`portfolio_halted`, ruine à -90 %) ; `conseils=False` : aucun conseil."""
+def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bool = False) -> Path:
+    """`ruine` : le Conseil Haiku finit arrêté (`portfolio_halted`, ruine à -90 %) ; `conseils=False` : aucun conseil ;
+    `archive` : les deux conseils sont retirés une heure avant la fin (positions fermées, `portfolio_retired`)."""
     g = Gen(path)
     for pf in TEMOINS + LLMS:
         g.add("portfolio_opened", {"portfolio": pf, "kind": "llm" if pf in LLMS else "benchmark", "league": "perp",
@@ -120,6 +121,11 @@ def build(path: Path, *, ruine: bool = False, conseils: bool = True) -> Path:
         if conseils and ts == rdvs[11]:  # nouveau format : 9 avis en A (l'Arbitragiste), consignes v2
             _ronde_conseil(g, ts, ouvre=False, arbitragiste=True)
             _ronde_conseil(g, ts, ouvre=True, arbitragiste=True, opus=True)
+        if conseils and archive and ts == fin - 3_600:
+            for pf in (CONSEIL, OPUS):
+                for inst, pos in list(g.book.states[pf].positions.items()):
+                    g.fill(pf, inst, -pos.qty, ts, "retired")
+                g.add("portfolio_retired", {"portfolio": pf, "ts": ts, "reason": "refonte", "note": "tout permis"}, ts)
         if conseils and ruine and ts == fin:
             g.add("portfolio_halted", {"portfolio": CONSEIL, "reason": "drawdown", "until_ts": 0}, ts)
         if ts in rdvs or ts == wake:
@@ -140,6 +146,8 @@ def build(path: Path, *, ruine: bool = False, conseils: bool = True) -> Path:
             g.add("portfolio_frozen", {"portfolio": "llm-perp:claude-opus-5-5", "reason": "daily_loss", "until_ts": ts + 86_400 * 30}, ts)
             g.add("alert", {"level": "action", "code": "perp_llm_round_failed", "message": f"OSError: {SECRET} the host"}, ts)
         for pf, acc in g.book.states.items():
+            if acc.retired:
+                continue
             marks = {i: prix(i, ts) for i in acc.positions}
             g.add("perp_equity", {"portfolio": pf, "ts": ts, "collateral_ueur": acc.collateral_ueur,
                                   "unrealized_ueur": unrealized_ueur(acc, marks, *FX), "equity_ueur": equity_ueur(acc, marks, *FX),

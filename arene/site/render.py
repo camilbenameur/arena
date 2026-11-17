@@ -117,6 +117,11 @@ def when(ts: int | None, *, annee: bool = True) -> str:
     return f"{d.day}{NBSP}{MOIS[d.month - 1]}{a}, {d:%H:%M}{NBSP}UTC"
 
 
+def jj_mm(ts: int) -> str:
+    """Date courte en français : 17/11."""
+    return datetime.fromtimestamp(ts, UTC).strftime("%d/%m")
+
+
 def iso(ts: int) -> str:
     return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%dT%H:%MZ")
 
@@ -340,7 +345,13 @@ COULEUR_LLM = {"llm:claude-haiku-5-5": 0, "llm:claude-sonnet-5-5": 1, "llm:claud
 N_COULEURS_LLM = 4
 COULEUR_TEMOIN = {"temoin:6040": 0, "temoin:e0065": 1, "temoin:aleatoire": 2, "benchmark-perp:trend": 0, "benchmark-perp:random": 2}
 REFERENCES = {"temoin:panier", "benchmark-perp:basket-1x"}  # « acheter et garder » de chaque ligue
+ARCHIVE_DASH = [1, 6]  # pointillé fin et espacé : ne se confond pas avec les tirets des témoins
 MIN_POINTS_COURBE = 3  # sous 3 cycles terminés, une courbe ne montre qu'une droite : le tableau suffit
+
+
+def dernier_valeur(values: list[float | None]) -> float | None:
+    """Dernière valeur publiée d'une courbe (celle d'un conseil archivé s'arrête avant la fin de l'axe)."""
+    return next((v for v in reversed(values) if v is not None), None)
 
 
 def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
@@ -364,6 +375,9 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
             st["width"], st["dash"] = 3, None
             if s["kind"] not in ("llm", "conseil"):
                 st["color"] = "--accent"
+        if s.get("archive_ts"):  # un conseil archivé : ses données sont figées, sa courbe est en pointillés fins
+            st["dash"], st["archive"] = ARCHIVE_DASH, True
+            st["width"] = 2.5 if focused else 2
         st["visible"] = focus is None or focused or s["id"] in REFERENCES
         out.append(st)
     return out
@@ -376,8 +390,11 @@ def _legende(chart: dict[str, Any], focus: str | None) -> str:
     for i, (s, st) in enumerate(zip(chart["series"], _styles(chart, focus), strict=True)):
         if not st["visible"]:
             continue
-        v = s["values"][-1]
+        v = dernier_valeur(s["values"])
         ret = None if v is None else round(v - 100, 2) / 100
+        arch = (
+            f'<span class="legende-tag">retiré le {jj_mm(s["archive_ts"])}</span>' if s.get("archive_ts") else ""
+        )
         dash = f' stroke-dasharray="{" ".join(f"{x * 0.7:g}" for x in st["dash"])}"' if st["dash"] else ""
         trait = (
             '<svg class="legende-trait" viewBox="0 0 24 8" width="24" height="8" aria-hidden="true">'
@@ -385,7 +402,7 @@ def _legende(chart: dict[str, Any], focus: str | None) -> str:
         )
         items.append(
             f'<li><button type="button" class="legende-bouton" data-serie="{i}" aria-pressed="true" disabled>{trait}'
-            f'<span class="legende-nom">{e(s["name"])}</span><span class="legende-val {tone(ret)}">{pct(ret)}</span></button></li>'
+            f'<span class="legende-nom">{e(s["name"])}{arch}</span><span class="legende-val {tone(ret)}">{pct(ret)}</span></button></li>'
         )
     vivant = (chart.get("kinds") or [""])[-1] == "veille"
     quand_txt = f"{'En direct' if vivant else 'Dernier cycle'} : {when(chart['x'][-1], annee=False)}"

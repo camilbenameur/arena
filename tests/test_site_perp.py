@@ -22,6 +22,7 @@ from arene.perp.news import CalendarEvent
 from arene.risk.policy import load_policy
 from arene.site import build
 from arene.site import perp as P
+from arene.site.render import jj_mm
 
 
 def _cfg():
@@ -635,3 +636,66 @@ def test_actualites_calendrier_illisible_est_omis(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "load_news_config", boom)
     perp = F.build(tmp_path / "p" / "events.jsonl")
     assert P.compute(perp, NOW)["actualites"]["calendrier"] is None
+
+
+@pytest.fixture(scope="module")
+def site_archives(tmp_path_factory) -> Path:
+    tmp = tmp_path_factory.mktemp("perp-archives")
+    spot = synthetic_journal(tmp / "var" / "journal" / "events.jsonl")
+    perp = F.build(tmp / "var-perp" / "journal" / "events.jsonl", archive=True)
+    out = tmp / "site"
+    config, policy = _cfg()
+    build(spot.path, out, config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    return out
+
+
+def test_conseils_archives_courbe_en_pointilles_arretee_au_retrait(site_archives):
+    site = site_archives
+    d = _perp(site)["conseils"]
+    fin = F.T0 + 2 * 86_400 - 3_600
+    par_id = {p["id"]: p for p in d["portfolios"]}
+    assert par_id[F.CONSEIL]["archive"] == {"ts": fin, "raison": "refonte", "note": "tout permis"}
+    assert par_id[F.TEMOINS[0]]["archive"] is None
+    series = {s["id"]: s for s in d["chart"]["series"]}
+    assert series[F.CONSEIL]["archive_ts"] == fin and "archive_ts" not in series[F.TEMOINS[0]]
+    x = d["chart"]["x"]
+    assert fin in x and x[-1] > fin  # le témoin continue après le retrait
+    for pf in (F.CONSEIL, F.OPUS):
+        v = series[pf]["values"]
+        assert v[x.index(fin)] is not None and all(w is None for w, t in zip(v, x, strict=True) if t > fin)
+        assert par_id[pf]["rendement"] == pytest.approx(v[x.index(fin)] / 100 - 1, abs=1e-4)  # figé au retrait
+    # le graphique : style en pointillés, mêmes teintes ; légende avec la date de retrait
+    page = lire(site, "conseils.html")
+    courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
+    st = {s["id"]: t for s, t in zip(courbe["series"], courbe["styles"], strict=True)}
+    assert st[F.CONSEIL]["dash"] == [1, 6] and st[F.CONSEIL]["archive"] and st[F.CONSEIL]["color"] == "--conseil"
+    assert st[F.OPUS]["dash"] == [1, 6] and st[F.OPUS]["color"] == "--conseil2"
+    assert not st[F.TEMOINS[0]].get("archive") and st[F.TEMOINS[0]]["dash"] != [1, 6]
+    legende = re.search(r'<ul class="legende".*?</ul>', page, flags=re.DOTALL).group(0)
+    assert legende.count(f"retiré le {jj_mm(fin)}") == 2 and legende.count("legende-tag") == 2 and "stroke-dasharray" in legende
+    assert legende.count("legende-tag") == 2 and "stroke-dasharray" in legende
+    assert "Courbes en pointillés" in texte(page) and "archivé" in texte(page)
+
+
+def test_conseils_archives_classement_et_tableau_marques_apres_les_actifs(site_archives):
+    page = lire(site_archives, "conseils.html")
+    classement = re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0)
+    lignes = re.findall(r'<li class="sc[^"]*".*?</li>', classement, flags=re.DOTALL)
+    noms = [re.search(r">([^<]+)</a>", li).group(1) for li in lignes]
+    assert noms[0] == "Témoin panier 1x" and set(noms[1:]) == {"Conseil Haiku", "Conseil Opus"}  # les archivés après
+    for li in lignes[1:]:
+        assert "sc-archive-ligne" in li and "sw-archive" in li and "archivé" in li and "retiré le" in texte(li)
+        assert '<span class="sc-rang">—</span>' in li  # plus classé
+    assert "sw-archive" not in lignes[0]
+    ligne = _ligne_tableau(page, "Conseil Haiku")
+    assert 'class="conseil archive"' in ligne and "archivé le" in texte(ligne)
+    # sa page : le dit, garde sa courbe en pointillés, ni appel prévu ni « en attente »
+    haiku = lire(site_archives, "conseils/council-perp-haiku.html")
+    t = texte(haiku)
+    assert "Conseil archivé" in t and "ses chiffres sont figés" in t and "En attente" not in t
+    courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', haiku).group(1)))
+    assert courbe["styles"][0]["dash"] == [1, 6] and courbe["series"][0]["archive_ts"]
+    # la carte de l'accueil le dit aussi, et aucune page ne casse
+    accueil = texte(lire(site_archives, "index.html"))
+    assert "archivés" in accueil
+    assert 'trait--conseil"' in page

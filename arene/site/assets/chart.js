@@ -47,7 +47,7 @@
     return data.styles.map(function (st, i) {
       return {
         stroke: css(st.color), width: st.width, dash: st.dash, visible: st.visible,
-        isLlm: data.series[i].kind === "llm" || data.series[i].kind === "conseil", focused: st.width >= 3
+        isLlm: data.series[i].kind === "llm" || data.series[i].kind === "conseil", focused: st.width >= 3, archive: !!st.archive
       };
     });
   }
@@ -99,6 +99,7 @@
       var v = valeurs[i];
       if (!v) return;
       var x = s.values[idx];
+      if (x == null && s.archive_ts) { var k = s.values.length - 1; while (k >= 0 && s.values[k] == null) k--; x = k >= 0 ? s.values[k] : null; }
       v.textContent = ecart(x, 2);
       v.classList.toggle("gain", x != null && x >= 100.005);
       v.classList.toggle("perte", x != null && x <= 99.995);
@@ -111,7 +112,7 @@
     var r = uPlot.pxRatio, ctx = u.ctx, gap = 16 * r;
     var groupes = [];
     data.series.forEach(function (s, i) {
-      if (!u.series[i + 1].show) return;
+      if (!u.series[i + 1].show || s.archive_ts) return; /* un conseil archivé n'a plus de « fin » à étiqueter */
       var j = s.values.length - 1;
       while (j >= 0 && s.values[j] == null) j--;
       if (j < 0) return;
@@ -185,8 +186,9 @@
         stroke: st.stroke,
         width: st.width,
         dash: st.dash || undefined,
+        cap: st.archive ? "round" : undefined,
         show: st.visible && !masques[s.id],
-        points: { show: !many, size: st.focused || st.isLlm ? 7 : 5, width: 1.5, stroke: st.stroke, fill: css("--surface") }
+        points: { show: !many && !st.archive, size: st.focused || st.isLlm ? 7 : 5, width: 1.5, stroke: st.stroke, fill: css("--surface") }
       });
       columns.push(s.values);
     });
@@ -264,6 +266,7 @@
       data.series.forEach(function (s) {
         var v = s.slug ? d.v[s.slug] : undefined, j = s.values.length - 1;
         while (j >= 0 && s.values[j] == null) j--;
+        if (s.archive_ts) { s.values.push(null); return; } /* figé à son retrait : jamais de point en direct */
         s.values.push(typeof v === "number" && isFinite(v) ? v : (j >= 0 ? s.values[j] : null));
       });
       vif = true;

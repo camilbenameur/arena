@@ -343,3 +343,19 @@ def test_invariant_and_replay_hold_for_any_sequence(tmp_path_factory, steps):
         acc = replay(s.journal.events())["P"]
         assert acc.collateral_ueur >= 0 and acc.invariant_ok()
     assert replay(s.journal.events()) == s.states()
+
+
+def test_retired_portfolio_replays_flat_and_never_opens_again(tmp_path):
+    s = sim_at(tmp_path)
+    s.market_order("a", "P", "BTC", 1_000_000, Q, FX, 1, marks=MARKS)
+    with pytest.raises(PerpLedgerError, match="open positions"):  # retiring needs a flat account
+        s.append_event("portfolio_retired", {"portfolio": "P", "ts": 2, "reason": "manual", "note": ""}, 2)
+    assert len(s.flatten("P", 3, {"BTC": Q}, FX, "retired")) == 1
+    s.append_event("portfolio_retired", {"portfolio": "P", "ts": 4, "reason": "manual", "note": ""}, 4)
+    s.append_event("portfolio_retired", {"portfolio": "P", "ts": 9, "reason": "manual", "note": ""}, 9)
+    acc = replay(s.journal.events())["P"]  # the whole journal replays; the first date stays
+    assert acc.retired and acc.retired_ts == 4 and not acc.positions and acc.invariant_ok()
+    with pytest.raises(PerpLedgerError, match="retired"):
+        s.market_order("b", "P", "BTC", 1_000_000, Q, FX, 10, marks=MARKS)
+    with pytest.raises(PerpLedgerError, match="halt, kill_switch or retired"):
+        s.flatten("P", 11, {"BTC": Q}, FX, "whatever")

@@ -422,6 +422,15 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .c--llm0 { background-color: var(--llm0); } .c--llm1 { background-color: var(--llm1); } .c--llm2 { background-color: var(--llm2); } .c--llm3 { background-color: var(--llm3); }
 .c--conseil { background-color: var(--conseil); } .c--conseil2 { background-color: var(--conseil2); }
 .c--tem0 { background-color: var(--tem0); } .c--tem1 { background-color: var(--tem1); } .c--tem2 { background-color: var(--tem2); }
+.sw-archive { background: repeating-linear-gradient(var(--muted) 0 2px, transparent 2px 6px); }
+.sw-archive.c--conseil { background: repeating-linear-gradient(var(--conseil) 0 2px, transparent 2px 6px); }
+.sw-archive.c--conseil2 { background: repeating-linear-gradient(var(--conseil2) 0 2px, transparent 2px 6px); }
+.sc-archive-ligne .sc-val { color: var(--muted); }
+.sc-archive-ligne .sc-nom a { font-weight: 500; }
+.tag-archive, .legende-tag { display: inline-block; font: 600 .68rem/1.5 var(--sans); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; margin-right: 4px; }
+.legende-tag { text-transform: none; letter-spacing: 0; font-weight: 500; font-size: .74rem; margin: 0 0 0 6px; }
+.tableau tr.archive th a { font-weight: 500; }
+.tableau tr.archive td { color: var(--muted); }
 .sc-nom { display: flex; flex-direction: column; min-width: 0; }
 .sc-nom a { color: var(--text); font-weight: 600; font-size: 1.08rem; text-decoration: none; background-image: linear-gradient(currentColor, currentColor); background-size: 0 1.5px; background-repeat: no-repeat; background-position: 0 100%; transition: background-size .2s var(--ease); justify-self: start; width: fit-content; }
 .sc-nom a:hover { background-size: 100% 1.5px; }
@@ -453,6 +462,7 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .s--llm0 { stroke: var(--llm0); } .s--llm1 { stroke: var(--llm1); } .s--llm2 { stroke: var(--llm2); } .s--llm3 { stroke: var(--llm3); }
 .s--conseil { stroke: var(--conseil); } .s--conseil2 { stroke: var(--conseil2); } .s--tem-ref { stroke: var(--tem-ref); }
 .spark-ref { stroke-dasharray: 5 4; stroke-width: 1.5; }
+.spark-archive { stroke-dasharray: 1 5; stroke-linecap: round; stroke-width: 2; }
 .principes-liste { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px 32px; margin: 12px 0 0; }
 .principes-liste dt { font-weight: 600; }
 .principes-liste dd { margin: 4px 0 0; color: var(--muted); font-size: .94rem; }

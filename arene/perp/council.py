@@ -34,6 +34,7 @@ the owner's decision only.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import shutil
@@ -41,7 +42,7 @@ import sys
 import threading
 import time
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -401,6 +402,24 @@ class CouncilsLeague:
     def council(self, portfolio: str) -> CouncilConfig | None:
         return next((c for c in self.councils if c.portfolio == portfolio), None)
 
+    def without(self, retired: Collection[str]) -> CouncilsLeague:
+        """The league minus the retired councils: they are never opened, called nor valued again, even if their
+        file is still listed (the journal decides, not the configuration)."""
+        if not any(c.portfolio in retired for c in self.councils):
+            return self
+        return dataclasses.replace(
+            self, councils=tuple(c for c in self.councils if c.portfolio not in retired)
+        )
+
+
+def retired_portfolios(events: Iterable[Mapping[str, Any]]) -> frozenset[str]:
+    """The portfolios the journal says are retired (`portfolio_retired`)."""
+    return frozenset(
+        e["payload"]["portfolio"]
+        for e in events
+        if e["type"] == "portfolio_retired" and isinstance(e["payload"].get("portfolio"), str)
+    )
+
 
 def load_councils_league(path: Path = DEFAULT_COUNCILS_LEAGUE) -> CouncilsLeague:
     """Raises `CouncilConfigError` when the league file itself is invalid (all councils off); a council whose
@@ -703,13 +722,31 @@ class CouncilDecider:
 def main(argv: list[str] | None = None) -> int:
     from arene.journal import Journal
     from arene.perp.config import default_var
+    from arene.perp.retire import RetireError, retire_portfolio
     from arene.perp.sim import PerpSimulator
 
     ap = argparse.ArgumentParser(prog="python -m arene.perp.council")
-    ap.add_argument("command", choices=["resume"])
+    ap.add_argument("command", choices=["resume", "retire"])
     ap.add_argument("--portfolio", default=None, help="council-perp:<name> (needed when there are several)")
     ap.add_argument("--var", type=Path, default=None)
+    ap.add_argument("--reason", default="manual", help="retire: why (journaled)")
+    ap.add_argument("--note", default="", help="retire: free note (journaled)")
     args = ap.parse_args(argv)
+    var = (args.var or default_var()).resolve()
+    if args.command == "retire":
+        if args.portfolio is None:
+            print("retire: --portfolio council-perp:<name> is needed", file=sys.stderr)
+            return 2
+        try:
+            out = retire_portfolio(var, args.portfolio, int(time.time()), reason=args.reason, note=args.note)
+        except RetireError as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 3
+        if out["status"] == "already_retired":
+            print(f"{args.portfolio}: already retired, nothing to do")
+        else:
+            print(f"{args.portfolio}: retired ({out['fills']} position(s) flattened, {out['orders_ended']} order(s) ended)")
+        return 0
     names = [c.portfolio for c in load_councils_league().councils]
     if args.portfolio is None and len(names) != 1:
         print(f"--portfolio is needed: one of {', '.join(names) or '(none)'}", file=sys.stderr)
@@ -720,9 +757,11 @@ def main(argv: list[str] | None = None) -> int:
             f"{portfolio}: not a council of config/ligue-conseils.toml ({', '.join(names)})", file=sys.stderr
         )
         return 2
-    var = (args.var or default_var()).resolve()
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
     acc = sim.states().get(portfolio)
+    if acc is not None and acc.retired:
+        print(f"{portfolio}: retired, it never plays again", file=sys.stderr)
+        return 2
     if acc is None or not (acc.halted or acc.frozen_until_ts):
         print(f"{portfolio}: not halted nor frozen, nothing to do")
         return 0

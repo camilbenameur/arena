@@ -62,7 +62,7 @@ from arene.perp.agent import AgentDecider
 from arene.perp.agent_round import _close_unprotected, _execute
 from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
-from arene.perp.council import CouncilConfigError, load_councils_league
+from arene.perp.council import CouncilConfigError, load_councils_league, retired_portfolios
 from arene.perp.counters import counters_for
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
@@ -607,6 +607,8 @@ class PerpWatcher:
         events = self._events()
         deciding = set()
         for name, acc in sorted(self.sim.states().items()):
+            if acc.retired:  # archived data: no more measure, no control
+                continue
             try:
                 self.sim.write_equity(name, now_ts, marks, fx)
                 if name in B.REFERENCES:
@@ -673,7 +675,10 @@ class PerpWatcher:
         (`prev_minute` < minute <= `cursor`). State is recomputed from the journal; a failure of one portfolio
         is reported and never stops the tick."""
         events = self._events()
-        owners = sorted({e["payload"]["portfolio"] for e in events if e["type"] == "agent_orders_set"})
+        retired = {n for n, a in self.sim.states().items() if a.retired}
+        owners = sorted(
+            {e["payload"]["portfolio"] for e in events if e["type"] == "agent_orders_set"} - retired
+        )
         cache: dict[str, list[Any]] = {}
         for name in owners:
             try:
@@ -981,6 +986,7 @@ class PerpWatcher:
                 for m in self.llm.players
                 if m.portfolio in states
                 and not states[m.portfolio].halted
+                and not states[m.portfolio].retired
                 and has_budget(m, events, now_ts)
                 and self.quota(events, m.portfolio, now_ts)["extra_left"] > 0
             ]
@@ -1109,7 +1115,7 @@ class PerpWatcher:
             p: t
             for p, t in triggers.items()
             if p in models
-            and not (p in states and states[p].halted)  # a council not opened yet opens in its round
+            and not (p in states and (states[p].halted or states[p].retired))  # not opened yet: opens in its round
             and has_budget(models[p], events, now_ts)
             and self.quota(events, p, now_ts)["extra_left"] > 0
         }
@@ -1394,7 +1400,7 @@ def main(argv: list[str] | None = None) -> int:
         if llm is not None:
             errors: list[str] = []
             try:  # a bad council config disables that council only; a bad league file, the councils only
-                councils = load_councils_league()
+                councils = load_councils_league().without(retired_portfolios(journal.events()))
                 llm = dataclasses.replace(llm, councils=councils)
                 errors = list(councils.errors)
             except CouncilConfigError as exc:
