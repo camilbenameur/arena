@@ -656,7 +656,7 @@ def conseils_page(data: dict[str, Any]) -> str:
         titre = f"Un conseil d’IA Claude freine un moteur de tendance : {eur(capital, decimals=0)} fictifs."
         chapo = (
             "Un moteur de suivi de tendance décide de chaque position toutes les 4 heures ; trois Claude Haiku et un Président Opus "
-            "ne peuvent que le freiner (un coefficient de 1, 0,5 ou 0 par contrat). Objectif fixé : l’ordre de 10 % par jour ; le rendement "
+            "ne peuvent que le freiner (un coefficient de 1, 0,5 ou 0 par contrat). Objectif fixé : 1 % par jour ; le rendement "
             "réalisé s’affiche à côté, face à un témoin « moteur seul » sans IA."
         ) + (
             " Les anciens conseils Haiku et Opus, retirés le 17/11, restent archivés : leur courbe est en pointillé."
@@ -1124,7 +1124,7 @@ def _operations(p: dict[str, Any]) -> str:
 
 
 def _objectif_jour(p: dict[str, Any]) -> str:
-    """« objectif : 10 %/jour · réalisé : 0,4 %/jour » : côte à côte et sans fard (Conseil Tendance et son témoin)."""
+    """« objectif : 1 %/jour · réalisé : 0,4 %/jour » : côte à côte et sans fard (Conseil Tendance et son témoin)."""
     o = p.get("objectif_jour")
     if not o:
         return ""
@@ -1146,7 +1146,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         _stat("Rendement net", f'<span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>', cls="grand", carte="cle"),
         _stat(
             "Valeur", f'<span{_crochet(p, "val")}>{eur(p["equity_ueur"])}</span>',
-            f'<small class="sous">départ {eur(p["capital_ueur"], decimals=0)}{f" · objectif {eur(2 * p['capital_ueur'], decimals=0)}" if conseil else ""}</small>',
+            f'<small class="sous">départ {eur(p["capital_ueur"], decimals=0)}{f" · objectif {eur(2 * p['capital_ueur'], decimals=0)}" if conseil and p["id"] != P.CONSEIL_TENDANCE else ""}</small>',
         ),
         _stat("Levier", levier(p["levier"]), f'<small class="sous">exposition {eur(p["expo_ueur"], decimals=0)}</small>'),
         _stat("Pire baisse", pct(-p["drawdown_max"]) if p["drawdown_max"] else f"0,00{NBSP}%"),
@@ -1166,7 +1166,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         stats.append(_stat("Coût IA", usd(p["cout_uusd"]), f'<small class="sous">{sous}</small>'))
         q = (p.get("rythme") or {}).get("quota")
         jour = f'<small class="sous">{q["played_today"]} appels aujourd’hui, {q["per_day"]} au plus</small>' if q else ""
-        stats.append(_stat("Décisions", str(p["n_rondes"]), f'<small class="sous">{pluriel(p["n_ordres"], "avec ordre", "avec ordres")}</small>{jour}'))
+        stats.append(_stat("Décisions", str(p["n_rondes"]), f'<small class="sous">{pluriel(p["n_ordres"], "ordre exécuté", "ordres exécutés")}</small>{jour}'))
     else:
         stats.append(_stat("Positions", str(len(p["positions"])), '<small class="sous">ouvertes</small>'))
         stats.append(_stat("Opérations", str(p["n_operations"])))

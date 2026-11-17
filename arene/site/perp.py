@@ -48,7 +48,7 @@ CONSEIL_OPUS = "council-perp:opus"  # le Conseil Opus : mêmes dix conseillers H
 CONSEIL_TENDANCE = "council-perp:tendance"  # le Conseil Tendance (v4) : le moteur décide, les LLM freinent
 MOTEUR = "benchmark-perp:moteur-tendance"  # son témoin : le même moteur, sans LLM
 PREFIXE_CONSEIL = "council-perp:"
-OBJECTIF_JOUR_PCT = 10  # l'objectif fixé (17/11/2026) : « l'ordre de 10 % par jour »
+OBJECTIF_JOUR_PCT = 1  # l'objectif fixé, revu le 17/11/2026 : « On va plutôt dire 1% par jour » (d'abord 10 %)
 
 NOMS = {
     "llm-perp:claude-haiku-5-5": "Claude Haiku 5.5",
@@ -84,7 +84,7 @@ MARQUE_TENDANCE = "moteur de tendance · levier ≤ 10x · les IA ne peuvent que
 
 
 def _objectif_jour(capital: int, equity: int, ouvert_ts: int, now: int) -> dict[str, Any]:
-    """L'objectif fixé (10 %/jour) face au rendement par jour réalisé, côte à côte et sans fard : le taux journalier
+    """L'objectif fixé (1 %/jour) face au rendement par jour réalisé, côte à côte et sans fard : le taux journalier
     composé depuis l'ouverture (au moins un jour compté : un portefeuille de quelques heures montre son rendement du jour)."""
     jours = max((now - ouvert_ts) / 86_400, 1.0)
     realise = (equity / capital) ** (1 / jours) - 1 if capital > 0 and equity > 0 else -1.0

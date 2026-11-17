@@ -583,7 +583,7 @@ def test_the_site_shows_the_council_its_shadow_and_each_round_line(tmp_path):
     assert "Conseil Tendance" in clean(html) and "Témoin moteur seul" in clean(html) and "council-perp-tendance.html" in html
     page = (out / "conseils" / "council-perp-tendance.html").read_text(encoding="utf-8")
     ptxt = clean(page)
-    assert "objectif : 10 %/jour · réalisé :" in ptxt
+    assert "objectif : 1 %/jour · réalisé :" in ptxt
     assert "Cibles du moteur" in ptxt and "Coefficients du conseil" in ptxt and "Ordres" in ptxt
     assert "BTC ×0,5" in ptxt and "annonce de maintenance sur le contrat" in ptxt and "Le Veilleur d’actualités" in ptxt
     assert "clôture de barre 4 h" in ptxt
