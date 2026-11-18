@@ -590,3 +590,109 @@ def test_the_site_shows_the_council_its_shadow_and_each_round_line(tmp_path):
     assert (out / "conseils" / "benchmark-perp-moteur-tendance.html").exists()
     derives = (out / "derives.html").read_text(encoding="utf-8")
     assert "moteur-tendance" not in derives and "Témoin moteur seul" not in derives  # a benchmark of the councils' league only
+
+
+# ---------------------------------------------------------------------- audit of 18/11/2026 (docs/AUDIT-CONSEILS-2026-11-18.md §4)
+def timed_runner(timeouts, **kw):
+    inner = stub_runner(**kw)
+
+    def run(cmd, stdin, env, cwd, timeout):
+        timeouts.append(timeout)
+        return inner(cmd, stdin, env, cwd, timeout)
+
+    return run
+
+
+def test_the_bar_round_starts_before_the_spot_cycle_with_its_calls_cut_at_a_deadline(tmp_path, monkeypatch):
+    """The bar closes 5 min before a spot cycle: the round plays at HH:03:30, not at HH:08, its calls ending
+    before HH:05 (10 s of margin); with under a minute left it waits. The time the process took to reach its tick
+    counts."""
+    from arene.perp import watcher as W
+
+    assert W.spot_cycle_soon(T0 + 210) and W.spot_cycle_left_s(T0 + 210) == 90
+    timeouts: list[float] = []
+    w = world(tmp_path, runner=timed_runner(timeouts))
+    w.advance(T0 + 250)
+    rep = w.w.tick(T0 + 250)  # 50 s left: the bar waits
+    assert not any(r.startswith("trend") for r in rep.rounds) and timeouts == []
+    assert "spot league cycle soon: the council v4 waits for the next tick" in rep.notes
+    (tmp_path / "b").mkdir()
+    w2 = world(tmp_path / "b", runner=timed_runner(timeouts))
+    w2.advance(T0 + 210)
+    rep = w2.w.tick(T0 + 210)
+    assert f"trend:barre:{T0}" in rep.rounds, rep.notes
+    assert len(timeouts) == 4 and all(t <= 80 for t in timeouts)  # 90 s left minus the 10 s margin
+    assert max(timeouts[:3]) <= 40 < float(COUNCIL.member_timeout_s)  # the members: half of the time left
+    assert fills(w2, NAME) and fills(w2, NAME) == fills(w2, BENCH)
+    dec = [e["payload"] for e in w2.events("agent_decision")][-1]
+    assert dec["trend"]["president_ok"] and dec["trend"]["council_off"] is None
+    # the process reached its tick 15 s after `now_ts` was read: 15 s less for the calls
+    timeouts.clear()
+    (tmp_path / "c").mkdir()
+    w3 = world(tmp_path / "c", runner=timed_runner(timeouts))
+    w3.advance(T0 + 210)
+    real = W.time.time
+    monkeypatch.setattr(W.time, "time", lambda: T0 + 225)
+    w3.w.tick(T0 + 210)
+    monkeypatch.setattr(W.time, "time", real)
+    assert len(timeouts) == 4 and all(t <= 65 for t in timeouts) and max(timeouts[:3]) <= 33
+    # 40 s late: 50 s left, under the minute: the bar waits
+    (tmp_path / "d").mkdir()
+    w4 = world(tmp_path / "d", runner=timed_runner(timeouts))
+    w4.advance(T0 + 210)
+    monkeypatch.setattr(W.time, "time", lambda: T0 + 250)
+    rep = w4.w.tick(T0 + 210)
+    monkeypatch.setattr(W.time, "time", real)
+    assert not any(r.startswith("trend") for r in rep.rounds)
+
+
+def test_a_deadline_too_close_calls_no_model_and_the_engine_plays_alone(tmp_path):
+    w = world(tmp_path)
+    calls: list[str] = []
+    import time as _t
+
+    d, eng = decider(w, runner=stub_runner(calls=calls))
+    d.deadline = _t.monotonic() + 30  # 15 s for the members: under MIN_CALL_S
+    res = decide(tmp_path, d)
+    assert calls == [] and res.extra["trend"]["council_off"] == "spot_cycle"
+    assert final_of(res) == (TC.final_targets(eng.target_bp, {}), {})
+    assert "le moteur seul" in res.decision["justification"]
+    d, _ = decider(w, runner=stub_runner(calls=calls))
+    d.deadline = _t.monotonic() + 50  # the members get 25 s, the President what is left (about 50 s)
+    res = decide(tmp_path, d)
+    assert res.extra["trend"]["president_ok"] and sorted(calls) == ["avocat_risque", "controleur", "president", "veilleur"]
+
+
+def test_a_move_in_the_positions_favor_calls_no_veto_round(tmp_path):
+    calls: list[str] = []
+    w = world(tmp_path, runner=stub_runner(calls=calls))
+    bar0(w)
+    held = fills(w, NAME)
+    assert held and all(q > 0 for q in held.values())  # the synthetic trend rises: the engine is long
+    calls.clear()
+    w.advance(T0 + 3600)
+    w.w.tick(T0 + 3600)  # a quiet hour at the base prices
+    t1 = T0 + 3600 + 300
+    w.advance(t1, {s: p * 103 // 100 for s, p in PRICES.items()})  # +3 % in the last 5 minutes: the longs' favor
+    rep = w.w.tick(t1)
+    pend = [e["payload"] for e in w.events("perp_wake_pending") if e["ts"] >= t1 - 300]
+    assert pend and all(p["move_bp"] > 0 for p in pend)  # the move was seen...
+    assert not any(r.startswith("trend:veto") for r in rep.rounds) and calls == []  # ...and calls no veto
+    w.advance(t1 + 300, dict(PRICES))
+    w.w.tick(t1 + 300)  # back to the base prices: under 2 % on the hour (a crossing is a new one)
+    assert calls == []
+    t2 = t1 + 900
+    w.advance(t2, {s: p * 97 // 100 for s, p in PRICES.items()})  # -3 % on the hour: against the longs
+    rep = w.w.tick(t2)
+    assert any(r.startswith("trend:veto") for r in rep.rounds), rep.rounds
+    trig = [e["payload"] for e in w.events("agent_decision")][-1]
+    assert trig["kind"] == "veto"
+
+
+def test_the_round_line_says_no_brake_when_the_council_decided_and_engine_alone_otherwise(tmp_path):
+    w = world(tmp_path)
+    res = decide(tmp_path, decider(w)[0])
+    assert "aucun frein, on suit le moteur" in res.decision["justification"]
+    assert "moteur seul" not in res.decision["justification"]
+    res = decide(tmp_path, decider(w, runner=stub_runner(fail=("president",)))[0])
+    assert "le moteur seul (le conseil n'a pas décidé)" in res.decision["justification"]

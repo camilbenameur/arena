@@ -494,7 +494,7 @@ def _tendance_ronde(t: Any) -> dict[str, Any] | None:
         "type": t.get("kind") if t.get("kind") in ("barre", "veto", "restauration") else None,
         "barre_ts": _entier(t.get("bar_end_ts")), "cibles_pct": pcts(t.get("targets_bp")), "finales_pct": pcts(t.get("final_bp")),
         "coefficients": coefs, "conseil_appele": bool(t.get("council_called")),
-        "conseil_absent": {"nothing_to_brake": "rien à freiner", "daily_budget": "budget du jour atteint", "llm_league_off": "IA coupées", "restauration": "fin d’un freinage"}.get(str(off)) if off else None,
+        "conseil_absent": {"nothing_to_brake": "rien à freiner", "daily_budget": "budget du jour atteint", "llm_league_off": "IA coupées", "restauration": "fin d’un freinage", "spot_cycle": "cycle de la ligue comptant trop proche"}.get(str(off)) if off else None,
         "president_ok": bool(t.get("president_ok")),
         "donnees_incompletes": sorted(court(k) for k in t.get("held") or {}) if isinstance(t.get("held"), Mapping) else [],
     }  # fmt: skip

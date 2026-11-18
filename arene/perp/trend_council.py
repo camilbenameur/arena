@@ -81,6 +81,7 @@ MAX_ACTIONS = 12  # six contracts, each a close then an open at most
 HALVES = {0: "0", 1: "0.5", 2: "1"}  # a coefficient in halves: 0, 1 or 2
 REASON_MAX = 200
 RESUME_MAX = 300
+MIN_CALL_S = 20.0  # a model call given less time (deadline before a spot cycle) is not made
 JUSTIFICATION_MAX = 600
 VALIDITY_MAX_H = 4
 KINDS = ("barre", "veto", "restauration")
@@ -605,6 +606,8 @@ class TrendDecider:
     effort: str | None = "low"
     max_budget_usd: str = "1.00"  # the ceiling of the whole round, set by the watcher
     slots: threading.Semaphore | None = None
+    # time.monotonic() by which every model call has ended (a bar round started just before a spot cycle), or None
+    deadline: float | None = None
     shrink_on_refusal = True  # read by `finish_agent_round`: an entry refused for its size is retried smaller
     max_actions = MAX_ACTIONS
 
@@ -623,6 +626,15 @@ class TrendDecider:
     def prompt_digest(self) -> str:
         return member_sha256(PRESIDENT)
 
+    def timeout_s(self, president: bool) -> float:
+        """A call's timeout: the configured one, cut by the deadline (the members, called first, get half of
+        the time left, the President all of it)."""
+        base = float(self.config.president_timeout_s if president else self.config.member_timeout_s)
+        if self.deadline is None:
+            return base
+        left = self.deadline - time.monotonic()
+        return max(0.0, min(base, left if president else left / 2))
+
     def _member(
         self, member: Member, opinions: list[dict[str, Any]] | None, ceiling: str
     ) -> VetoMemberDecider:
@@ -630,7 +642,7 @@ class TrendDecider:
         return VetoMemberDecider(
             self.config.president_model if president else self.config.model, self.config.portfolio,
             self.workdir, self.runner, max_tool_calls=self.config.member_max_tool_calls, max_turns=7,
-            timeout_s=float(self.config.president_timeout_s if president else self.config.member_timeout_s),
+            timeout_s=self.timeout_s(president),
             python=self.python, max_budget_usd=ceiling, effort=self.effort, member=member, opinions=opinions,
             schema=DECISION_SCHEMA if president else PROPOSAL_SCHEMA,
         )  # fmt: skip
@@ -660,6 +672,8 @@ class TrendDecider:
         off = self.no_veto_reason
         if self.veto and not self._worth_calling():
             off = "nothing_to_brake"
+        elif self.veto and self.timeout_s(False) < MIN_CALL_S:
+            off = "spot_cycle"  # too little time before the spot cycle: the two leagues never call models together
         elif self.veto:
             called = True
             try:
@@ -682,7 +696,7 @@ class TrendDecider:
         exposure = dict(self.exposure_bp())
         actions = plan_actions(final, exposure, self.engine.held, self.config.trend)  # type: ignore[arg-type]
         res = AgentResult(
-            decision={"actions": actions, "justification": self._justification(final, brakes, actions)},
+            decision={"actions": actions, "justification": self._justification(final, brakes, actions, decided=president is not None)},
             assistant_seen=any(r.assistant_seen for _, r in done),
             result_seen=True,  # the cost below already charges every call that used the model without a result
         )
@@ -804,6 +818,8 @@ class TrendDecider:
             )
             if opinion is not None:
                 seen.append({"membre": m.name, "role": m.key, **opinion})
+        if self.timeout_s(True) < MIN_CALL_S:
+            return records, None, "president: not called, the spot cycle is too close"
         pres = run(PRESIDENT, seen)
         try:  # the members' streams, in one file like the other councils
             streams = b"".join(
@@ -820,18 +836,21 @@ class TrendDecider:
         return records, decision, None if decision is not None else error
 
     def _justification(
-        self, final: Mapping[str, int], brakes: Mapping[str, Brake], actions: Sequence[Mapping[str, Any]]
+        self,
+        final: Mapping[str, int],
+        brakes: Mapping[str, Brake],
+        actions: Sequence[Mapping[str, Any]],
+        decided: bool = True,
     ) -> str:
         eng = ", ".join(
             f"{i.removeprefix('PF_').removesuffix('USD')} {t / 100:+.0f} %"
             for i, t in self.engine.target_bp.items()
         )
-        brk = (
-            ", ".join(
-                f"{i.removeprefix('PF_').removesuffix('USD')} x{HALVES[b.halves]}" for i, b in brakes.items()
-            )
-            or "aucun (le moteur seul)"
+        brk = ", ".join(
+            f"{i.removeprefix('PF_').removesuffix('USD')} x{HALVES[b.halves]}" for i, b in brakes.items()
         )
+        if not brk:  # « le moteur seul » only when the council did not decide (audit of 18/11/2026 §4.3)
+            brk = "aucun frein, on suit le moteur" if decided else "aucun, le moteur seul (le conseil n'a pas décidé)"
         return f"Moteur de tendance ({self.kind}) : cibles {eng}. Coefficients du conseil : {brk}. {len(actions)} ordre(s)."[
             :1200
         ]
@@ -958,10 +977,12 @@ def run_trend_round(
     slots: threading.Semaphore | None = None,
     workdir: Path = Path("/var/tmp/arene-perp-claude-empty"),
     engine: EngineTarget | None = None,
+    deadline: float | None = None,
 ) -> TrendRoundResult:
     """Plays one round of the council v4 (and, for a `barre`, of its shadow). Every outcome is journaled; an
     engine failure leaves every position as it is (fail closed). `engine`: given for the tests; otherwise a
-    `barre` computes it from the store and the other kinds read the one journaled for the current bar."""
+    `barre` computes it from the store and the other kinds read the one journaled for the current bar.
+    `deadline`: time.monotonic() by which the model calls have ended (see `TrendDecider.deadline`)."""
     assert cfg.trend is not None and kind in KINDS
     rep = TrendRoundResult()
     name, bench = cfg.portfolio, cfg.trend.benchmark
@@ -1048,7 +1069,7 @@ def run_trend_round(
     decider = TrendDecider(
         cfg, workdir, engine, now_ts, exposure, kind=kind, prior=prior, veto=kind != "restauration" and veto_allowed,
         no_veto_reason=no_veto_reason if kind != "restauration" else "restauration", runner=runner, effort=effort,
-        max_budget_usd=f"{Decimal(ceiling_uusd).scaleb(-6):.6f}", slots=slots,
+        max_budget_usd=f"{Decimal(ceiling_uusd).scaleb(-6):.6f}", slots=slots, deadline=deadline,
     )  # fmt: skip
     try:
         ctx = prepare_agent_round(

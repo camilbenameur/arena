@@ -115,6 +115,11 @@ RDV_SERVES_S = TICK_S
 SPOT_CYCLE_S = 4 * HOUR_S
 SPOT_CYCLE_OFFSET_S = 300
 SPOT_GUARD_BEFORE_S = 300
+# The council v4's bar closes (00:00, 04:00, ... UTC) fall 5 min before a spot cycle: its bar round may still start in
+# the guard when enough time is left, its model calls cut at a deadline before the spot cycle (audit of 18/11/2026,
+# docs/AUDIT-CONSEILS-2026-11-18.md §4.1: the guard had pushed every bar round to HH:08). Its other rounds wait.
+TREND_BAR_MIN_LEFT_S = 60  # less left before the spot cycle: the bar round waits for the next tick
+TREND_DEADLINE_MARGIN_S = 10  # the model calls end at least this long before the spot cycle
 # Private rounds (alerts, wake-ups asked by the model): served at the first tick allowed, within the hour.
 ALERT_PENDING_S = HOUR_S  # a crossed alert waiting longer is no longer served by a wake-up
 ASKED_EARLY_S = TICK_S // 2  # an asked wake-up is served by the tick that starts at most 2.5 min before it
@@ -129,10 +134,15 @@ CALENDAR_WARN_S = 30 * 86_400  # alert when the macro calendar ends within 30 da
 ROUND_LATE_S = 1800  # a rendez-vous is run (or resumed) by a tick at most 30 min after its time
 
 
+def spot_cycle_left_s(ts: int) -> int:
+    """Seconds until the next spot cycle (SPOT_CYCLE_S at the very time of one)."""
+    since = (ts - SPOT_CYCLE_OFFSET_S) % SPOT_CYCLE_S  # seconds since the last spot cycle
+    return SPOT_CYCLE_S - since
+
+
 def spot_cycle_soon(ts: int) -> bool:
     """True in the SPOT_GUARD_BEFORE_S before a spot cycle."""
-    since = (ts - SPOT_CYCLE_OFFSET_S) % SPOT_CYCLE_S  # seconds since the last spot cycle
-    return SPOT_CYCLE_S - since <= SPOT_GUARD_BEFORE_S
+    return spot_cycle_left_s(ts) <= SPOT_GUARD_BEFORE_S
 
 
 def spot_busy(lock: Path) -> bool:
@@ -289,6 +299,12 @@ class PerpWatcher:
     def tick(self, now_ts: int) -> TickReport:
         tick = now_ts // TICK_S * TICK_S
         rep = TickReport(tick)
+        # `now_ts` on the monotonic clock (the deadline of the council v4's calls). `now_ts` is read when the process
+        # starts: the time spent since (imports, configs) is the lag, counted when it is plausible (under a tick;
+        # a test's synthetic clock is not)
+        lag = time.time() - now_ts
+        self._tick_lag_s = lag if 0 <= lag < TICK_S else 0.0
+        self._tick_t0 = time.monotonic() - self._tick_lag_s
         self._deferred: dict[str, Any] | None = None
         self._deferred_trend = None
         with _try_lock(self.var / "watcher.lock") as mine:
@@ -477,13 +493,22 @@ class PerpWatcher:
             kind = "veto" if trigger is not None else None
         if kind is None:
             return
-        if spot_cycle_soon(now_ts) or spot_busy(self.spot_paths.lock):
-            rep.notes.append("spot league cycle soon or running: the council v4 waits for the next tick")
+        deadline_ts: int | None = None
+        if spot_busy(self.spot_paths.lock):
+            rep.notes.append("spot league cycle running: the council v4 waits for the next tick")
             return
+        if spot_cycle_soon(now_ts):
+            cycle_ts = now_ts + spot_cycle_left_s(now_ts)
+            left = cycle_ts - now_ts - (time.monotonic() - self._tick_t0)  # from now, not from `now_ts`
+            if kind == "veto" or (kind == "barre" and left < TREND_BAR_MIN_LEFT_S):
+                rep.notes.append("spot league cycle soon: the council v4 waits for the next tick")
+                return
+            deadline_ts = cycle_ts - TREND_DEADLINE_MARGIN_S  # a restoration calls no model
         blocked = self._kill_and_dormance(now_ts, view, events, rep)
         self._deferred_trend = {
             "cfg": cfg, "kind": kind, "trigger": trigger, "now_ts": now_ts, "view": view, "blocked": blocked,
             "veto_allowed": veto_allowed and kind != "restauration", "no_veto_reason": why,
+            "deadline_ts": deadline_ts,
         }  # fmt: skip
 
     def _trend_llm_ok(
@@ -528,11 +553,25 @@ class PerpWatcher:
             if info:
                 return {"kind": "calendar" if due else "news", **info}
         if self.llm.wakeups:
+            # A veto can only brake: only a move against the side held (flat: against the engine's target) calls one
+            # (audit of 18/11/2026 §4.2: two vetos out of three had followed a move in the position's favor)
+            engine = TC.latest_engine(events, name, TC.bar_close(now_ts))
+            held = st.positions if st is not None else {}
+
+            def side(inst: str) -> int:
+                q = held[inst].qty if inst in held else (engine.target_bp.get(inst, 0) if engine is not None else 0)
+                return (q > 0) - (q < 0)
+
+            def against(inst: str, move: int | None) -> bool:
+                return move is not None and side(inst) * move < 0
+
             pend = [
                 p for p in events
                 if p["type"] == "perp_wake_pending" and now_ts - p["ts"] < WAKE_PENDING_S
                 and (last is None or p["ts"] > last)
-                and abs(self._move_bp(p["payload"]["instrument"], cursor) or 0) >= WAKE_FADE_BP
+                and against(p["payload"]["instrument"], p["payload"]["move_bp"])
+                and against(p["payload"]["instrument"], m := self._move_bp(p["payload"]["instrument"], cursor))
+                and abs(m or 0) >= WAKE_FADE_BP
             ]  # fmt: skip
             if pend:
                 best = max(pend, key=lambda p: abs(p["payload"]["move_bp"]))
@@ -551,9 +590,11 @@ class PerpWatcher:
         veto_allowed: bool,
         no_veto_reason: str | None,
         rep: TickReport,
+        deadline_ts: int | None = None,
     ) -> None:
         """One round of the council v4, after the collector's lock: the engine, the shadow, the veto council, the
-        orders. Decisions are executed on a market view read again after the calls, as in `_llm_phase`."""
+        orders. Decisions are executed on a market view read again after the calls, as in `_llm_phase`.
+        `deadline_ts`: the model calls end by then (a bar round started just before a spot cycle)."""
         assert self.llm is not None
         rep.rounds.append(f"trend:{kind}:{TC.bar_close(now_ts)}")
         t0 = time.monotonic()
@@ -592,6 +633,7 @@ class PerpWatcher:
                 no_veto_reason=no_veto_reason,
                 runner=self.trend_runner,
                 slots=slots,
+                deadline=None if deadline_ts is None else self._tick_t0 + (deadline_ts - now_ts),
             )
         except Exception as exc:  # noqa: BLE001 (positions stay as they are; the next tick tries again)
             message = f"trend round {kind}: {type(exc).__name__}: {exc}"[:500]
