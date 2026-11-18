@@ -122,7 +122,9 @@ def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bo
         if robots and ts == T0 + 3 * 3_600:  # une mèche : le chasseur entre, le témoin ne la voit pas à temps
             iid = "c1" * 32
             g.add("hunter_signal", {"portfolio": ROBOT, "instrument": "PF_XBTUSD", "side": "buy", "window_min": 15, "move_bp": -520,
-                                    "price_uusd": prix("BTC-PERP", ts), "ts": ts, "intent_id": iid, "rule": "chocs_fade-mecheS"}, ts)  # fmt: skip
+                                    "price_uusd": prix("BTC-PERP", ts), "ts": ts, "first_seen_ts": ts, "intent_id": iid, "rule": "chocs_fade-mecheS"}, ts)  # fmt: skip
+            g.add("hunter_signal", {"portfolio": ROBOT, "instrument": "PF_XBTUSD", "side": "buy", "window_min": 15, "move_bp": -520,
+                                    "price_uusd": prix("BTC-PERP", ts), "ts": ts + 5, "first_seen_ts": ts, "intent_id": "c4" * 32, "rule": "chocs_fade-mecheS"}, ts)  # fmt: skip  # une nouvelle tentative : le même choc
             g.fill(ROBOT, "BTC-PERP", qty_pour(2_000_000_000, "BTC-PERP", ts), ts, "intent", iid)
             g.add("hunter_signal", {"portfolio": ROBOT_5MIN, "instrument": "PF_XBTUSD", "side": "buy", "window_min": 30, "move_bp": -480,
                                     "price_uusd": prix("BTC-PERP", ts), "ts": ts, "intent_id": "c2" * 32, "rule": "chocs_fade-mecheS"}, ts)  # fmt: skip

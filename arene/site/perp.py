@@ -934,7 +934,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
     funding: dict[str, list[int]] = {}
     fills: dict[str, list[dict[str, Any]]] = {}
     statut: dict[str, dict[str, Any]] = {}
-    chocs: dict[str, int] = {}  # le Chasseur de mèches : les chocs vus par portefeuille ...
+    chocs: dict[str, set[tuple[str, int]]] = {}  # le Chasseur de mèches : les chocs vus par portefeuille (contrat, première vue) ...
     signaux: dict[str, str] = {}  # ... et leurs ordres voulus (identifiant -> portefeuille), pour compter les trades
     ordres: set[str] = set()
     retires: dict[str, dict[str, Any]] = {}  # portefeuilles archivés (portfolio_retired) : leurs données sont figées
@@ -947,7 +947,9 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         if t == "funding":
             funding.setdefault(pf, []).append(int(p.get("amount_ueur") or 0))
         elif t == "hunter_signal":
-            chocs[pf] = chocs.get(pf, 0) + 1
+            # un choc = un épisode (contrat, première vue) : les nouvelles tentatives après un refus n'en ajoutent pas
+            vue = int(p.get("first_seen_ts", p.get("ts", e["ts"])))
+            chocs.setdefault(pf, set()).add((str(p.get("instrument")), vue))
             signaux[str(p.get("intent_id"))] = pf
         elif t == "perp_fill":
             ordres.add(str(p["order_id"]).split(":")[0])  # un ordre réduit a le suffixe « :s1 » de l'ordre voulu
@@ -1009,7 +1011,7 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             p_out["marque"] = MARQUE_TENDANCE
         if kind == "robot":
             p_out["marque"], p_out["sous_titre"], p_out["regle"] = MARQUE_ROBOT, SOUS_TITRES_ROBOT.get(pf), REGLE_ROBOT
-            p_out["n_chocs"] = chocs.get(pf, 0)
+            p_out["n_chocs"] = len(chocs.get(pf, ()))
             p_out["n_trades"] = sum(1 for iid, owner in signaux.items() if owner == pf and iid in ordres)
         if kind in ("llm", "conseil"):
             ds = _decisions_llm(events, pf)  # toutes : les totaux portent sur le journal entier

@@ -16,7 +16,9 @@ Two portfolios, one process, one price history:
 Execution is the standard path of the other players: `parse_decision`, then `run_intents(..., shrink=True)`, on a
 `PerpSimulator` on the league's journal. The simulator's own lock serialises the writes; the hunter never takes the
 watcher's lock (a watcher tick blocked by a model call must never delay an entry). Order ids are deterministic
-(portfolio, contract, time of the shock): a decision replayed after a crash never goes twice.
+(portfolio, contract, time of the reading that showed the shock). The real protection against a double entry is the
+position held (`held`, read back from the ledger before each entry) and the lock of the single process
+(`var-perp/hunter.lock`); the ids make a replay of the very same decision harmless, no more.
 
 The state (position, last entry) is read back from the journal and the ledger at start, so a restart forgets nothing
 but the price history, which is primed from the one-minute candles. The watcher stays master of the minutes (stops,
@@ -27,12 +29,13 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import fcntl
 import hashlib
 import math
+import os
 import sys
 import time
 import tomllib
-from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -41,6 +44,7 @@ from typing import Any
 
 from arene.journal import Journal
 from arene.ops import dormance, killswitch
+from arene.ops.notify import Notifier
 from arene.paths import REPO, Paths
 from arene.perp.agent import parse_decision
 from arene.perp.agent_round import run_intents
@@ -65,6 +69,14 @@ SILENT_ALERT_S = 600  # no reading for this long: an alert (at most one per 6 ho
 ALERT_EVERY_S = 6 * 3600
 ERROR_BACKOFF_S = 30
 EXIT_RETRY_S = 30  # a planned close that did not go through is tried again after this long
+MAX_READ_GAP_S = 30  # no entry when the previous successful reading is older than this (nor on the first reading)
+RETRY_WINDOW_S = 120  # an entry refused may be tried again only this long after the shock was first seen
+SHRINK_TRIES_HUNTER = 2  # a refused entry is retried smaller twice at most (each try is a few ms of the ledger)
+HUNTER_SAFETY_HOLD_S = 3 * 3600  # the watcher closes a hunter position held longer than this (the hunter leaves at 60 min)
+LAST_MAX_GAP_BP = 100  # the last traded price counts only within this of the middle of bid and ask
+RESTORE_TRIES = 10  # the journal is read again this many times at start before giving up
+RESTORE_WAIT_S = 5
+LOCK_NAME = "hunter.lock"
 
 
 class HunterConfigError(ValueError):
@@ -306,23 +318,30 @@ def decide(
     last_entry: Mapping[str, int],
     not_before: Mapping[str, int] | None = None,
     *,
-    slack_s: int = 0,
+    slot: Callable[[int], int] | None = None,
 ) -> list[Decision]:
     """What the rule does at `now_ts`. `held`: contract -> time the position was opened; `last_entry`: contract ->
     time of its last entry (the lock runs from it: entry + hold + lock). `prices`: the tradable contracts' current
     price. A position whose hold is over is closed (exits come first); a free, unlocked contract with a shock is
-    entered. `slack_s`: the witness, that decides on a grid, takes the grid's jitter off the hold and the lock."""
+    entered. `slot`: the witness, that decides on a grid, reasons in slices (time -> slice number): it leaves
+    `hold` slices after the slice of its entry and is locked until `hold + lock` slices after it, no tolerance
+    in seconds."""
     exits: list[Decision] = []
     enters: list[Decision] = []
+    hold_n = -(-cfg.hold_s // cfg.witness_period_s)
+    lock_n = hold_n + -(-cfg.lock_s // cfg.witness_period_s)
     for inst in cfg.instruments:
         if inst in held:
-            if now_ts >= held[inst] + cfg.hold_s - slack_s:
+            due = slot(now_ts) >= slot(held[inst]) + hold_n if slot else now_ts >= held[inst] + cfg.hold_s
+            if due:
                 exits.append(Decision("exit", inst, opened_ts=held[inst]))
             continue  # one position at a time: a shock is ignored while one is held
         if inst not in prices:
             continue
         le = last_entry.get(inst)
-        if le is not None and now_ts < le + cfg.hold_s + cfg.lock_s - slack_s:
+        if le is not None and (
+            slot(now_ts) < slot(le) + lock_n if slot else now_ts < le + cfg.hold_s + cfg.lock_s
+        ):
             continue
         if now_ts < (not_before or {}).get(inst, 0):
             continue
@@ -346,6 +365,10 @@ class Player:
     not_before: dict[str, int] = field(default_factory=dict)
     done: set[tuple[str, int]] = field(default_factory=set)  # (contract, time of the shock) already played
     exit_retry: dict[str, int] = field(default_factory=dict)  # contract -> not before: a failing exit is not spammed
+    # contract -> (time the shock was first seen, whether an entry is allowed on this episode): the shock of an
+    # episode is one shock however many readings show it; an episode that began on a reading where no entry was
+    # allowed (the first after a start, or after a gap) is never entered
+    episodes: dict[str, tuple[int, bool]] = field(default_factory=dict)
     refreshed: int = 0
     last_slot: int | None = None
     halted: bool = False
@@ -371,7 +394,15 @@ class Hunter:
         *,
         spot_paths: Paths | None = None,
         sim: PerpSimulator | None = None,
+        notifier: Notifier | None = None,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
+        self.clock = clock
+        self._sleep = sleep
+        self.notifier = notifier
+        self._prev_read_ts: int | None = None  # the previous successful reading (None: the first since the start)
+        self._read_clock = self.clock()  # the clock when the reading in progress came back
         self.var = var
         self.cfg = cfg
         self.specs = dict(specs)
@@ -417,7 +448,7 @@ class Hunter:
         self._restore(now_ts)
         self.stats = Stats(now_ts)
         self._next_heartbeat = now_ts + self.cfg.heartbeat_s
-        self._last_silent_alert = now_ts
+        self._last_silent_alert = now_ts - ALERT_EVERY_S  # blind from the start: the first alert is due at 10 minutes
         for p in self.players:  # a witness started mid-slice waits for the next one
             p.last_slot = self._slot(now_ts) if p.witness else None
         self.prime(now_ts)
@@ -427,19 +458,33 @@ class Hunter:
         ledger. (The lock must survive a restart: it is entry + 120 minutes, whatever happened to the position.)"""
         signals: dict[str, tuple[str, str, int]] = {}  # intent id -> (portfolio, contract, side)
         names = {p.name: p for p in self.players}
-        events = self.sim.journal.events()
+        events = self._read_journal()
         self._opened_ts = min((e["ts"] for e in events if e["type"] == "portfolio_opened"), default=now_ts)
         for e in events:
             t, pl = e["type"], e["payload"]
             if t == "hunter_signal" and pl.get("portfolio") in names:
                 signals[pl["intent_id"]] = (pl["portfolio"], pl["instrument"], 1 if pl["side"] == "buy" else -1)
                 names[pl["portfolio"]].done.add((pl["instrument"], int(pl["ts"])))
+                names[pl["portfolio"]].episodes[pl["instrument"]] = (int(pl.get("first_seen_ts", pl["ts"])), True)
             elif t == "perp_fill" and pl.get("reason") == "intent" and pl.get("portfolio") in names:
                 sig = signals.get(str(pl["order_id"]).split(":")[0])
                 if sig and sig[0] == pl["portfolio"] and sig[1] == pl["instrument"] and pl["qty"] * sig[2] > 0:
                     names[pl["portfolio"]].last_entry[pl["instrument"]] = e["ts"]
         for p in self.players:
             self._refresh(p, now_ts)
+
+    def _read_journal(self) -> list[dict[str, Any]]:
+        """The whole journal; a read error (a write in progress, a busy disk) is tried again, then raised (the unit
+        restarts the process: starting without the state would play an entry twice)."""
+        for attempt in range(RESTORE_TRIES):
+            try:
+                return self.sim.journal.events()
+            except Exception as exc:
+                print(f"hunter: journal read failed ({attempt + 1}/{RESTORE_TRIES}): {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
+                if attempt + 1 == RESTORE_TRIES:
+                    raise
+                self._sleep(RESTORE_WAIT_S)
+        raise AssertionError("unreachable")
 
     def prime(self, now_ts: int) -> None:
         """The one-minute `trade` candles of the last `history_min` minutes: a restart does not blind the hunter for
@@ -469,12 +514,16 @@ class Hunter:
 
     @staticmethod
     def price_of(t: PerpTicker) -> int:
-        """The price of the rule: the last traded price when there is one, else the middle of bid and ask."""
-        return t.last_uusd if t.last_uusd else (t.bid_uusd + t.ask_uusd) // 2
+        """The price of the rule: the last traded price when there is one and it is within 100 bp of the middle of
+        bid and ask (a stale or odd last trade is no price), else the middle."""
+        mid = (t.bid_uusd + t.ask_uusd) // 2
+        if t.last_uusd and abs(t.last_uusd - mid) * BP <= LAST_MAX_GAP_BP * mid:
+            return t.last_uusd
+        return mid
 
     def step(self, now_ts: int | None = None) -> None:
         """One reading and what it decides. Never raises on a network or data problem: counted, tried again."""
-        ts = int(time.time()) if now_ts is None else now_ts
+        ts = int(self.clock()) if now_ts is None else now_ts
         try:
             tickers, problems = self.client.tickers(self.symbols)
         except Exception as exc:  # noqa: BLE001 (a network error never stops the loop)
@@ -490,13 +539,17 @@ class Hunter:
             self._silent_check(ts)
             return
         now_ts = ts
+        self._read_clock = self.clock()
         prices = {s: self.price_of(t) for s, t in usable.items()}
         self.stats.reads_ok += 1
         self.stats.last_read_ts = now_ts
+        # no entry on the first reading after the start, nor when the previous good one is old: the shock may be old
+        entries_ok = self._prev_read_ts is not None and now_ts - self._prev_read_ts <= MAX_READ_GAP_S
+        self._prev_read_ts = now_ts
         # the decision of a reading is taken BEFORE the reading enters the history: no reference is the reading itself
         for p in self.players:
             try:
-                self._play(p, now_ts, usable, prices)
+                self._play(p, now_ts, usable, prices, entries_ok)
             except Exception as exc:  # noqa: BLE001 (one portfolio's failure never stops the other, nor the loop)
                 self.stats.errors += 1
                 print(f"hunter: {p.name}: {type(exc).__name__}: {exc}"[:400], file=sys.stderr)
@@ -510,20 +563,42 @@ class Hunter:
         p.halted = acc.halted or acc.retired
         p.refreshed = now_ts
 
-    def _play(self, p: Player, now_ts: int, tickers: Mapping[str, PerpTicker], prices: Mapping[str, int]) -> None:
-        slack = 0
+    def _play(
+        self,
+        p: Player,
+        now_ts: int,
+        tickers: Mapping[str, PerpTicker],
+        prices: Mapping[str, int],
+        entries_ok: bool = True,
+    ) -> None:
+        slot = None
         if p.witness:  # decides on a grid, once per slice
             slot = self._slot(now_ts)
             if p.last_slot is not None and slot <= p.last_slot:
                 return
-            p.last_slot = slot
-            slack = self.cfg.poll_s
             self._refresh(p, now_ts)
+        self._decide_and_act(p, now_ts, tickers, prices, entries_ok)
+        if slot is not None:
+            p.last_slot = slot  # only a slice that went through is consumed: an exception leaves it for the next reading
+
+    def _decide_and_act(
+        self,
+        p: Player,
+        now_ts: int,
+        tickers: Mapping[str, PerpTicker],
+        prices: Mapping[str, int],
+        entries_ok: bool,
+    ) -> None:
+        grid = self._slot if p.witness else None
         if p.halted and not p.witness:
             self._refresh(p, now_ts)  # a halted portfolio plays no more; resumed by hand, it is noticed
             if p.halted:
                 return
-        cands = decide(self.cfg, self.hist, now_ts, prices, p.held, p.last_entry, p.not_before, slack_s=slack)
+        for inst in list(p.episodes):  # an episode ends on the first reading that no longer shows the shock
+            px = prices.get(inst)
+            if px is None or detect_shock(self.hist, inst, now_ts, px, self.cfg) is None:
+                del p.episodes[inst]
+        cands = decide(self.cfg, self.hist, now_ts, prices, p.held, p.last_entry, p.not_before, slot=grid)
         if not cands and now_ts - p.refreshed < REFRESH_S:
             return
         if not p.witness:
@@ -532,7 +607,7 @@ class Hunter:
             return
         if not cands:
             return
-        cands = decide(self.cfg, self.hist, now_ts, prices, p.held, p.last_entry, p.not_before, slack_s=slack)
+        cands = decide(self.cfg, self.hist, now_ts, prices, p.held, p.last_entry, p.not_before, slot=grid)
         for d in cands:
             if d.kind == "exit":
                 if now_ts < p.exit_retry.get(d.instrument, 0):
@@ -540,8 +615,14 @@ class Hunter:
                 p.exit_retry[d.instrument] = now_ts + EXIT_RETRY_S
                 self.exit_position(p, d, now_ts, tickers)
             elif d.shock is not None:
-                self.stats.shocks += 1
-                self.enter(p, d.shock, now_ts, tickers)
+                episode = p.episodes.get(d.instrument)
+                if episode is None:  # a new shock (the only one counted)
+                    episode = p.episodes[d.instrument] = (now_ts, entries_ok)
+                    self.stats.shocks += 1
+                first_seen, allowed = episode
+                if not allowed or now_ts - first_seen > RETRY_WINDOW_S:
+                    continue  # too late: the bench loses from 5 minutes of delay
+                self.enter(p, d.shock, now_ts, tickers, first_seen_ts=first_seen)
 
     # ------------------------------------------------------------------ the market view
 
@@ -591,9 +672,35 @@ class Hunter:
 
     # ------------------------------------------------------------------ orders
 
-    def enter(self, p: Player, shock: Shock, now_ts: int, tickers: Mapping[str, PerpTicker]) -> bool:
-        """The signal is journaled (`hunter_signal`) before the order, then the standard path. Returns True when the
-        entry was filled. The same (portfolio, contract, time of the shock) is never played twice."""
+    def _entry_fill_ts(self, p: Player, intent_id: str, side: int) -> int | None:
+        """The time of the entry fill of this intent (whatever happened to the position since), None without one."""
+        for e in self._read_journal():
+            pl = e["payload"]
+            if (
+                e["type"] == "perp_fill"
+                and pl.get("reason") == "intent"
+                and pl.get("portfolio") == p.name
+                and str(pl["order_id"]).split(":")[0] == intent_id
+                and pl["qty"] * side > 0
+            ):
+                return int(e["ts"])
+        return None
+
+    def enter(
+        self,
+        p: Player,
+        shock: Shock,
+        now_ts: int,
+        tickers: Mapping[str, PerpTicker],
+        *,
+        first_seen_ts: int | None = None,
+    ) -> bool:
+        """The contract's ticker is read again just before the order, and the order is stamped with the real time:
+        the paper fill reflects the latency. The signal is journaled (`hunter_signal`) before the order, then the
+        standard path, then `hunter_entry` (latency since the reading that saw the shock, filled or refused).
+        Returns True when the entry was filled. Not idempotent by itself: `done` only stops this process from playing the
+        same (portfolio, contract, reading) twice; what stops a second position is `held` (the caller does not
+        enter a contract that is held) and the lock of the single process."""
         key = (shock.instrument, shock.ts)
         if key in p.done:
             return False
@@ -610,38 +717,71 @@ class Hunter:
             ],
             "justification": f"{RULE} : choc de {shock.move_bp} bp en {shock.window_min} min",
         }
+        try:  # the fresh ticker of the contract: what the order meets is the market now, not that of the reading
+            fresh, _problems = self.client.tickers([shock.instrument])
+            t = fresh.get(shock.instrument)
+        except Exception as exc:  # noqa: BLE001
+            t = None
+            print(f"hunter: fresh ticker failed: {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
+        if t is None or t.suspended or t.bid_uusd <= 0 or t.ask_uusd < t.bid_uusd:
+            self.stats.errors += 1  # no order at a price that was not seen again: tried again if still in time
+            p.not_before[shock.instrument] = now_ts + self.cfg.retry_after_refusal_s
+            return False
+        order_clock = self.clock()
+        order_ts = int(order_clock)
         _parsed, error, intents = parse_decision(
-            decision, p.name, shock.ts, now_ts, max_size_pct=self.cfg.max_size_pct, max_actions=1
+            decision, p.name, shock.ts, order_ts, max_size_pct=self.cfg.max_size_pct, max_actions=1
         )
         if error is not None or len(intents) != 1:
             raise ValueError(error or "the entry was not understood")
         p.done.add(key)
+        side = "buy" if shock.side > 0 else "sell"
+        first = shock.ts if first_seen_ts is None else first_seen_ts
         self.sim.append_event(
             "hunter_signal",
             {
                 "portfolio": p.name,
                 "instrument": shock.instrument,
-                "side": "buy" if shock.side > 0 else "sell",
+                "side": side,
                 "window_min": shock.window_min,
                 "move_bp": shock.move_bp,
                 "price_uusd": shock.price_uusd,
                 "ts": shock.ts,
+                "read_ts": shock.ts,
+                "first_seen_ts": first,
                 "intent_id": intents[0].intent_id,
                 "rule": RULE,
             },
-            now_ts,
+            order_ts,
         )
-        view = self.view(tickers, now_ts)
-        run_intents(
-            self.sim, p.name, intents, view, self.specs, self.cfg.policy, now_ts, lambda: self._blocked(now_ts),
-            shrink=True,
-        )  # fmt: skip
-        self._refresh(p, now_ts)
-        pos_ts = p.held.get(shock.instrument)
-        if pos_ts is None:  # refused (a verdict says why): tried again later if the shock still holds
+        view = self.view({**tickers, shock.instrument: t}, order_ts)
+        status = "error"
+        try:
+            run_intents(
+                self.sim, p.name, intents, view, self.specs, self.cfg.policy, order_ts,
+                lambda: self._blocked(order_ts), shrink=True, max_shrink_tries=SHRINK_TRIES_HUNTER,
+            )  # fmt: skip
+            fill_ts = self._entry_fill_ts(p, intents[0].intent_id, shock.side)
+            status = "filled" if fill_ts is not None else "refused"
+        finally:
+            self.sim.append_event(
+                "hunter_entry",
+                {
+                    "portfolio": p.name,
+                    "instrument": shock.instrument,
+                    "intent_id": intents[0].intent_id,
+                    "read_ts": shock.ts,
+                    "latency_ms": max(0, round((order_clock - self._read_clock) * 1000)),
+                    "status": status,
+                },
+                order_ts,
+            )
+        self._refresh(p, order_ts)
+        if fill_ts is None:  # refused (a verdict says why): tried again later if the shock still holds and is in time
             p.not_before[shock.instrument] = now_ts + self.cfg.retry_after_refusal_s
             return False
-        p.last_entry[shock.instrument] = pos_ts
+        p.last_entry[shock.instrument] = fill_ts  # the lock stands even if the position is already closed
+        p.episodes.pop(shock.instrument, None)
         self.stats.orders += 1
         return True
 
@@ -680,13 +820,19 @@ class Hunter:
         ref = self.stats.last_read_ts or self.stats.since_ts
         if now_ts - ref >= SILENT_ALERT_S and now_ts - self._last_silent_alert >= ALERT_EVERY_S:
             self._last_silent_alert = now_ts
+            message = f"the hunter has read no price for {now_ts - ref} s"
+            if self.notifier is not None:  # like the watcher's alerts: sent, not only journaled
+                try:
+                    self.notifier.send("action", "perp_hunter_blind", message)
+                except Exception as exc:  # noqa: BLE001 (the notifier never raises, but nothing may stop the loop)
+                    print(f"hunter: alert not sent: {type(exc).__name__}: {exc}"[:300], file=sys.stderr)
             try:
                 self.sim.append_event(
                     "alert",
                     {
                         "level": "action",
                         "code": "perp_hunter_blind",
-                        "message": f"the hunter has read no price for {now_ts - ref} s",
+                        "message": message,
                     },
                     now_ts,
                 )
@@ -717,7 +863,7 @@ class Hunter:
 
     def run(self, *, sleep: Callable[[float], None] = time.sleep, max_steps: int | None = None) -> None:
         """The loop: one reading every `poll_s` seconds, for ever. A failure is printed and the loop goes on."""
-        self.start(int(time.time()))
+        self.start(int(self.clock()))
         n = 0
         while max_steps is None or n < max_steps:
             n += 1
@@ -733,6 +879,19 @@ class Hunter:
 
 
 # ---------------------------------------------------------------------- command line
+
+
+def acquire_lock(var: Path) -> int | None:
+    """A non-blocking exclusive `flock` on `var/hunter.lock`: the open descriptor (held until the process ends), or
+    None when another process holds it."""
+    var.mkdir(parents=True, exist_ok=True)
+    fd = os.open(var / LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -754,11 +913,19 @@ def main(argv: list[str] | None = None) -> int:
     if not cfg.enabled:
         print("the hunter is disabled (enabled = false)", file=sys.stderr)
         return 0
+    lock_fd = acquire_lock(var)  # one process only: two would play every entry twice
+    if lock_fd is None:
+        print(f"another hunter already runs ({var / LOCK_NAME} is locked)", file=sys.stderr)
+        return 2
     from arene.perp.watcher import load_specs  # here: the watcher imports this module
 
     client = KrakenFuturesClient()
     specs = load_specs(var, list(cfg.instruments), int(time.time()), client)
-    Hunter(var, cfg, specs, client, spot_paths=spot).run()
+    notifier = Notifier(None, spot.secrets)  # the hunter journals its alerts itself
+    try:
+        Hunter(var, cfg, specs, client, spot_paths=spot, notifier=notifier).run()
+    finally:
+        os.close(lock_fd)
     return 0
 
 

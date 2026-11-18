@@ -67,8 +67,8 @@ from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
 from arene.perp.council import CouncilConfig, CouncilConfigError, load_councils_league, retired_portfolios
 from arene.perp.counters import counters_for
+from arene.perp.hunter import HUNTER_SAFETY_HOLD_S, HunterConfig, HunterConfigError, load_hunter_config
 from arene.perp.hunter import PORTFOLIO_KIND as HUNTER_KIND
-from arene.perp.hunter import HunterConfig, HunterConfigError, load_hunter_config
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
 from arene.perp.llm_league import (
@@ -902,6 +902,10 @@ class PerpWatcher:
             self.sim.close_expired(
                 now_ts, quotes, fx, portfolios=deciding - self._trend_names() - self._hunter_names()
             )
+            # the hunter leaves at 60 minutes by itself; this is the safety net if its process is down
+            hunters = deciding & self._hunter_names()
+            if hunters:
+                self.sim.close_expired(now_ts, quotes, fx, portfolios=hunters, max_holding_s=HUNTER_SAFETY_HOLD_S)
         except PerpLedgerError as exc:
             rep.problems.append(f"max holding: {exc}")
 

@@ -547,12 +547,13 @@ def run_intents(
     *,
     execute: bool = True,
     shrink: bool = False,
+    max_shrink_tries: int = SHRINK_TRIES,
 ) -> None:
     """Judges each intent by riskd (`perp_verdict`) on the state at that moment, then executes the approved ones
     (`perp_execution`). One path for the agents and for the shadow benchmark of the council v4.
 
     `shrink`: an entry refused only for its size (`SHRINKABLE`) is retried with 3/4 of the size, at most
-    `SHRINK_TRIES` times, instead of being dropped; each try has its own verdict (`retry_of`, `shrink_step`)."""
+    `max_shrink_tries` times (`SHRINK_TRIES` by default), instead of being dropped; each try has its own verdict (`retry_of`, `shrink_step`)."""
     quotes = {s: (m.bid_uusd, m.ask_uusd) for s, m in view.instruments.items()}
     marks = {s: m.mark_uusd for s, m in view.instruments.items()}
     fx = (view.fx_bid, view.fx_ask)
@@ -612,7 +613,7 @@ def run_intents(
                 or not attempt.action.startswith("open")
                 or not v.reasons
                 or not set(v.reasons) <= SHRINKABLE
-                or step >= SHRINK_TRIES
+                or step >= max_shrink_tries
                 or not attempt.size_bp
             ):
                 break

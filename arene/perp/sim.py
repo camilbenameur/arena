@@ -35,7 +35,7 @@ from arene.perp.ledger import (
     qty_seconds,
     unrealized_ueur,
 )
-from arene.perp.margin import INITIAL, MAINTENANCE, leveraged, margin_ueur
+from arene.perp.margin import HUNTER_NAMES, INITIAL, MAINTENANCE, leveraged, margin_ueur
 from arene.perp.types import MarginLevel
 from arene.types import ceil_div
 
@@ -474,9 +474,17 @@ class PerpSimulator:
             c = candles[inst]
             tick = self._tick(inst)
             slip = self.params.slippage_bp + extra.get(inst, 0)
-            # Stop: pessimistic, it also applies to the minute in which the position or the stop appeared.
+            # Stop: pessimistic, it also applies to the minute in which the position or the stop appeared. Except for
+            # the hunter's portfolios (HUNTER_NAMES): they enter on a wick, and the candle of the entry minute holds
+            # the move that was being played against, so their stop only counts the minutes that start after it.
             armed = pos.stop_armed_ts
-            if pos.stop_uusd is not None and armed is not None and armed < minute_ts + MINUTE_S:
+            if armed is None:
+                stop_live = False
+            elif name in HUNTER_NAMES:
+                stop_live = max(armed, pos.opened_ts) <= minute_ts
+            else:
+                stop_live = armed < minute_ts + MINUTE_S
+            if pos.stop_uusd is not None and stop_live:
                 s = pos.stop_uusd
                 price: int | None = None
                 if pos.qty > 0 and c.mark[2] <= s:
@@ -570,16 +578,18 @@ class PerpSimulator:
         quotes: Mapping[str, tuple[int, int]],
         fx: tuple[int, int],
         portfolios: set[str] | None = None,
+        max_holding_s: int | None = None,
     ) -> list[dict]:
-        """Closes, at market, every position held for `max_holding_s` or more (reason max_holding), for the
-        given portfolios (all when None)."""
+        """Closes, at market, every position held for `max_holding_s` (the parameter, else the simulation's) or
+        more (reason max_holding), for the given portfolios (all when None)."""
+        limit = self.params.max_holding_s if max_holding_s is None else max_holding_s
         out = []
         with self._locked():
             for name, acc in sorted(self._book.states.items()):
                 if portfolios is not None and name not in portfolios:
                     continue
                 for inst, pos in sorted(acc.positions.items()):
-                    if ts - pos.opened_ts < self.params.max_holding_s or inst not in quotes:
+                    if ts - pos.opened_ts < limit or inst not in quotes:
                         continue
                     oid = f"max_holding:{name}:{inst}:{pos.open_seq}"
                     fill = self.market_order(oid, name, inst, -pos.qty, quotes[inst], fx, ts, "max_holding")

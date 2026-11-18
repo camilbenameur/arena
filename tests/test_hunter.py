@@ -46,9 +46,12 @@ class FakeClient:
         self.calls = 0
         self.fx_calls = 0
         self.candle_calls = 0
+        self.on_fresh: Callable[[], None] | None = None
 
     def tickers(self, symbols):
         self.calls += 1
+        if len(symbols) == 1 and self.on_fresh is not None:  # the fresh read just before an entry
+            self.on_fresh()
         if self.fail:
             raise OSError("network down")
         out = {}
@@ -78,12 +81,12 @@ class FakeClient:
 def make(tmp_path: Path, price: PriceFn = flat, cfg: H.HunterConfig = CONFIG) -> tuple[World, FakeClient, H.Hunter]:
     w = World(tmp_path, trend_days=0)
     client = FakeClient(price)
-    h = H.Hunter(w.var, cfg, SPECS, client, spot_paths=w.spot)
+    h = H.Hunter(w.var, cfg, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now))
     h.start(START)
     return w, client, h
 
 
-def drive(h: H.Hunter, client: FakeClient, start: int, end: int, every: int = 60) -> None:
+def drive(h: H.Hunter, client: FakeClient, start: int, end: int, every: int = 30) -> None:
     for t in range(start, end + 1, every):
         client.now = t
         h.step(t)
@@ -143,9 +146,17 @@ def test_a_window_without_a_reference_price_does_not_count():
 
 
 def test_the_price_of_the_rule_is_the_last_trade_else_the_middle():
-    t = PerpTicker(BTC, 1, 100, 110, 105, 105, 103, 1, 1, 1, 1, 0, False, False)
-    assert H.Hunter.price_of(t) == 103
-    assert H.Hunter.price_of(dataclasses.replace(t, last_uusd=None)) == 105
+    t = PerpTicker(BTC, 1, 100_000, 100_100, 100_050, 100_050, 100_080, 1, 1, 1, 1, 0, False, False)
+    assert H.Hunter.price_of(t) == 100_080
+    assert H.Hunter.price_of(dataclasses.replace(t, last_uusd=None)) == 100_050
+
+
+def test_a_last_trade_farther_than_100_bp_from_the_middle_is_not_the_price():
+    t = PerpTicker(BTC, 1, 100_000, 100_100, 100_050, 100_050, 100_050, 1, 1, 1, 1, 0, False, False)
+    mid = 100_050
+    assert H.Hunter.price_of(dataclasses.replace(t, last_uusd=mid + 1000)) == mid + 1000  # exactly 100 bp: kept
+    assert H.Hunter.price_of(dataclasses.replace(t, last_uusd=mid + 1001)) == mid  # a stale trade after a wick
+    assert H.Hunter.price_of(dataclasses.replace(t, last_uusd=mid - 1001)) == mid
 
 
 # ---------------------------------------------------------------------- execution
@@ -217,7 +228,7 @@ def test_the_same_decision_replayed_does_not_make_a_second_order(tmp_path):
     assert len(w.events()) == n
     # the order id is deterministic, so even without the memory of the process the ledger refuses a second fill
     # (a restart reads the signals back from the journal)
-    h2 = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot)
+    h2 = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now))
     h2.start(START + 130)
     me2 = h2.players[0]
     assert (BTC, START + 120) in me2.done and me2.last_entry[BTC] == START + 120
@@ -372,10 +383,10 @@ def test_a_network_error_does_not_break_the_loop(tmp_path):
     w, client, h = make(tmp_path, drop(START + 240, 0.95))
     drive(h, client, START, START + 120)
     client.fail = True
-    drive(h, client, START + 180, START + 210)  # does not raise
-    assert h.stats.errors == 1 and h.stats.reads_ok == 3
+    drive(h, client, START + 150, START + 180)  # does not raise
+    assert h.stats.errors == 2 and h.stats.reads_ok == 5
     client.fail = False
-    drive(h, client, START + 240, START + 300)
+    drive(h, client, START + 210, START + 300)
     assert len(fills(w, ME)) == 1  # the hunt goes on
 
 
@@ -398,10 +409,13 @@ def test_the_start_primes_the_history_from_the_minute_candles(tmp_path):
     w, client, h = make(tmp_path, drop(START + 120, 0.95))
     assert client.candle_calls == len(SYMBOLS)
     assert len(h.hist) >= len(SYMBOLS) * 30
-    # after a restart in the middle of a shock, the hunter sees it at once (no 30 minutes of blindness)
+    # after a restart in the middle of a shock, the hunter sees it at once (no 30 minutes of blindness) ... but does
+    # not enter on the first reading after the start, nor on the rest of that episode: the shock may be old
     client.now = START + 120
     h.step(START + 120)
-    assert len(fills(w, ME)) == 1
+    assert fills(w, ME) == [] and h.stats.shocks == 1
+    drive(h, client, START + 150, START + 300)
+    assert fills(w, ME) == [] and h.players[0].episodes[BTC] == (START + 120, False)
 
 
 def test_a_heartbeat_once_an_hour_and_no_event_per_reading(tmp_path):
@@ -417,7 +431,7 @@ def test_the_witness_waits_for_the_next_slice_when_started_mid_slice(tmp_path):
     w = World(tmp_path, trend_days=0)
     client = FakeClient(drop(START + 100, 0.95))
     client.now = START + 250  # in the slice of START + 210
-    h = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot)
+    h = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now))
     h.start(START + 250)
     h.step(START + 260)
     assert fills(w, WITNESS) == []
@@ -434,7 +448,7 @@ def test_the_config_is_hashed_checked_and_consistent_with_the_frozen_rule():
     assert CONFIG.policy.min_interval_same_open_s == 0 and CONFIG.policy.daily_loss_freeze_bp == 0
 
 
-def Decimal_eq(text: str, number: float) -> bool:  # noqa: N802
+def Decimal_eq(text: str, number: float) -> bool:
     from decimal import Decimal
 
     return Decimal(text) == Decimal(str(number))
@@ -511,3 +525,285 @@ def test_the_decisions_at_a_minute_cadence_reproduce_the_frozen_rule():
         for inst, p in prices.items():
             hist.add(inst, now, p)
     assert sorted(mine) == sorted(frozen_events)
+
+
+# ---------------------------------------------------------------------- latency, late entries, the rest of the fixes
+
+
+def make_clocked(tmp_path: Path, price: PriceFn, cfg: H.HunterConfig = CONFIG):
+    """A hunter whose clock is `clock["t"]`, set by the test (not by the client's `now`)."""
+    w = World(tmp_path, trend_days=0)
+    client = FakeClient(price)
+    clock = {"t": float(START)}
+    h = H.Hunter(w.var, cfg, SPECS, client, spot_paths=w.spot, clock=lambda: clock["t"])
+    h.start(START)
+    return w, client, h, clock
+
+
+def step_to(h: H.Hunter, client: FakeClient, clock: dict, t: int) -> None:
+    client.now = t
+    clock["t"] = float(t)
+    h.step()
+
+
+def test_the_entry_meets_a_fresh_ticker_and_the_real_time_and_the_latency_is_journaled(tmp_path):
+    w, client, h, clock = make_clocked(tmp_path, drop(START + 120, 0.95))
+
+    def fresh() -> None:  # 2.5 s later, the contract has fallen further
+        clock["t"] += 2.5
+        client.price = drop(START + 120, 0.93)
+
+    client.on_fresh = fresh
+    for t in range(START, START + 121, 30):
+        step_to(h, client, clock, t)
+    entry = fills(w, ME)[0]
+    assert entry["ts"] == START + 122  # the real time of the order, not that of the reading
+    assert entry["payload"]["price_uusd"] > round(PRICES[BTC] * 0.93)
+    assert entry["payload"]["price_uusd"] < round(PRICES[BTC] * 0.9501)  # the fresh price (-7 %), not the reading's
+    sig = next(e["payload"] for e in w.events("hunter_signal") if e["payload"]["portfolio"] == ME)
+    assert sig["read_ts"] == START + 120 and sig["first_seen_ts"] == START + 120 and sig["ts"] == START + 120
+    done = [e["payload"] for e in w.events("hunter_entry") if e["payload"]["portfolio"] == ME]
+    assert len(done) == 1 and done[0]["status"] == "filled" and done[0]["latency_ms"] == 2500
+    assert done[0]["read_ts"] == START + 120 and done[0]["intent_id"] == sig["intent_id"]
+    assert entry["payload"]["order_id"].split(":")[0] == sig["intent_id"]
+
+
+def test_a_refused_entry_is_journaled_with_its_status(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+    (w.var / "KILL").touch()
+    drive(h, client, START, START + 150)
+    done = [e["payload"] for e in w.events("hunter_entry") if e["payload"]["portfolio"] == ME]
+    assert done and done[0]["status"] == "refused" and done[0]["latency_ms"] == 0
+
+
+def test_without_a_fresh_ticker_there_is_no_order(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+
+    def boom() -> None:
+        raise OSError("down")
+
+    client.on_fresh = boom
+    drive(h, client, START, START + 150)
+    assert fills(w, ME) == [] and not w.events("hunter_signal") and h.stats.errors >= 1
+
+
+def test_a_refused_entry_is_retried_smaller_twice_at_most(tmp_path):
+    tight = dataclasses.replace(CONFIG.policy, max_trade_loss_bp=600)  # 200 % with a 5 % stop is too much
+    cfg = dataclasses.replace(CONFIG, policy=tight)
+    w, client, h = make(tmp_path, drop(START + 120, 0.95), cfg)
+    drive(h, client, START, START + 120)
+    mine = [e["payload"] for e in w.events("perp_verdict") if e["payload"]["portfolio"] == ME]
+    assert [v["approved"] for v in mine] == [False, False, False]  # the order and two smaller tries: no more
+    assert fills(w, ME) == []
+
+
+def test_run_intents_keeps_eight_tries_for_the_other_callers():
+    import inspect
+
+    from arene.perp.agent_round import SHRINK_TRIES, run_intents
+
+    assert inspect.signature(run_intents).parameters["max_shrink_tries"].default == SHRINK_TRIES == 8
+    assert H.SHRINK_TRIES_HUNTER == 2
+
+
+def test_no_entry_when_the_previous_reading_is_older_than_30_seconds(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+    drive(h, client, START, START + 60)
+    client.now = START + 130  # the reading before is 70 s old: the shock may be old
+    h.step(START + 130)
+    drive(h, client, START + 160, START + 400)
+    assert fills(w, ME) == [] and not [e for e in w.events("hunter_signal") if e["payload"]["portfolio"] == ME]
+
+
+def test_a_refused_entry_is_retried_within_120_seconds_and_is_not_a_new_shock(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+    (w.var / "KILL").touch()
+    drive(h, client, START, START + 150)
+    (w.var / "KILL").unlink()  # the refusal was a wick's: it is over at START + 180
+    drive(h, client, START + 180, START + 400)
+    assert len(fills(w, ME)) == 1 and fills(w, ME)[0]["ts"] == START + 180
+    sigs = [e["payload"] for e in w.events("hunter_signal") if e["payload"]["portfolio"] == ME]
+    assert len(sigs) == 2 and {s["first_seen_ts"] for s in sigs} == {START + 120}
+    assert sigs[0]["intent_id"] != sigs[1]["intent_id"]
+    assert h.stats.shocks == 2  # one shock per portfolio (the witness sees the same wick once), not one per attempt
+
+
+def test_no_retry_after_120_seconds(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+    (w.var / "KILL").touch()
+    drive(h, client, START, START + 300)
+    (w.var / "KILL").unlink()
+    drive(h, client, START + 330, START + 900)  # the shock still holds, but it is 210 s old and more: too late
+    assert fills(w, ME) == []
+    sigs = [e["payload"] for e in w.events("hunter_signal") if e["payload"]["portfolio"] == ME]
+    assert max(s["ts"] for s in sigs) <= START + 120 + 120 and h.stats.shocks == 2
+
+
+def test_the_stop_ids_and_signals_of_a_restart_keep_the_episode(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+    (w.var / "KILL").touch()
+    drive(h, client, START, START + 150)
+    h2 = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now))
+    h2.start(START + 160)
+    assert h2.players[0].episodes[BTC] == (START + 120, True)
+
+
+def test_a_lock_is_set_as_soon_as_the_entry_fill_exists_even_if_the_position_is_already_closed(tmp_path):
+    w, client, h = make(tmp_path, drop(START + 120, 0.95))
+    me = h.players[0]
+    real = h.sim.__class__.market_order
+
+    def open_then_close(self, oid, name, inst, qty, *a, **k):  # the entry fills, and the position is closed at once
+        out = real(self, oid, name, inst, qty, *a, **k)
+        if name == ME and not oid.startswith("closing"):
+            real(self, "closing:" + oid, name, inst, -qty, *a, **k)
+        return out
+
+    h.sim.__class__.market_order = open_then_close
+    try:
+        drive(h, client, START, START + 150)
+    finally:
+        h.sim.__class__.market_order = real
+    assert BTC not in replay(w.events())[ME].positions  # flat again
+    assert me.last_entry[BTC] == START + 120  # but the lock runs from the entry
+    # a restart reads the same
+    h2 = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now))
+    h2.start(START + 160)
+    assert h2.players[0].last_entry[BTC] == START + 120
+
+
+def test_the_witness_reasons_in_slices_12_to_exit_24_to_unlock():
+    slot = lambda t: (t - CONFIG.witness_offset_s) // CONFIG.witness_period_s
+    base = START + 210 + 300 * 3 + 7  # an entry inside slice 3 after the offset (read late in its slice)
+    k = slot(base)
+    held = {BTC: base}
+    prices = {BTC: PRICES[BTC]}
+    hist = H.PriceHistory(7200)
+
+    def exits(t):
+        return [d.kind for d in H.decide(CONFIG, hist, t, prices, held, {BTC: base}, slot=slot)]
+
+    first_of_slice = lambda n: CONFIG.witness_offset_s + n * CONFIG.witness_period_s
+    assert exits(first_of_slice(k + 12) - 1) == []  # the last second of the 11th slice after: no
+    assert exits(first_of_slice(k + 12)) == ["exit"]  # the first of the 12th slice after: yes, to the second
+    # the lock: 24 slices after the entry's, to the second
+    shock_hist = history({first_of_slice(k + 24) - 600: PRICES[BTC], first_of_slice(k + 24) - 300: PRICES[BTC]}, 7200)
+    cheap = {BTC: round(PRICES[BTC] * 0.9)}
+    free = lambda t: H.decide(CONFIG, shock_hist, t, cheap, {}, {BTC: base}, slot=slot)
+    assert free(first_of_slice(k + 24) - 1) == []
+    assert [d.kind for d in free(first_of_slice(k + 24))] == ["enter"]
+
+
+def test_an_exception_in_play_does_not_consume_the_slice(tmp_path, monkeypatch):
+    w, client, h = make(tmp_path, drop(START + 100, 0.95))
+    wit = h.players[1]
+    real = h.enter
+    boom = {"on": True}
+
+    def flaky(p, shock, now_ts, tickers, **kw):
+        if p.witness and boom["on"]:
+            raise RuntimeError("boom")
+        return real(p, shock, now_ts, tickers, **kw)
+
+    monkeypatch.setattr(h, "enter", flaky)
+    drive(h, client, START, START + 240, every=30)  # the slice that starts at START + 210: the exception
+    assert fills(w, WITNESS) == [] and h.stats.errors >= 1
+    assert wit.last_slot == h._slot(START)  # the slice was not consumed
+    boom["on"] = False
+    drive(h, client, START + 270, START + 300, every=30)  # the next readings of the same slice: tried again
+    assert fills(w, WITNESS)[0]["ts"] == START + 270 and wit.last_slot == h._slot(START + 270)
+
+
+def test_the_blind_alert_is_also_sent_by_the_notifier(tmp_path):
+    w = World(tmp_path, trend_days=0)
+    client = FakeClient()
+    client.fail = True
+    sent = []
+    notifier = SimpleNamespace(send=lambda level, code, message: sent.append((level, code, message)) or True)
+    h = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now), notifier=notifier)
+    h.start(START)
+    for t in range(START + 30, START + 700, 30):
+        client.now = t
+        h.step(t)
+    assert [c for _l, c, _m in sent] == ["perp_hunter_blind"] and sent[0][0] == "action"
+    assert [e for e in w.events("alert") if e["payload"]["code"] == "perp_hunter_blind"]
+
+
+def test_the_start_retries_a_failing_journal_read(tmp_path):
+    w = World(tmp_path, trend_days=0)
+    client = FakeClient()
+    waits = []
+    h = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, clock=lambda: float(client.now), sleep=waits.append)
+    real = h.sim.journal.events
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            raise OSError("busy")
+        return real()
+
+    h.sim.journal.events = flaky
+    h.start(START)  # does not raise
+    assert len(waits) >= 3
+    h2 = H.Hunter(w.var, CONFIG, SPECS, client, spot_paths=w.spot, sleep=lambda _s: None)
+    h2.sim.journal.events = lambda: (_ for _ in ()).throw(OSError("dead"))
+    with pytest.raises(OSError):  # still failing after the tries: the process stops (the unit restarts it)
+        h2._restore(START)
+
+
+def test_the_watcher_closes_a_hunter_position_held_for_more_than_3_hours(tmp_path):
+    w = watcher_world(tmp_path)
+    w.w.tick(T0 + 120)
+    quote = (PRICES[BTC], PRICES[BTC] + SPECS[BTC].tick_uusd)
+    fx = (FX.bid_uusd_per_eur, FX.ask_uusd_per_eur)
+    for name in (ME, WITNESS):
+        w.w.sim.market_order(f"manual:{name}", name, BTC, 100_000, quote, fx, T0 + 130, marks=PRICES)
+        w.w.sim.set_conditional(name, BTC, "stop", PRICES[BTC] * 9 // 10, T0 + 131)
+    assert H.HUNTER_SAFETY_HOLD_S == 3 * 3600
+    w.advance(T0 + 3 * 3600 - 600)
+    w.w.tick(T0 + 3 * 3600 - 600)
+    assert BTC in replay(w.events())[ME].positions  # not yet 3 hours
+    w.advance(T0 + 3 * 3600 + 600)
+    w.w.tick(T0 + 3 * 3600 + 600)
+    states = replay(w.events())
+    assert states[ME].positions == {} and states[WITNESS].positions == {}
+    assert {e["payload"]["portfolio"] for e in w.events("perp_fill") if e["payload"]["reason"] == "max_holding"} == {ME, WITNESS}
+
+
+def test_only_one_hunter_process_may_run(tmp_path):
+    fd = H.acquire_lock(tmp_path / "var-perp")
+    assert fd is not None
+    try:
+        assert H.acquire_lock(tmp_path / "var-perp") is None
+        assert (tmp_path / "var-perp" / "hunter.lock").exists()
+        rc = H.main(["run", "--var", str(tmp_path / "var-perp")])  # the lock is taken: message and exit 2
+        assert rc == 2
+    finally:
+        import os
+
+        os.close(fd)
+    fd2 = H.acquire_lock(tmp_path / "var-perp")  # released with the process (here: the descriptor)
+    assert fd2 is not None
+    os.close(fd2)
+
+
+def test_a_disabled_hunter_exits_0_without_the_lock(tmp_path, capsys):
+    cfg = tmp_path / "perp-chasseur.toml"
+    text = H.DEFAULT_CONFIG.read_text(encoding="utf-8").replace("enabled = true", "enabled = false")
+    cfg.write_text(text, encoding="utf-8")
+    (tmp_path / "policy-perp-chasseur.toml").write_text(
+        (H.DEFAULT_CONFIG.parent / "policy-perp-chasseur.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    assert H.main(["run", "--var", str(tmp_path / "var-perp"), "--config", str(cfg)]) == 0
+    assert not (tmp_path / "var-perp" / "hunter.lock").exists()
+
+
+def test_the_unit_restarts_on_failure_but_not_on_exit_2_and_restarts_daily():
+    unit = (Path(__file__).resolve().parent.parent / "ops" / "systemd" / "arene-perp-hunter.service").read_text()
+    for line in (
+        "Restart=on-failure", "RestartPreventExitStatus=2", "StartLimitIntervalSec=600", "StartLimitBurst=10",
+        "RuntimeMaxSec=86400", "MemoryMax=1G", "Nice=0", "After=network-online.target",
+    ):  # fmt: skip
+        assert line in unit.splitlines(), line
+    assert unit.index("StartLimitBurst") < unit.index("[Service]")  # in [Unit]

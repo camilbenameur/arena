@@ -359,3 +359,19 @@ def test_retired_portfolio_replays_flat_and_never_opens_again(tmp_path):
         s.market_order("b", "P", "BTC", 1_000_000, Q, FX, 10, marks=MARKS)
     with pytest.raises(PerpLedgerError, match="halt, kill_switch or retired"):
         s.flatten("P", 11, {"BTC": Q}, FX, "whatever")
+
+
+def test_the_stop_of_the_hunters_portfolios_ignores_the_minute_of_the_entry_the_others_keep_it(tmp_path):
+    from arene.perp.margin import HUNTER_NAMES
+
+    hunter = min(HUNTER_NAMES)
+    s = sim_at(tmp_path, portfolios=("P", hunter, "benchmark-perp:random"))
+    for name in ("P", hunter, "benchmark-perp:random"):  # all enter at second 10 of the minute 0, stop armed then
+        s.market_order(f"a:{name}", name, "BTC", 1_000_000, Q, FX, 10, marks=MARKS)
+        s.set_conditional(name, "BTC", "stop", 68_000_000_000, 10)
+    fills, _ = s.process_minute(0, {"BTC": CRASH}, FX)  # the minute of the entry: the candle holds the wick
+    assert sorted(f["portfolio"] for f in fills) == ["P", "benchmark-perp:random"]  # the others: unchanged
+    st = s.states()
+    assert hunter in {n for n, a in st.items() if a.positions}  # the hunter's stop is not looked at yet
+    fills, _ = s.process_minute(60, {"BTC": CRASH}, FX)  # a minute that starts after the arming: it counts
+    assert [f["portfolio"] for f in fills] == [hunter] and fills[0]["reason"] == "stop"
