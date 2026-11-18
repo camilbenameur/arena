@@ -365,6 +365,8 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
         focused = focus is not None and s["id"] == focus
         if s["kind"] == "conseil":  # une teinte par conseil : Haiku magenta, Opus doré
             st = {"color": "--conseil2" if s["id"].endswith(":opus") else "--conseil", "dash": None, "width": 2.5}
+        elif s["kind"] == "robot":  # le Chasseur de mèches : sa teinte ; son témoin au rythme de 5 min, la même en tirets
+            st = {"color": "--chasseur", "dash": [6, 4] if s["id"].endswith("-5min") else None, "width": 2 if s["id"].endswith("-5min") else 2.5}
         elif s["kind"] == "llm":
             k = COULEUR_LLM.get(s["id"].replace("llm-perp:", "llm:"), llm)
             st = {"color": f"--llm{k % N_COULEURS_LLM}", "dash": None, "width": 2.5}
@@ -379,7 +381,7 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
             tem += 1
         if focused and not st.get("halo"):
             st["width"], st["dash"] = 3, None
-            if s["kind"] not in ("llm", "conseil"):
+            if s["kind"] not in ("llm", "conseil", "robot"):
                 st["color"] = "--accent"
         if s.get("archive_ts"):  # un conseil archivé : ses données sont figées, sa courbe est en pointillés fins
             st["dash"], st["archive"] = ARCHIVE_DASH, True

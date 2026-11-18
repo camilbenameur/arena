@@ -121,7 +121,7 @@ def _perp_rows(ligue: dict[str, Any]) -> list[dict[str, Any]]:
     st = couleurs(ligue["chart"])
     rows = []
     for p in ligue["portfolios"]:
-        temoin = p["kind"] not in ("llm", "conseil")
+        temoin = p["kind"] not in ("llm", "conseil", "robot")  # un robot sans IA joue : il n'est pas une référence
         rows.append({
             "nom": p["name"], "href": f"{RP._dossier(p)}/{p['slug']}.html", "rend": p["rendement"], "st": st.get(p["id"]),
             "sous": SOUS_TEMOINS.get(p["id"], "sans IA") if temoin else (p.get("sous_titre") or ""),

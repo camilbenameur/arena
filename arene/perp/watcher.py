@@ -67,6 +67,8 @@ from arene.perp.collect import data_root
 from arene.perp.config import PerpConfig, default_var, load_perp_config
 from arene.perp.council import CouncilConfig, CouncilConfigError, load_councils_league, retired_portfolios
 from arene.perp.counters import counters_for
+from arene.perp.hunter import PORTFOLIO_KIND as HUNTER_KIND
+from arene.perp.hunter import HunterConfig, HunterConfigError, load_hunter_config
 from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
 from arene.perp.ledger import BP, HOUR_S, MINUTE_S, PerpLedgerError, equity_ueur, qty_seconds
 from arene.perp.llm_league import (
@@ -208,8 +210,10 @@ class PerpWatcher:
         round_offset_s: int = ROUND_OFFSET_S,
         news: NewsConfig | None = None,
         trend_runner: Runner = _default_runner,
+        hunter: HunterConfig | None = None,
     ) -> None:
         self.var = var
+        self.hunter = hunter if hunter is not None and hunter.enabled else None
         self.news = news if news is not None and news.enabled else None
         self.cfg = cfg
         self.policy = policy
@@ -244,6 +248,8 @@ class PerpWatcher:
         for t in self.llm.trend_councils if self.llm is not None else ():
             if t.trend is not None and portfolio == t.trend.benchmark:
                 return t.policy
+        if self.hunter is not None and portfolio in self.hunter.names:  # the hunter and its witness: its own policy
+            return self.hunter.policy
         return self.policy
 
     def _trend_names(self) -> set[str]:
@@ -254,6 +260,10 @@ class PerpWatcher:
             if t.trend is not None:
                 out.add(t.trend.benchmark)
         return out
+
+    def _hunter_names(self) -> set[str]:
+        """The hunter's two portfolios (docs/SPEC-CHASSEUR.md §6): the hunter's own process manages their exits."""
+        return set(self.hunter.names) if self.hunter is not None else set()
 
     def _append(self, type_: str, payload: dict[str, Any], ts: int) -> None:
         self.sim.append_event(type_, payload, ts)
@@ -334,6 +344,8 @@ class PerpWatcher:
             return
         for name in B.ALL:
             self.sim.open_portfolio(name, "benchmark", now_ts)
+        for name in sorted(self._hunter_names()):  # idempotent: the hunter's process opens them too
+            self.sim.open_portfolio(name, HUNTER_KIND, now_ts)
         last = marks_ev[-1]["payload"] if marks_ev else None
         last_minute = last["last_minute"] if last else None
         # the agents' orders scan from the last TICK (not a checkpoint): a tick killed during a catch-up scans
@@ -886,8 +898,10 @@ class PerpWatcher:
                     self._alert("info", "perp_portfolio_frozen", f"{name}: loss over 24 h, frozen", now_ts)
             except PerpLedgerError as exc:
                 rep.problems.append(f"{name} controls: {exc}")
-        try:  # the engine of the council v4 manages its own exits: no 7-day cut of its trends
-            self.sim.close_expired(now_ts, quotes, fx, portfolios=deciding - self._trend_names())
+        try:  # the engine of the council v4 and the hunter manage their own exits: no 7-day cut of their trades
+            self.sim.close_expired(
+                now_ts, quotes, fx, portfolios=deciding - self._trend_names() - self._hunter_names()
+            )
         except PerpLedgerError as exc:
             rep.problems.append(f"max holding: {exc}")
 
@@ -1650,7 +1664,19 @@ def main(argv: list[str] | None = None) -> int:
                 {"level": "action", "code": "perp_news_config_invalid", "message": str(exc)[:1000]},
                 now_ts,
             )
-        w = PerpWatcher(var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm, news=news)
+        hunter: HunterConfig | None = None
+        try:  # a bad hunter config disables the hunter's controls only, never the risk engine
+            hunter = load_hunter_config()
+        except HunterConfigError as exc:
+            notifier.send("action", "perp_hunter_config_invalid", f"hunter config invalid, off: {exc}"[:900])
+            journal.append(
+                "alert",
+                {"level": "action", "code": "perp_hunter_config_invalid", "message": str(exc)[:1000]},
+                now_ts,
+            )
+        w = PerpWatcher(
+            var, cfg, policy, specs, spot_paths=spot, notifier=notifier, llm=llm, news=news, hunter=hunter
+        )
         rep = w.tick(now_ts)
     except Exception as exc:
         notifier.send(

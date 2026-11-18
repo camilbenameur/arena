@@ -699,3 +699,57 @@ def test_conseils_archives_classement_et_tableau_marques_apres_les_actifs(site_a
     accueil = texte(lire(site_archives, "index.html"))
     assert "archivés" in accueil
     assert 'trait--conseil"' in page
+
+
+# ---------------------------------------------------------------------------
+# Le Chasseur de mèches : le groupe « Robots » de la ligue dérivés
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def site_robots(tmp_path_factory) -> Path:
+    tmp = tmp_path_factory.mktemp("perp-robots")
+    spot = synthetic_journal(tmp / "var" / "journal" / "events.jsonl")
+    perp = F.build(tmp / "var-perp" / "journal" / "events.jsonl", conseils=False, robots=True)
+    out = tmp / "site"
+    config, policy = _cfg()
+    build(spot.path, out, config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    return out
+
+
+def test_robots_groupe_dans_la_ligue_derives_avec_regle_chocs_et_trades(site_robots):
+    d = _perp(site_robots)
+    robots = [p for p in d["portfolios"] if p["kind"] == "robot"]
+    assert [p["id"] for p in robots] == [F.ROBOT, F.ROBOT_5MIN]
+    assert [p["name"] for p in robots] == ["Chasseur de mèches", "Chasseur au rythme de 5 min"]
+    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["robot"] * 2 + ["temoin"] * 3  # IA, robots, témoins
+    chasseur, temoin = robots
+    assert (chasseur["n_chocs"], chasseur["n_trades"]) == (1, 1) and (temoin["n_chocs"], temoin["n_trades"]) == (1, 0)
+    assert chasseur["n_operations"] == 2 and chasseur["positions"] == []  # entré puis sorti
+    idx = lire(site_robots, "derives.html")
+    comparatif = re.search(r'<table class="tableau comparatif.*?</table>', idx, flags=re.DOTALL).group(0)
+    assert 'groupe-robot' in comparatif and "Robots" in texte(comparatif) and len(re.findall(r"<tbody[^>]*>", comparatif)) == 3
+    ligne = texte(re.search(r'<tr class="robot[^"]*">.*?</tr>', comparatif, flags=re.DOTALL).group(0))
+    assert "Chasseur de mèches" in ligne and "4,5" in ligne and "1 choc vu" in ligne and "1 trade" in ligne
+    assert "robot-perp-chasseur" in idx and (site_robots / "derives" / "robot-perp-chasseur.html").exists()
+
+
+def test_robots_couleur_propre_et_courbe_du_temoin_en_tirets(site_robots):
+    d = _perp(site_robots)
+    from arene.site.render import _styles
+
+    st = dict(zip((s["id"] for s in d["chart"]["series"]), _styles(d["chart"], None), strict=True))
+    assert st[F.ROBOT]["color"] == "--chasseur" and st[F.ROBOT]["dash"] is None
+    assert st[F.ROBOT_5MIN]["color"] == "--chasseur" and st[F.ROBOT_5MIN]["dash"]
+    assert all(v["color"] != "--chasseur" for k, v in st.items() if k not in (F.ROBOT, F.ROBOT_5MIN))
+    css = (Path(__file__).parent.parent / "arene" / "site" / "assets" / "site.css").read_text(encoding="utf-8")
+    assert "--chasseur:" in css and ".trait--chasseur" in css
+
+
+def test_robots_page_du_chasseur_sans_nom_de_personne(site_robots):
+    page = lire(site_robots, "derives/robot-perp-chasseur.html")
+    t = texte(page)
+    assert "Chasseur de mèches" in t and "Chocs vus" in t and "Trades" in t and "robot sans IA" in t
+    for nom in ("owner-first-name", "owner-last-name"):  # le texte visible (le domaine de publication, hors sujet, n'est pas du texte)
+        assert nom not in t.lower() and nom not in texte(lire(site_robots, "derives.html")).lower()
+    assert any("Les robots" in texte(f.read_text(encoding="utf-8")) for f in site_robots.glob("*.html"))

@@ -318,6 +318,14 @@ def _hors_regle_court(p: dict[str, Any]) -> str:
     return '<small class="desc">démonstration paper, hors règle 2x</small>' if p["kind"] == "conseil" else ""
 
 
+def _compte_robot(p: dict[str, Any]) -> str:
+    """La ligne d'un robot : ce qu'il a vu (chocs) et fait (trades) ; rien pour les autres portefeuilles."""
+    if p["kind"] != "robot":
+        return ""
+    return f'<small class="compte-robot">{pluriel(p.get("n_chocs") or 0, "choc vu", "chocs vus")} · {pluriel(p.get("n_trades") or 0, "trade", "trades")}</small>'
+
+
+
 def _codes(d: dict[str, Any]) -> dict[str, str]:
     return {"conseil": P.CODES_CONSEIL, "tendance": P.CODES_TENDANCE}.get(str(d.get("regles")), P.CODES)
 
@@ -424,7 +432,7 @@ def _tableau(perp: dict[str, Any], *, conseils: bool = False) -> str:
     def ligne(p: dict[str, Any]) -> str:
         sous = f'<small class="desc">{e(p["sous_titre"])}</small>' if p.get("sous_titre") else ""
         return (
-            f'<tr class="{e(p["kind"])}{" archive" if p.get("archive") else ""}"><th scope="row"><a href="{_dossier(p)}/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{sous}{_depuis(perp, p)}{_hors_regle_court(p)}</th>'
+            f'<tr class="{e(p["kind"])}{" archive" if p.get("archive") else ""}"><th scope="row"><a href="{_dossier(p)}/{e(p["slug"])}.html">{e(p["name"])}</a>{_statut(p)}{sous}{_compte_robot(p)}{_depuis(perp, p)}{_hors_regle_court(p)}</th>'
             f'<td class="n cle"><span class="{tone(p["rendement"])}"{_crochet(p, "rend")}>{pct(p["rendement"])}</span>{_svg_barre(p["rendement"], vmax)}</td>'
             f'<td class="n"><span{_crochet(p, "val")}>{eur(p["equity_ueur"])}</span></td>'
             f'<td class="n">{levier(p["levier"])}</td>'
@@ -449,8 +457,8 @@ def _tableau(perp: dict[str, Any], *, conseils: bool = False) -> str:
         nom, corps = "ligue des conseils", groupe("conseil", "Conseils", n_col, P.MARQUE_CONSEIL) + groupe("temoin", "Témoin", n_col)
         cap = "Ligue des conseils : les conseils, puis le témoin de référence"
     else:
-        nom, corps = "ligue dérivés", groupe("llm", "Modèles d’IA", n_col) + groupe("temoin", "Témoins", n_col)
-        cap = "Ligue dérivés : modèles d’IA, puis témoins"
+        nom, corps = "ligue dérivés", groupe("llm", "Modèles d’IA", n_col) + groupe("robot", "Robots", n_col, "sans IA") + groupe("temoin", "Témoins", n_col)
+        cap = "Ligue dérivés : modèles d’IA, robots, puis témoins"
     return empiler(
         f'<div class="table-scroll" tabindex="0" role="region" aria-label="Tableau de la {nom}, défilable">'
         f'<table class="tableau comparatif empile"><caption class="visuellement-cache">{cap}</caption>'
@@ -580,6 +588,8 @@ def index_page(data: dict[str, Any]) -> str:
 def _desc_pf(p: dict[str, Any]) -> str:
     """Méta-description d'une page de portefeuille : qui, quoi, son rendement, en simulation."""
     qui = {"conseil": "Un conseil de dix IA Claude Haiku et un président", "llm": "Une IA Claude seule"}.get(p["kind"], "Une règle fixe sans IA, témoin")
+    if p["kind"] == "robot":
+        qui = "Un robot sans IA qui joue le retour après une mèche de plus de 4,5 %"
     if p["id"] == P.CONSEIL_TENDANCE:
         qui = "Un moteur de tendance que trois IA Claude Haiku et un président Opus peuvent seulement freiner"
     return (
@@ -1177,6 +1187,9 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     else:
         stats.append(_stat("Positions", str(len(p["positions"])), '<small class="sous">ouvertes</small>'))
         stats.append(_stat("Opérations", str(p["n_operations"])))
+        if p["kind"] == "robot":
+            stats.append(_stat("Chocs vus", str(p.get("n_chocs") or 0), '<small class="sous">mèches de plus de 4,5 %</small>'))
+            stats.append(_stat("Trades", str(p.get("n_trades") or 0), '<small class="sous">entrées exécutées</small>'))
     alertes = ""
     st = p.get("statut")
     if p.get("archive"):
@@ -1192,7 +1205,8 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
             "Ses positions sont fermées et il ne joue plus. Seul l’opérateur de l’arène peut le relancer, à la main.</p>"
         )
     elif st and st["etat"] == "arrete":
-        alertes = '<p class="alerte perte-bg">Portefeuille arrêté : baisse de 15 % depuis son sommet, positions fermées.</p>'
+        seuil = 60 if p["kind"] == "robot" else 15
+        alertes = f'<p class="alerte perte-bg">Portefeuille arrêté : baisse de {seuil} % depuis son sommet, positions fermées.</p>'
     elif st:
         jusqu = f" jusqu’au {quand(st['jusqu'])}" if st.get("jusqu") else ""
         cause = " après une liquidation" if st.get("raison") == "margin_closeout" else ""
@@ -1226,7 +1240,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 <header class="tete-modele{" teinte-2" if conseil and p["id"].endswith(":opus") else ""}">
   <h1>{e(p["name"])}</h1>
   {f'<p class="sous-titre">{e(p["sous_titre"])}</p>' if p.get("sous_titre") else ""}
-  {f'<p class="marque-conseil">{e(p["marque"])}</p>' if p.get("marque") else ""}
+  {f'<p class="{"marque-robot" if p["kind"] == "robot" else "marque-conseil"}">{e(p["marque"])}</p>' if p.get("marque") else ""}
   {f'<p class="chapo">{e(p["description"])}</p>' if p.get("description") else ""}
   {_objectif_jour(p)}
   {f'<p class="hors-regle">{e(p["hors_regle"])} <a href="../conseils.html#m-conseils">Ses règles</a></p>' if p.get("hors_regle") else ""}
@@ -1271,8 +1285,9 @@ def methode_section(data: dict[str, Any]) -> str:
         if perp.get("conseils") else ""
     )
     temoins = "".join(
-        f'<div><dt>{e(P.NOMS[k].removeprefix("Témoin "))}</dt><dd>{e(v)}</dd></div>' for k, v in P.DESCRIPTIONS.items() if not k.startswith(P.PREFIXE_CONSEIL)
+        f'<div><dt>{e(P.NOMS[k].removeprefix("Témoin "))}</dt><dd>{e(v)}</dd></div>' for k, v in P.DESCRIPTIONS.items() if not k.startswith(P.PREFIXE_CONSEIL) and k not in P.ROBOTS
     )
+    robots = "".join(f'<div><dt>{e(P.NOMS[k])}</dt><dd>{e(P.DESCRIPTIONS[k])}</dd></div>' for k in P.ROBOTS)
     return f"""
 <section aria-labelledby="m-derives"><h2 id="m-derives">La ligue dérivés</h2>
 <p>Chaque portefeuille a {eur(1_000_000_000, decimals=0)} fictifs et négocie 6 contrats perpétuels de Kraken Futures (BTC, ETH, SOL, XRP, LINK, LTC), à la hausse (long) ou à la baisse (short).
@@ -1284,6 +1299,9 @@ Les IA décident aux rendez-vous de 02:00, 06:00, 10:00, 14:00, 18:00 et 22:00{N
 <div><dt>Coûts</dt><dd>Frais de 0,07{NBSP}% et glissement de 0,05{NBSP}% par ordre, arrondis défavorables ; funding horaire réel de Kraken ; clôture forcée si la marge tombe sous 25{NBSP}% de l’exposition.</dd></div>
 <div><dt>Prix</dt><dd>En dollars, convertis en euros au cours EUR/USD du moment. Sur ce site, les positions sont aussi revalorisées en direct au prix public de Kraken (chiffres soulignés en pointillé) : une estimation, le chiffre officiel reste celui du relevé.</dd></div>
 </dl>
+<h3>Les robots</h3>
+<p>Sans IA : une règle fixe, jouée par un processus à part qui lit les prix bien plus souvent que la veille. Démonstration paper, hors de la règle des 2{NBSP}x (levier jusqu’à 10{NBSP}x en tout, arrêt à −60{NBSP}%).</p>
+<dl class="regles">{robots}</dl>
 <h3>Les témoins</h3>
 <dl class="regles">{temoins}</dl>
 <h3 id="m-actualites">Actualités</h3>

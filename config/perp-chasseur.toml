@@ -1,0 +1,41 @@
+# The « Chasseur de mèches » of the derivatives league (docs/SPEC-CHASSEUR.md).
+# The rule is FROZEN (docs/recherche-v5/finalistes/chocs_fade-mecheS.py): a move of more than
+# 4.5 % in 5, 15 or 30 minutes is played against, at 2x the equity, with a 5 % stop, out after 60 minutes, then 60
+# minutes without re-entry on that contract. The speed is the whole strategy (bench: +37.6 % entering at the next
+# minute, +13.9 % one minute late, -8.1 % five minutes late), hence a process of its own that reads the prices every 5
+# seconds (`python -m arene.perp.hunter run`, unit arene-perp-hunter.service). Hashed (sha256 of the bytes) and
+# journaled (`hunter_config`) at each start.
+kind = "hunter-v1"
+enabled = true
+portfolio = "robot-perp:chasseur"
+name = "Chasseur de mèches"
+# The witness: the same rule through the same execution path, deciding only at the pace of the watcher (once per
+# slice of 5 minutes). The gap between the two measures what speed brings.
+benchmark = "benchmark-perp:chasseur-5min"
+benchmark_name = "Chasseur au rythme de 5 min"
+# Its own risk policy, profile "aggressive" (a file of config/), shared with its witness
+policy = "policy-perp-chasseur.toml"
+instruments = ["PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD", "PF_XRPUSD", "PF_LINKUSD", "PF_LTCUSD"]
+
+# --- the frozen rule (never edited here) ---
+shock_bp = 450               # |log(price now / price w minutes ago)| above 4.5 %
+windows_min = [5, 15, 30]
+size_pct = "200"             # the entry: 2x the equity in notional
+stop_pct = "5"
+hold_min = 60                # out at the close 60 minutes after the entry (or at the stop)
+lock_min = 60                # no new entry on the contract during the 60 minutes after the planned exit
+horizon_h = 1                # what riskd's edge rule is told about the holding time
+# riskd's edge rule (cost <= 33 % of the expected move) judges a move that is declared. This one is MEASURED offline and
+# given with every entry, like `expected_move_source` of config/perp-conseil-tendance.toml.
+expected_move_bp = 113
+expected_move_source = "docs/recherche-v5 (docs/RECHERCHE-V5-AGRESSIF-2026-11-18.md), chocs_fade-mecheS.py on the design period of the bench: 53 trades, mean gross move +113 bp per trade (side x (exit - entry) / entry, before fees, slippage and funding)"
+
+# --- the loop ---
+poll_s = 5                   # one tickers call every 5 seconds
+history_min = 35             # prices kept in memory (the longest window is 30 minutes)
+max_ref_gap_s = 90           # a reference price farther than that from `t - w minutes` does not count for the window
+retry_after_refusal_s = 60   # an entry refused by riskd (a wick's spread...) may be tried again, if the shock still holds
+witness_period_s = 300       # the witness decides once per slice of 5 minutes ...
+witness_offset_s = 210       # ... on the first reading at HH:MM:30 or later, MM = a multiple of 5 plus 3 (the watcher's real delay)
+fx_max_age_s = 300           # EUR/USD from the collector's last snapshot when younger than that, else asked to Kraken
+heartbeat_s = 3600           # one `hunter_heartbeat` per hour (successful reads, errors, shocks, orders)

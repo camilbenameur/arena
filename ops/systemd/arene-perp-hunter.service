@@ -1,0 +1,14 @@
+[Unit]
+Description=Arena perp league: the wick hunter (reads the prices every 5 s, plays the frozen rule; paper)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/arene-trading
+ExecStart=%h/dev/arene-trading/.venv/bin/python -m arene.perp.hunter run
+Restart=always
+RestartSec=10
+Nice=5
+
+[Install]
+WantedBy=default.target

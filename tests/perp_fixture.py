@@ -30,6 +30,8 @@ PF_KRAKEN = {"BTC-PERP": "PF_XBTUSD", "ETH-PERP": "PF_ETHUSD", "SOL-PERP": "PF_S
              "LINK-PERP": "PF_LINKUSD", "LTC-PERP": "PF_LTCUSD"}  # fmt: skip
 LLMS = ["llm-perp:claude-haiku-5-5", "llm-perp:claude-sonnet-5-5", "llm-perp:claude-opus-5-5", "llm-perp:claude-fable-5-2"]
 TEMOINS = ["benchmark-perp:basket-1x", "benchmark-perp:trend", "benchmark-perp:random"]
+ROBOT = "robot-perp:chasseur"  # le Chasseur de mèches et son témoin au rythme de 5 min (kind « robot »)
+ROBOT_5MIN = "benchmark-perp:chasseur-5min"
 CONSEIL = "council-perp:haiku"
 OPUS = "council-perp:opus"
 INCONNU = "council-perp:zeta"  # un conseil que le site ne connaît pas
@@ -86,14 +88,19 @@ class Gen:
 
 
 def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bool = False,
-          archive_fable: bool = False) -> Path:
+          archive_fable: bool = False, robots: bool = False) -> Path:
     """`ruine` : le Conseil Haiku finit arrêté (`portfolio_halted`, ruine à -90 %) ; `conseils=False` : aucun conseil ;
     `archive` : les deux conseils sont retirés une heure avant la fin (positions fermées, `portfolio_retired`) ;
-    `archive_fable` : de même pour l'IA seule Fable."""
+    `archive_fable` : de même pour l'IA seule Fable ; `robots` : le Chasseur de mèches et son témoin (deux chocs vus, un
+    trade pour le chasseur, un choc sans trade pour le témoin)."""
     g = Gen(path)
     for pf in TEMOINS + LLMS:
         g.add("portfolio_opened", {"portfolio": pf, "kind": "llm" if pf in LLMS else "benchmark", "league": "perp",
                                    "capital_ueur": 1_000_000_000, "venue_mode": "paper"}, T0)  # fmt: skip
+    if robots:
+        for pf in (ROBOT, ROBOT_5MIN):
+            g.add("portfolio_opened", {"portfolio": pf, "kind": "robot", "league": "perp", "capital_ueur": 1_000_000_000,
+                                       "venue_mode": "paper"}, T0)  # fmt: skip
     rdvs = [T0 + 7_200 + 14_400 * k for k in range(12)]
     wake = rdvs[2] + 5_400
     fin = T0 + 2 * 86_400
@@ -112,6 +119,17 @@ def build(path: Path, *, ruine: bool = False, conseils: bool = True, archive: bo
                         amt = funding_amount_ueur(qs, rate, *FX)
                         g.add("funding", {"portfolio": pf, "instrument": inst, "stamp": ts, "qty_seconds": qs, "rate_nusd": rate,
                                           "fx_bid": FX[0], "fx_ask": FX[1], "amount_ueur": amt}, ts)  # fmt: skip
+        if robots and ts == T0 + 3 * 3_600:  # une mèche : le chasseur entre, le témoin ne la voit pas à temps
+            iid = "c1" * 32
+            g.add("hunter_signal", {"portfolio": ROBOT, "instrument": "PF_XBTUSD", "side": "buy", "window_min": 15, "move_bp": -520,
+                                    "price_uusd": prix("BTC-PERP", ts), "ts": ts, "intent_id": iid, "rule": "chocs_fade-mecheS"}, ts)  # fmt: skip
+            g.fill(ROBOT, "BTC-PERP", qty_pour(2_000_000_000, "BTC-PERP", ts), ts, "intent", iid)
+            g.add("hunter_signal", {"portfolio": ROBOT_5MIN, "instrument": "PF_XBTUSD", "side": "buy", "window_min": 30, "move_bp": -480,
+                                    "price_uusd": prix("BTC-PERP", ts), "ts": ts, "intent_id": "c2" * 32, "rule": "chocs_fade-mecheS"}, ts)  # fmt: skip
+        if robots and ts == T0 + 4 * 3_600:  # la sortie à 60 minutes
+            qty = g.book.states[ROBOT].positions["BTC-PERP"].qty
+            g.add("hunter_exit", {"portfolio": ROBOT, "instrument": "PF_XBTUSD", "opened_ts": T0 + 3 * 3_600, "due_ts": ts, "intent_id": "c3" * 32}, ts)
+            g.fill(ROBOT, "BTC-PERP", -qty, ts, "intent", "c3" * 32)
         if conseils and ts == rdvs[10] - 600:  # le Conseil Haiku entre en cours de route
             g.add("portfolio_opened", {"portfolio": CONSEIL, "kind": "council", "league": "perp", "capital_ueur": 1_000_000_000,
                                        "venue_mode": "paper"}, ts)  # fmt: skip

@@ -47,6 +47,9 @@ CONSEIL = "council-perp:haiku"  # le Conseil Haiku : Président Haiku
 CONSEIL_OPUS = "council-perp:opus"  # le Conseil Opus : mêmes dix conseillers Haiku, Président Opus
 CONSEIL_TENDANCE = "council-perp:tendance"  # le Conseil Tendance (v4) : le moteur décide, les LLM freinent
 MOTEUR = "benchmark-perp:moteur-tendance"  # son témoin : le même moteur, sans LLM
+ROBOT = "robot-perp:chasseur"  # le Chasseur de mèches : un robot sans IA, qui lit les prix toutes les 5 secondes
+ROBOT_5MIN = "benchmark-perp:chasseur-5min"  # son témoin : la même règle, décidée seulement toutes les 5 minutes
+ROBOTS = (ROBOT, ROBOT_5MIN)
 PREFIXE_CONSEIL = "council-perp:"
 OBJECTIF_JOUR_PCT = 1  # l'objectif fixé, revu le 17/11/2026 : « On va plutôt dire 1% par jour » (d'abord 10 %)
 
@@ -59,6 +62,8 @@ NOMS = {
     CONSEIL_OPUS: "Conseil Opus",
     CONSEIL_TENDANCE: "Conseil Tendance",
     MOTEUR: "Témoin moteur seul",
+    ROBOT: "Chasseur de mèches",
+    ROBOT_5MIN: "Chasseur au rythme de 5 min",
     PANIER: "Témoin panier 1x",
     TENDANCE: "Témoin tendance",
     ALEATOIRE: "Témoin aléatoire",
@@ -75,10 +80,17 @@ DESCRIPTIONS = {
     CONSEIL_OPUS: "Les mêmes conseillers Haiku 5.5 délibèrent à chaque ronde ; c’est un Président Claude Opus 5.5 qui décide.",
     CONSEIL_TENDANCE: "Un moteur de suivi de tendance (moyennes mobiles 2 j / 6 j, long et short, taille réglée sur la volatilité, échelle 2x) donne la cible de chaque contrat à chaque barre de 4 h. Trois Haiku et un Président Opus peuvent seulement freiner : un coefficient de 1, 0,5 ou 0 par contrat.",
     MOTEUR: "Le même moteur de tendance à 2x, sans IA, par le même chemin d’exécution et sur les mêmes rondes de 4 h : l’écart avec le Conseil Tendance mesure ce que les IA ajoutent ou retirent.",
+    ROBOT: "Un robot sans IA lit les prix toutes les 5 secondes. Quand un contrat bouge de plus de 4,5 % en 5, 15 ou 30 minutes (une mèche), il joue le retour : il achète après une chute, vend après une hausse, à 2x le portefeuille, avec un stop à 5 %. Sortie 60 minutes après l’entrée, puis 60 minutes sans rejouer ce contrat. Sur le banc, le gain disparaît avec le retard : la vitesse est toute la stratégie.",
+    ROBOT_5MIN: "La même règle, par le même chemin d’exécution, mais qui ne décide qu’au rythme de la veille : une fois par tranche de 5 minutes, sur les prix connus à cet instant. L’écart avec le Chasseur de mèches mesure ce que la vitesse rapporte.",
     PANIER: "Acheteur à parts égales des 6 contrats, sans levier ni stop, rééquilibré chaque mois : acheter et garder.",
     TENDANCE: "Chaque jour, long sur un contrat qui a monté sur 20 jours, short sinon ; 1/6 du portefeuille par contrat, stop à 10 %.",
     ALEATOIRE: "Tire 0 à 2 décisions au hasard à chaque rendez-vous, avec exactement les mêmes règles de risque que les IA.",
 }
+
+# Les robots (sans IA) : la règle en une phrase, ce qu'ils ont vu et fait.
+REGLE_ROBOT = "joue contre les mèches : plus de 4,5 % en 5, 15 ou 30 min · 2x · stop 5 % · sortie à 60 min"
+MARQUE_ROBOT = "robot sans IA · levier ≤ 10x · démonstration paper, hors règle 2x"
+SOUS_TITRES_ROBOT = {ROBOT: REGLE_ROBOT, ROBOT_5MIN: "la même règle, décidée une fois par tranche de 5 min"}
 
 MARQUE_TENDANCE = "moteur de tendance · levier ≤ 10x · les IA ne peuvent que freiner"
 
@@ -922,6 +934,9 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
     funding: dict[str, list[int]] = {}
     fills: dict[str, list[dict[str, Any]]] = {}
     statut: dict[str, dict[str, Any]] = {}
+    chocs: dict[str, int] = {}  # le Chasseur de mèches : les chocs vus par portefeuille ...
+    signaux: dict[str, str] = {}  # ... et leurs ordres voulus (identifiant -> portefeuille), pour compter les trades
+    ordres: set[str] = set()
     retires: dict[str, dict[str, Any]] = {}  # portefeuilles archivés (portfolio_retired) : leurs données sont figées
     for e in events:
         t, p = e["type"], e["payload"]
@@ -931,7 +946,11 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             retires[pf] = {"ts": e["ts"], "raison": _texte(p.get("reason"), 80)}
         if t == "funding":
             funding.setdefault(pf, []).append(int(p.get("amount_ueur") or 0))
+        elif t == "hunter_signal":
+            chocs[pf] = chocs.get(pf, 0) + 1
+            signaux[str(p.get("intent_id"))] = pf
         elif t == "perp_fill":
+            ordres.add(str(p["order_id"]).split(":")[0])  # un ordre réduit a le suffixe « :s1 » de l'ordre voulu
             fills.setdefault(pf, []).append({
                 "ts": e["ts"], "instrument": court(p.get("instrument")), "qty": p["qty"], "prix_uusd": p["price_uusd"],
                 "frais_ueur": p.get("fee_ueur") or 0, "raison": RAISONS_FILL.get(str(p.get("reason")), str(p.get("reason"))),
@@ -952,12 +971,12 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
         return (ORDRE.index(x) if x in ORDRE else 99, x)
 
     def genre(o: Mapping[str, Any]) -> str:
-        return {"llm": "llm", "council": "conseil"}.get(str(o.get("kind")), "temoin")
+        return {"llm": "llm", "council": "conseil", "robot": "robot"}.get(str(o.get("kind")), "temoin")
 
-    par_genre = {g: sorted((pf for pf, e in opened.items() if genre(e["payload"]) == g), key=rang) for g in ("llm", "conseil", "temoin")}
+    par_genre = {g: sorted((pf for pf, e in opened.items() if genre(e["payload"]) == g), key=rang) for g in ("llm", "conseil", "robot", "temoin")}
 
     portfolios = []
-    for pf in par_genre["llm"] + par_genre["conseil"] + par_genre["temoin"]:
+    for pf in par_genre["llm"] + par_genre["conseil"] + par_genre["robot"] + par_genre["temoin"]:
         o = opened[pf]["payload"]
         capital = int(o["capital_ueur"])
         le = last_eq.get(pf)
@@ -988,6 +1007,10 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             p_out["objectif_jour"] = _objectif_jour(capital, equity, opened[pf]["ts"], now)
         if pf == MOTEUR:
             p_out["marque"] = MARQUE_TENDANCE
+        if kind == "robot":
+            p_out["marque"], p_out["sous_titre"], p_out["regle"] = MARQUE_ROBOT, SOUS_TITRES_ROBOT.get(pf), REGLE_ROBOT
+            p_out["n_chocs"] = chocs.get(pf, 0)
+            p_out["n_trades"] = sum(1 for iid, owner in signaux.items() if owner == pf and iid in ordres)
         if kind in ("llm", "conseil"):
             ds = _decisions_llm(events, pf)  # toutes : les totaux portent sur le journal entier
             if kind == "conseil":

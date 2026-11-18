@@ -20,6 +20,7 @@
   --neutral-bg: #ebe7de; --neutral-text: #3e3a33;
   --simule: #b3261e;
   --llm0: #b4471f; --llm1: #1f5fae; --llm2: #6b3fa0; --llm3: #0b6e7a; --conseil: #c2185b; --conseil2: #8a6200;
+  --chasseur: #2e7d32; /* le Chasseur de mèches (robot sans IA) et son témoin au rythme de 5 min */
   --tem-ref: #4a463f; --tem0: #8a8478; --tem1: #7a7468; --tem2: #969083;
   --moteur: rgba(138, 132, 120, .34); /* le témoin « moteur seul » : un ruban large sous la courbe de son conseil */
   --mono: "Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -39,6 +40,7 @@
     --neutral-bg: #2a2b2f; --neutral-text: #cfcdc6;
     --simule: #ff8a7a;
     --llm0: #f0895b; --llm1: #7db0f5; --llm2: #bc9af2; --llm3: #5fc6cf; --conseil: #f58cc6; --conseil2: #e6c653;
+    --chasseur: #7bd88f;
     --tem-ref: #d8d3c6; --tem0: #9c968a; --tem1: #8b8579; --tem2: #b0aa9d;
     --moteur: rgba(176, 170, 157, .30);
   }
@@ -115,7 +117,7 @@ section { margin: 0; }
 .legende-trait { flex: none; }
 .trait { stroke: var(--muted); }
 .trait--llm0 { stroke: var(--llm0); } .trait--llm1 { stroke: var(--llm1); } .trait--llm2 { stroke: var(--llm2); } .trait--llm3 { stroke: var(--llm3); }
-.trait--conseil { stroke: var(--conseil); } .trait--conseil2 { stroke: var(--conseil2); }
+.trait--conseil { stroke: var(--conseil); } .trait--conseil2 { stroke: var(--conseil2); } .trait--chasseur { stroke: var(--chasseur); }
 .trait--tem-ref { stroke: var(--tem-ref); } .trait--tem0 { stroke: var(--tem0); } .trait--tem1 { stroke: var(--tem1); } .trait--tem2 { stroke: var(--tem2); }
 .trait--text { stroke: var(--text); }
 .trait--accent { stroke: var(--accent); }
@@ -370,6 +372,10 @@ p.direct-etat { margin: -6px 0 12px; max-width: none; }
 .modele-president { margin-left: 8px; font-family: var(--mono); font-size: .78rem; font-weight: 500; letter-spacing: .02em; color: var(--muted); text-transform: none; }
 .fiche-conseil { margin: 4px 0 0; font-size: .8rem; }
 .tableau tbody.groupe-conseil tr.groupe th { color: var(--conseil); }
+.tableau tbody.groupe-robot tr.groupe th { color: var(--chasseur); }
+.tableau tbody.groupe-robot tr.groupe .h-note { font-family: var(--mono); font-size: .8rem; }
+.marque-robot { margin: 0 0 10px; font-family: var(--mono); font-size: .86rem; letter-spacing: .02em; color: var(--chasseur); font-weight: 500; }
+.compte-robot { font-family: var(--mono); font-size: .8rem; color: var(--muted); }
 .tableau tbody.groupe-conseil tr.groupe .h-note { font-family: var(--mono); font-size: .8rem; }
 .sens-plat { background: var(--neutral-bg); color: var(--neutral-text); }
 .deliberation > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; list-style: none; min-height: 28px; padding: 2px 0; }
@@ -423,9 +429,10 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .sw { width: 10px; height: 34px; border-radius: 2px; background: var(--muted); }
 .sw-ref { background: repeating-linear-gradient(var(--tem-ref) 0 4px, transparent 4px 7px); }
 .c--llm0 { background-color: var(--llm0); } .c--llm1 { background-color: var(--llm1); } .c--llm2 { background-color: var(--llm2); } .c--llm3 { background-color: var(--llm3); }
-.c--conseil { background-color: var(--conseil); } .c--conseil2 { background-color: var(--conseil2); }
+.c--conseil { background-color: var(--conseil); } .c--conseil2 { background-color: var(--conseil2); } .c--chasseur { background-color: var(--chasseur); }
 .c--moteur { background-color: var(--moteur); }
 .c--tem0 { background-color: var(--tem0); } .c--tem1 { background-color: var(--tem1); } .c--tem2 { background-color: var(--tem2); }
+.sw-ref.c--chasseur { background: repeating-linear-gradient(var(--chasseur) 0 4px, transparent 4px 7px); }
 .sw-archive { background: repeating-linear-gradient(var(--muted) 0 2px, transparent 2px 6px); }
 .sw-archive.c--conseil { background: repeating-linear-gradient(var(--conseil) 0 2px, transparent 2px 6px); }
 .sw-archive.c--conseil2 { background: repeating-linear-gradient(var(--conseil2) 0 2px, transparent 2px 6px); }
@@ -464,7 +471,7 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .spark-zero { stroke: var(--border); stroke-dasharray: 3 3; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .spark-l { fill: none; stroke-width: 2.25; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke: var(--muted); }
 .s--llm0 { stroke: var(--llm0); } .s--llm1 { stroke: var(--llm1); } .s--llm2 { stroke: var(--llm2); } .s--llm3 { stroke: var(--llm3); }
-.s--conseil { stroke: var(--conseil); } .s--conseil2 { stroke: var(--conseil2); } .s--tem-ref { stroke: var(--tem-ref); }
+.s--conseil { stroke: var(--conseil); } .s--conseil2 { stroke: var(--conseil2); } .s--chasseur { stroke: var(--chasseur); } .s--tem-ref { stroke: var(--tem-ref); }
 .s--moteur { stroke: var(--moteur); } .spark-halo { stroke-width: 7; stroke-linecap: round; }
 .spark-ref { stroke-dasharray: 5 4; stroke-width: 1.5; }
 .spark-archive { stroke-dasharray: 1 5; stroke-linecap: round; stroke-width: 2; }

@@ -23,7 +23,13 @@ from arene.types import ceil_div
 
 LEVERAGED_PREFIX = "council-perp:"
 # the shadow benchmark of the council v4 trades at the council's leverage, with the same margins
-LEVERAGED_NAMES = ("benchmark-perp:moteur-tendance",)
+# and so do the two portfolios of the hunter (docs/SPEC-CHASSEUR.md: 2x per contract, up to 10x gross; the AMF 50 % rule
+# would refuse a 200 % entry)
+LEVERAGED_NAMES = (
+    "benchmark-perp:moteur-tendance",
+    "robot-perp:chasseur",
+    "benchmark-perp:chasseur-5min",
+)
 PPM = 1_000_000
 INITIAL = "initial"
 MAINTENANCE = "maintenance"
