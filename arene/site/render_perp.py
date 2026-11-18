@@ -663,7 +663,8 @@ def conseils_page(data: dict[str, Any]) -> str:
         chapo = (
             "Un moteur de suivi de tendance décide de chaque position toutes les 4 heures ; trois Claude Haiku et un Président Opus "
             "ne peuvent que le freiner (un coefficient de 1, 0,5 ou 0 par contrat). Objectif fixé : 1 % par jour ; le rendement "
-            "réalisé s’affiche à côté, face à un témoin « moteur seul » sans IA."
+            "réalisé s’affiche à côté, face à un témoin « moteur seul » sans IA. Sur la courbe, ce témoin est le ruban gris "
+            "sous la ligne du conseil : tant que le conseil ne freine rien, les deux se confondent."
         ) + (
             " Les anciens conseils Haiku et Opus, retirés le 17/11, restent archivés : leur courbe est en pointillé."
             if any(p["id"] != P.CONSEIL_TENDANCE for p in conseils) else ""

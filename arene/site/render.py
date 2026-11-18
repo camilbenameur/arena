@@ -345,6 +345,10 @@ COULEUR_LLM = {"llm:claude-haiku-5-5": 0, "llm:claude-sonnet-5-5": 1, "llm:claud
 N_COULEURS_LLM = 4
 COULEUR_TEMOIN = {"temoin:6040": 0, "temoin:e0065": 1, "temoin:aleatoire": 2, "benchmark-perp:trend": 0, "benchmark-perp:random": 2}
 REFERENCES = {"temoin:panier", "benchmark-perp:basket-1x"}  # « acheter et garder » de chaque ligue
+# Le témoin « moteur seul » du Conseil Tendance : tant que le conseil ne freine pas, les deux courbes sont identiques.
+# Il est dessiné en ruban large et translucide, sous le conseil, pour que les deux restent visibles quand elles se superposent.
+HALOS = {"benchmark-perp:moteur-tendance"}
+HALO_LARGEUR = 9
 ARCHIVE_DASH = [1, 6]  # pointillé fin et espacé : ne se confond pas avec les tirets des témoins
 MIN_POINTS_COURBE = 3  # sous 3 cycles terminés, une courbe ne montre qu'une droite : le tableau suffit
 
@@ -367,11 +371,13 @@ def _styles(chart: dict[str, Any], focus: str | None) -> list[dict[str, Any]]:
             llm += 1
         elif s["id"] in REFERENCES:
             st = {"color": "--tem-ref", "dash": [8, 4], "width": 2}
+        elif s["id"] in HALOS:
+            st = {"color": "--moteur", "dash": None, "width": HALO_LARGEUR, "halo": True}
         else:
             k = COULEUR_TEMOIN.get(s["id"], tem)
             st = {"color": f"--tem{k % 3}", "dash": DASHES[(k + 1) % len(DASHES)], "width": 1.75}
             tem += 1
-        if focused:
+        if focused and not st.get("halo"):
             st["width"], st["dash"] = 3, None
             if s["kind"] not in ("llm", "conseil"):
                 st["color"] = "--accent"
@@ -398,7 +404,7 @@ def _legende(chart: dict[str, Any], focus: str | None) -> str:
         dash = f' stroke-dasharray="{" ".join(f"{x * 0.7:g}" for x in st["dash"])}"' if st["dash"] else ""
         trait = (
             '<svg class="legende-trait" viewBox="0 0 24 8" width="24" height="8" aria-hidden="true">'
-            f'<line class="trait trait{st["color"]}" x1="1" x2="23" y1="4" y2="4" stroke-width="{min(st["width"], 3):g}" stroke-linecap="round"{dash}/></svg>'
+            f'<line class="trait trait{st["color"]}" x1="1" x2="23" y1="4" y2="4" stroke-width="{7 if st.get("halo") else min(st["width"], 3):g}" stroke-linecap="round"{dash}/></svg>'
         )
         items.append(
             f'<li><button type="button" class="legende-bouton" data-serie="{i}" aria-pressed="true" disabled>{trait}'

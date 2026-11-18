@@ -21,6 +21,7 @@
   --simule: #b3261e;
   --llm0: #b4471f; --llm1: #1f5fae; --llm2: #6b3fa0; --llm3: #0b6e7a; --conseil: #c2185b; --conseil2: #8a6200;
   --tem-ref: #4a463f; --tem0: #8a8478; --tem1: #7a7468; --tem2: #969083;
+  --moteur: rgba(138, 132, 120, .34); /* le témoin « moteur seul » : un ruban large sous la courbe de son conseil */
   --mono: "Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: "Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --serif: var(--sans);
@@ -39,6 +40,7 @@
     --simule: #ff8a7a;
     --llm0: #f0895b; --llm1: #7db0f5; --llm2: #bc9af2; --llm3: #5fc6cf; --conseil: #f58cc6; --conseil2: #e6c653;
     --tem-ref: #d8d3c6; --tem0: #9c968a; --tem1: #8b8579; --tem2: #b0aa9d;
+    --moteur: rgba(176, 170, 157, .30);
   }
 }
 
@@ -117,6 +119,7 @@ section { margin: 0; }
 .trait--tem-ref { stroke: var(--tem-ref); } .trait--tem0 { stroke: var(--tem0); } .trait--tem1 { stroke: var(--tem1); } .trait--tem2 { stroke: var(--tem2); }
 .trait--text { stroke: var(--text); }
 .trait--accent { stroke: var(--accent); }
+.trait--moteur { stroke: var(--moteur); }
 .legende-bouton:disabled { cursor: default; }
 .vide-court { padding: 10px 14px; font-size: .92rem; }
 .vide { color: var(--muted); border: 1px dashed var(--border); border-radius: var(--r); padding: 14px 16px; margin: 0; }
@@ -421,6 +424,7 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .sw-ref { background: repeating-linear-gradient(var(--tem-ref) 0 4px, transparent 4px 7px); }
 .c--llm0 { background-color: var(--llm0); } .c--llm1 { background-color: var(--llm1); } .c--llm2 { background-color: var(--llm2); } .c--llm3 { background-color: var(--llm3); }
 .c--conseil { background-color: var(--conseil); } .c--conseil2 { background-color: var(--conseil2); }
+.c--moteur { background-color: var(--moteur); }
 .c--tem0 { background-color: var(--tem0); } .c--tem1 { background-color: var(--tem1); } .c--tem2 { background-color: var(--tem2); }
 .sw-archive { background: repeating-linear-gradient(var(--muted) 0 2px, transparent 2px 6px); }
 .sw-archive.c--conseil { background: repeating-linear-gradient(var(--conseil) 0 2px, transparent 2px 6px); }
@@ -461,6 +465,7 @@ ol.avis { list-style: none; margin: 0; padding: 0; display: grid; grid-template-
 .spark-l { fill: none; stroke-width: 2.25; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke: var(--muted); }
 .s--llm0 { stroke: var(--llm0); } .s--llm1 { stroke: var(--llm1); } .s--llm2 { stroke: var(--llm2); } .s--llm3 { stroke: var(--llm3); }
 .s--conseil { stroke: var(--conseil); } .s--conseil2 { stroke: var(--conseil2); } .s--tem-ref { stroke: var(--tem-ref); }
+.s--moteur { stroke: var(--moteur); } .spark-halo { stroke-width: 7; stroke-linecap: round; }
 .spark-ref { stroke-dasharray: 5 4; stroke-width: 1.5; }
 .spark-archive { stroke-dasharray: 1 5; stroke-linecap: round; stroke-width: 2; }
 .principes-liste { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px 32px; margin: 12px 0 0; }

@@ -47,7 +47,7 @@
     return data.styles.map(function (st, i) {
       return {
         stroke: css(st.color), width: st.width, dash: st.dash, visible: st.visible,
-        isLlm: data.series[i].kind === "llm" || data.series[i].kind === "conseil", focused: st.width >= 3, archive: !!st.archive
+        isLlm: data.series[i].kind === "llm" || data.series[i].kind === "conseil", focused: st.width >= 3 && !st.halo, archive: !!st.archive, halo: !!st.halo
       };
     });
   }
@@ -188,7 +188,7 @@
         dash: st.dash || undefined,
         cap: st.archive ? "round" : undefined,
         show: st.visible && !masques[s.id],
-        points: { show: !many && !st.archive, size: st.focused || st.isLlm ? 7 : 5, width: 1.5, stroke: st.stroke, fill: css("--surface") }
+        points: { show: !many && !st.archive && !st.halo, size: st.focused || st.isLlm ? 7 : 5, width: 1.5, stroke: st.stroke, fill: css("--surface") }
       });
       columns.push(s.values);
     });

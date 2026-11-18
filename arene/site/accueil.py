@@ -90,7 +90,7 @@ def sparkline(chart: dict[str, Any], ids: list[str]) -> str:
             if v is not None
         )
         st = styles.get(s["id"]) or {}
-        pointille = " spark-archive" if st.get("archive") else " spark-ref" if st.get("dash") else ""
+        pointille = " spark-archive" if st.get("archive") else " spark-ref" if st.get("dash") else " spark-halo" if st.get("halo") else ""
         lignes.append(
             f'<polyline class="spark-l s{e(st.get("color", "--muted"))}{pointille}" points="{pts}"/>'
         )

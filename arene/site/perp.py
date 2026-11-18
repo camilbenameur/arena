@@ -1075,5 +1075,6 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
     conseils = [p for p in portfolios if p["kind"] == "conseil"]
     panier = [p for p in portfolios if p["id"] == PANIER]
     moteur = [p for p in portfolios if p["id"] == MOTEUR]
-    deriv["conseils"] = ligue(conseils + panier + moteur) if conseils else None
+    # Le témoin moteur en premier : sa courbe (un ruban) passe sous celle du conseil, qui reste lisible par-dessus.
+    deriv["conseils"] = ligue(moteur + conseils + panier) if conseils else None
     return deriv
