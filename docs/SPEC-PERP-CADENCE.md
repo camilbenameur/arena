@@ -1,56 +1,56 @@
-# Ligue dérivés : cadence et consigne de trader (v6, puis v7)
+# Perpetuals league: cadence and trader instructions (v6, then v7)
 
-**Depuis le 14/11, voir le §5 :** cadence de 10 min devenue un plafond, 260 rondes par jour, consigne v7, budgets revus. Les §1 à §3 décrivent l'état du 13/11 (15 min, rappel demandé qui remplace la cadence).
+**Since 2026-11-14, see §5:** the 10-minute cadence became a ceiling, 260 rounds per day, instructions v7, budgets revised. §1 to §3 describe the state of 2026-11-13 (15 min, a requested recall replaces the cadence).
 
-Spec du 13/11/2026. Demande du propriétaire, vers 18:00 UTC : « Les llms s'activent trop peu souvent à mon goût, j'aimerais plusieurs fois par heure même + et surtout toujours aucun trade ».
+Spec of 2026-11-13. The motivation: the LLMs activate too rarely; several times per hour is wanted, and above all still no forced trades.
 
-Ne concerne que la ligue dérivés ; le spot reste gelé. Complète `docs/SPEC-PERP-REVEILS-LIBRES.md`, dont elle change le §1 (bornes du réveil demandé) et la consigne (v5 remplacée par v6).
+Concerns the perpetuals league only; spot stays frozen. Complements `docs/SPEC-PERP-FREE-WAKEUPS.md`, whose §1 (bounds of the requested wake-up) and instructions (v5 replaced by v6) it changes.
 
-## 0. Le constat (journal du 13/11, 02:00 à 18:03 UTC)
+## 0. The findings (journal of 2026-11-13, 02:00 to 18:03 UTC)
 
-- **24 décisions, 0 entrée.** Toutes concluent « pas d'avantage clair, je reste à plat », souvent en citant le coût aller-retour.
-- **0 rappel demandé** depuis la mise en service des réveils libres (16:00 UTC). Le rappel était facultatif, et la consigne v5 le décourageait (« Chaque ronde coûte… sinon, n'en demande pas »). Les agents n'ont joué qu'aux rendez-vous et à 2 réveils de marché : 6 rondes en 16 h.
-- La consigne v5 poussait à ne rien faire : « Ne rien faire est une décision valide, et souvent la meilleure », « cherche la meilleure décision, pas la plus active ».
+- **24 decisions, 0 entries.** All conclude "no clear edge, I stay flat", often citing the round-trip cost.
+- **0 recalls requested** since the free wake-ups went live (16:00 UTC). The recall was optional, and instructions v5 discouraged it ("Each round costs... otherwise, do not ask for one"). The agents played only at scheduled rounds and at 2 market wake-ups: 6 rounds in 16 h.
+- Instructions v5 pushed toward doing nothing: "Doing nothing is a valid decision, and often the best", "look for the best decision, not the most active".
 
-## 1. La cadence par défaut
+## 1. The default cadence
 
-Nouvelle clé `cadence_min` de `config/perp-llm.toml` : **15**. 0 la coupe ; sinon de 5 à 60.
+New key `cadence_min` of `config/perp-llm.toml`: **15**. 0 switches it off; otherwise from 5 to 60.
 
-- Un agent qui n'a **aucun rappel en attente** est rappelé `cadence_min` après **sa dernière ronde**, quelle qu'elle soit (rendez-vous, réveil, alerte, rappel, cadence, ronde sans décision valide comprise). Il est servi par la vérification de la veille qui commence au plus 2 min 30 avant cette heure.
-- Il joue dans une **ronde privée**, avec le déclencheur `{"kind": "cadence", "every_min": 15, "last_round_ts": …}` ; le type d'appel qu'il voit est `cadence`. Plusieurs agents dus au même tick partagent la ronde privée, chacun avec son déclencheur.
-- Une ronde dont la préparation a échoué (`perp_llm_skipped`) compte comme une ronde pour la cadence : elle n'est pas retentée à chaque tick.
-- `wakeups = false` coupe les réveils de marché, pas la cadence : la cadence se coupe avec `cadence_min = 0`.
-- **Un rappel qu'il a demandé remplace la cadence** tant qu'il est en attente : `next_wakeup_min` va maintenant de **5 à 60** (au lieu de 240), si bien qu'un agent est toujours rappelé au moins une fois par heure. Une décision valide sans `next_wakeup_min` annule le rappel en attente : l'agent revient à la cadence.
-- Les mêmes conditions que les autres rondes privées s'appliquent : agent non arrêté, budget du jour, rondes du jour, une ronde par tick, rien dans les 5 min avant un rendez-vous, file derrière la ligue spot. Un réveil de marché passe avant, et sert aussi la cadence (c'est une ronde).
+- An agent with **no pending recall** is recalled `cadence_min` after **its last round**, whatever it was (scheduled round, wake-up, alert, recall, cadence, including a round without a valid decision). It is served by the watcher's check that starts at most 2 min 30 s before that time.
+- It plays in a **private round**, with the trigger `{"kind": "cadence", "every_min": 15, "last_round_ts": ...}`; the call type it sees is `cadence`. Several agents due at the same tick share the private round, each with its own trigger.
+- A round whose preparation failed (`perp_llm_skipped`) counts as a round for the cadence: it is not retried at every tick.
+- `wakeups = false` switches off the market wake-ups, not the cadence: the cadence is switched off with `cadence_min = 0`.
+- **A recall it requested replaces the cadence** as long as it is pending: `next_wakeup_min` now goes from **5 to 60** (instead of 240), so that an agent is always recalled at least once per hour. A valid decision without `next_wakeup_min` cancels the pending recall: the agent returns to the cadence.
+- The same conditions as for the other private rounds apply: agent not halted, daily budget, rounds of the day, one round per tick, nothing within the 5 min before a scheduled round, queue behind the spot league. A market wake-up goes first, and also serves the cadence (it is a round).
 
-## 2. Les rondes du jour et les budgets
+## 2. The day's rounds and the budgets
 
-- `rounds_per_day` : **144** (au lieu de 48), soit une ronde toutes les 10 min en moyenne : les 96 de la cadence, plus les alertes, les réveils de marché et les rappels plus rapprochés. Les rendez-vous restants du jour sont toujours gardés.
-- Budgets journaliers, pour que le quota passe avant eux : Haiku 0,50 $, Sonnet 8,00 $, Opus 16,00 $, Fable 36,00 $ (coûts mesurés le 13/11 sur des rondes sans trade : 0,002, 0,033, 0,072 et 0,166 $ par ronde ; marge d'environ 1,5x pour les rondes qui tradent).
-- **Coût attendu**, en équivalent API sur l'abonnement du propriétaire : environ 27 $ par jour à la cadence seule (≈ 100 rondes par agent) au coût des rondes sans trade, davantage quand les agents tradent ; 60 $ au plus (les budgets). Fable en fait plus de la moitié. Un modèle à court de budget n'est plus appelé jusqu'à minuit UTC, rendez-vous mis à part.
+- `rounds_per_day`: **144** (instead of 48), i.e. one round every 10 min on average: the 96 of the cadence, plus the alerts, the market wake-ups and the closer recalls. The remaining scheduled rounds of the day are still kept.
+- Daily budgets, so that the quota comes before them: Haiku $0.50, Sonnet $8.00, Opus $16.00, Fable $36.00 (costs measured on 2026-11-13 on rounds without a trade: $0.002, $0.033, $0.072 and $0.166 per round; a margin of about 1.5x for rounds that trade).
+- **Expected cost**, in API equivalent on the subscription: about $27 per day at the cadence alone (≈ 100 rounds per agent) at the cost of rounds without a trade, more when the agents trade; $60 at most (the budgets). Fable accounts for more than half. A model out of budget is no longer called until midnight UTC, scheduled rounds aside.
 
-## 3. La consigne v6
+## 3. Instructions v6
 
-- L'agent est **trader** : il est là pour prendre des positions et les gérer.
-- **Pas besoin de certitude**, seulement une espérance positive après les coûts : un avis modeste justifie une petite position (5 à 15 % de l'equity) avec un stop serré, plutôt que rien.
-- Le long et le short se valent.
-- **Rester à plat est un pari comme un autre**, jugé comme les autres : il ne rapporte rien et ne peut battre aucun témoin. L'agent ne reste à plat que s'il n'a aucun avis sur aucun des six contrats, et il dit pourquoi.
-- À chaque appel, il gère ce qui est ouvert. Il utilise ses ouvertures (le garde-fou en limite le nombre) et ses ordres d'entrée.
-- Elle donne le seuil du garde-fou sur les coûts (mouvement attendu d'au moins 0,8 % environ) et la limite des frais du mois, pour que « petite position » ne finisse pas en refus.
-- Retirés : « souvent la meilleure », « pas la plus active », « Chaque ronde coûte ».
+- The agent is a **trader**: it is there to take positions and manage them.
+- **No certainty needed**, only a positive expectation after costs: a modest view justifies a small position (5 to 15% of equity) with a tight stop, rather than nothing.
+- Long and short are equal.
+- **Staying flat is a bet like any other**, judged like the others: it earns nothing and cannot beat any benchmark. The agent stays flat only if it has no view on any of the six contracts, and it says why.
+- At each call, it manages what is open. It uses its openings (the guardrail limits their number) and its entry orders.
+- It gives the guardrail's cost threshold (expected move of at least about 0.8%) and the monthly fee limit, so that "small position" does not end in a refusal.
+- Removed: "often the best", "not the most active", "Each round costs".
 
-**Rien n'oblige un agent à trader** : aucune exposition minimale n'est imposée, et le garde-fou (riskd) ne change pas. Il limite toujours à 4 ouvertures par 24 h, avec 4 h entre deux ouvertures sur un même contrat, levier 2x au plus.
+**Nothing obliges an agent to trade**: no minimum exposure is imposed, and the guardrail (riskd) does not change. It still limits to 4 openings per 24 h, with 4 h between two openings on the same contract, leverage 2x at most.
 
-## 4. Ce qui ne change pas
+## 4. What does not change
 
-riskd, stops, levier, rondes privées, idempotence, `max_parallel` 4, aucun déclenchement exécuté au-delà de 15 min, rendez-vous toutes les 4 h, témoins, spot gelé.
+riskd, stops, leverage, private rounds, idempotence, `max_parallel` 4, no trigger executed beyond 15 min, scheduled rounds every 4 h, benchmarks, spot frozen.
 
-## 5. Cadence de 10 min, plafond de l'écart (14/11/2026)
+## 5. 10-minute cadence, ceiling of the gap (2026-11-14)
 
-Demande du propriétaire, le 14/11 vers 01:45 UTC : « Augmente la cadence on s'autorise deux fois plus de conso qu'actuellement ». Consigne v7.
+The allowed consumption is doubled relative to the current one. Instructions v7.
 
-- **Le constat :** de 18:28 à 01:40 UTC, environ 2,3 $ en équivalent API, soit à peu près 8 $ par jour. Trois agents demandaient d'eux-mêmes un rappel à 30 min, ce qui les mettait à 2 ou 3 rondes par heure.
-- **`cadence_min` = 10, et la cadence devient un plafond :** un agent est rappelé **au plus tard** 10 min après sa dernière ronde. Un rappel qu'il a demandé ne peut qu'avancer cet appel (à 5 min) : demandé plus tard que la cadence, il ne le retarde plus. Les valeurs de `next_wakeup_min` restent acceptées de 5 à 60, mais seules 5 à 7 avancent l'appel d'un tick ; la consigne ne propose que 5.
-- **6 rondes par heure et par agent**, au lieu de 2 à 3. `rounds_per_day` : 260 (la cadence seule en fait 144 ; un agent qui demanderait 5 min à chaque ronde en jouerait 288).
-- **Coût attendu :** environ 20 $ par jour (Haiku 0,2, Sonnet 2,1, Opus 5,3, Fable 12 $ pour 144 rondes ; 28 $ à 200 rondes), au coût moyen par ronde mesuré cette nuit (0,0014, 0,014, 0,037 et 0,084 $), soit 2 à 2,5 fois la conso d'avant. Fable en fait plus de la moitié.
-- **Budgets journaliers**, plafonds contre un emballement et non objectifs, à environ deux fois le coût attendu : Haiku 0,50 $, Sonnet 5 $, Opus 14 $, Fable 30 $.
+- **The findings:** from 18:28 to 01:40 UTC, about $2.3 in API equivalent, i.e. roughly $8 per day. Three agents were asking for a 30 min recall on their own, which put them at 2 or 3 rounds per hour.
+- **`cadence_min` = 10, and the cadence becomes a ceiling:** an agent is recalled **at the latest** 10 min after its last round. A recall it requested can only bring this call forward (to 5 min): requested later than the cadence, it no longer delays it. The `next_wakeup_min` values are still accepted from 5 to 60, but only 5 to 7 bring the call forward by one tick; the instructions suggest only 5.
+- **6 rounds per hour per agent**, instead of 2 to 3. `rounds_per_day`: 260 (the cadence alone makes 144; an agent that asked for 5 min at every round would play 288).
+- **Expected cost:** about $20 per day (Haiku $0.2, Sonnet $2.1, Opus $5.3, Fable $12 for 144 rounds; $28 at 200 rounds), at the mean cost per round measured that night ($0.0014, $0.014, $0.037 and $0.084), i.e. 2 to 2.5 times the previous consumption. Fable accounts for more than half.
+- **Daily budgets**, caps against a runaway and not targets, at about twice the expected cost: Haiku $0.50, Sonnet $5, Opus $14, Fable $30.

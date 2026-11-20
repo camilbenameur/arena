@@ -1,0 +1,10 @@
+[Unit]
+Description=Arena paper-trading league: rebuild the static dashboard (after a wake-up)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/arena
+# Started by `arena watch` after a finished wake-up (systemctl --user start --no-block), outside the watch process.
+ExecStart=%h/arena/.venv/bin/arena build-site
+TimeoutStartSec=600
+Nice=10

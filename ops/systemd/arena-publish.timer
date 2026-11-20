@@ -1,0 +1,10 @@
+[Unit]
+Description=Arena paper-trading league: publish the dashboard every 30 min (20 min after each cycle included)
+
+[Timer]
+OnCalendar=*-*-* *:25,55:00 UTC
+Persistent=true
+Unit=arena-publish.service
+
+[Install]
+WantedBy=timers.target

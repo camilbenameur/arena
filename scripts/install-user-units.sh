@@ -1,32 +1,42 @@
 #!/usr/bin/env bash
-# Copie les unités systemd utilisateur de ops/systemd/ dans ~/.config/systemd/user et recharge systemd.
-# N'ACTIVE ni ne démarre rien : les commandes à lancer sont affichées à la fin. Pas de sudo.
+# Installs the user systemd units of ops/systemd/ into ~/.config/systemd/user and reloads systemd.
+# The units are written for a clone at ~/arena; they are rewritten for the actual location of this clone.
+# ARENA_PUBLISH_REPO=<owner>/<repo> sets the GitHub repository that receives the public dashboard.
+# Does NOT enable or start anything: the commands to run are printed at the end. No sudo.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+publish_repo="${ARENA_PUBLISH_REPO:-OWNER/arena}"
 
-if [ ! -x "$repo/.venv/bin/arene" ]; then
-  echo "ATTENTION : $repo/.venv/bin/arene absent. Lance d'abord : (cd $repo && uv sync)" >&2
+if [ ! -x "$repo/.venv/bin/arena" ]; then
+  echo "WARNING: $repo/.venv/bin/arena is missing. Run first: (cd $repo && uv sync)" >&2
+fi
+if [ "$publish_repo" = "OWNER/arena" ]; then
+  echo "WARNING: ARENA_PUBLISH_REPO is not set: arena-publish.service will push to OWNER/arena." >&2
 fi
 
 mkdir -p "$dest"
-for unit in arene-cycle.service arene-cycle.timer arene-site.service; do
-  install -m 0644 "$repo/ops/systemd/$unit" "$dest/$unit"
-  echo "copié : $dest/$unit"
+for src in "$repo"/ops/systemd/arena-*.service "$repo"/ops/systemd/arena-*.timer; do
+  unit="$(basename "$src")"
+  sed -e "s|%h/arena|$repo|g" -e "s|OWNER/arena|$publish_repo|g" "$src" > "$dest/$unit.tmp"
+  chmod 0644 "$dest/$unit.tmp"
+  mv "$dest/$unit.tmp" "$dest/$unit"
+  echo "installed: $dest/$unit"
 done
 systemctl --user daemon-reload
-echo "daemon-reload fait. Rien n'est activé."
+echo "daemon-reload done. Nothing is enabled."
 
 cat <<MSG
 
-Pour activer (à lancer toi-même) :
-  loginctl enable-linger "$USER"                      # une fois : les unités tournent sans session ouverte
-  systemctl --user enable --now arene-cycle.timer     # cycle à HH:05 UTC toutes les 4 h
-  systemctl --user enable --now arene-site.service    # dashboard sur http://127.0.0.1:8787
+To enable (run it yourself):
+  loginctl enable-linger "$USER"   # once: the units run without an open session
+  systemctl --user enable --now arena-cycle.timer arena-watch.timer          # spot league
+  systemctl --user enable --now arena-perp-collect.timer arena-perp-watcher.timer arena-perp-hunter.service
+  systemctl --user enable --now arena-site.service arena-publish.timer       # dashboard and its publication
 
-Pour vérifier :
-  systemctl --user list-timers arene-cycle.timer
-  journalctl --user -u arene-cycle.service -n 50
-  uv run arene status
+To check:
+  systemctl --user list-timers 'arena-*'
+  journalctl --user -u arena-cycle.service -n 50
+  uv run arena status
 MSG

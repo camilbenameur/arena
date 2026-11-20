@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from arene.journal import Journal
-from arene.perp.ledger import PerpBook, PerpLedgerError, apply_fill
-from arene.perp.sim import MinuteCandles, PerpSimulator, SimParams
+from arena.journal import Journal
+from arena.perp.ledger import PerpBook, PerpLedgerError, apply_fill
+from arena.perp.sim import MinuteCandles, PerpSimulator, SimParams
 
 GOLDEN = Path(__file__).parent / "golden" / "perp"
 

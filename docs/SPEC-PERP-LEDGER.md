@@ -1,90 +1,88 @@
-# Spécification du ledger perp et du simulateur (étape 2)
+# Specification of the perp ledger and simulator (step 2)
 
-Ce document est le contrat de `arene/perp/ledger.py` et `arene/perp/sim.py`. Les scénarios d'or sont calculés à la main **à partir de ce texte**, indépendamment du code.
+This document is the contract of `arena/perp/ledger.py` and `arena/perp/sim.py`. The golden scenarios are computed by hand **from this text**, independently of the code.
 
-Références :
-- étude : `docs/ETUDE-AGENTS-TRADERS.md` §3 ;
-- décisions : `docs/DECISION-OWNER-agents-traders.md` ;
-- règle française : `docs/sources/2026-11-12/amf_cfd_2019.txt`, annexe I.
+References:
+- the French retail CFD rule (AMF 2019), annex I.
 
-## 1. Unités et arrondis
+## 1. Units and rounding
 
-Tout est en **entiers**, jamais en float.
+Everything is in **integers**, never floats.
 
-| Grandeur | Unité |
+| Quantity | Unit |
 |---|---|
-| collatéral, frais, P&L et funding en euros | µEUR (1 EUR = 10^6) |
-| prix des contrats | µUSD (1 USD = 10^6) |
-| quantité | 1e-8 d'unité de l'actif de base ; **signée** : > 0 long, < 0 short |
-| taux de funding absolu | nano-USD par unité d'actif et par heure (1 USD = 10^9) |
-| cours EUR/USD | µUSD par EUR (`fx_bid` ≤ `fx_ask`) |
-| taux | points de base (bp, 1/10 000) |
+| collateral, fees, P&L and funding in euros | µEUR (1 EUR = 10^6) |
+| contract prices | µUSD (1 USD = 10^6) |
+| quantity | 1e-8 of a unit of the base asset; **signed**: > 0 long, < 0 short |
+| absolute funding rate | nano-USD per unit of asset per hour (1 USD = 10^9) |
+| EUR/USD rate | µUSD per EUR (`fx_bid` <= `fx_ask`) |
+| rates | basis points (bp, 1/10,000) |
 
-Notations : `ceil(a/b)` et `floor(a/b)` sont les divisions entières arrondies vers le haut et vers le bas (b > 0). `|x|` est la valeur absolue, et `sgn(q)` vaut +1 pour un long, −1 pour un short.
+Notation: `ceil(a/b)` and `floor(a/b)` are integer divisions rounded up and down (b > 0). `|x|` is the absolute value, and `sgn(q)` is +1 for a long, -1 for a short.
 
-**R1, notionnel.**
-- `notional_up(q, p) = ceil(|q| × p / 10^8)` (en µUSD) ;
+**R1, notional.**
+- `notional_up(q, p) = ceil(|q| × p / 10^8)` (in µUSD);
 - `notional_down(q, p) = floor(|q| × p / 10^8)`.
 
-**R2, conversion USD → EUR, toujours défavorable au portefeuille :**
-- un montant **à payer** (perte, frais, funding payé, exposition) : `cost_eur(u) = ceil(u × 10^6 / fx_bid)` ;
-- un montant **reçu** (gain, funding reçu) : `gain_eur(u) = floor(u × 10^6 / fx_ask)`.
+**R2, USD -> EUR conversion, always unfavorable to the portfolio:**
+- an amount **to pay** (loss, fees, funding paid, exposure): `cost_eur(u) = ceil(u × 10^6 / fx_bid)`;
+- an amount **received** (gain, funding received): `gain_eur(u) = floor(u × 10^6 / fx_ask)`.
 
-Diviser par le plus petit cours (`fx_bid`) donne plus d'euros, ce qui pénalise un coût. Diviser par le plus grand (`fx_ask`) en donne moins, ce qui pénalise un gain.
+Dividing by the smaller rate (`fx_bid`) gives more euros, which penalizes a cost. Dividing by the larger (`fx_ask`) gives fewer, which penalizes a gain.
 
-**R3, conversion d'un montant signé** (P&L latent ou réalisé) : `to_eur(u) = gain_eur(u)` si u ≥ 0, sinon `−cost_eur(−u)`.
+**R3, conversion of a signed amount** (unrealized or realized P&L): `to_eur(u) = gain_eur(u)` if u >= 0, otherwise `-cost_eur(-u)`.
 
 **R4, tick.**
-- `tick_up(p) = ceil(p / tick) × tick` ;
+- `tick_up(p) = ceil(p / tick) × tick`;
 - `tick_down(p) = floor(p / tick) × tick`.
 
-## 2. Paramètres (`config/perp.toml`, section `[simulation]`)
+## 2. Parameters (`config/perp.toml`, section `[simulation]`)
 
-| clé | valeur | sens |
+| key | value | meaning |
 |---|---|---|
 | `fill_model_version` | `"pessimiste-perp-v1"` | |
-| `capital_eur` | 1000 | collatéral initial de chaque portefeuille |
-| `taker_fee_bp` | 7 | 0,05 % de Kraken majoré de 25 %, arrondi vers le haut |
+| `capital_eur` | 1000 | initial collateral of each portfolio |
+| `taker_fee_bp` | 7 | Kraken's 0.05% increased by 25%, rounded up |
 | `slippage_bp` | 5 | |
-| `liquidation_fee_bp` | 500 | frais ajoutés en cas de clôture sur marge (prudence : Kraken en prendrait 2,5 %) |
-| `closeout_margin_bp` | 2500 | clôture si l'equity passe sous 25 % de l'exposition brute (la moitié de la marge de 50 % de la règle AMF) |
-| `initial_margin_bp` | 5000 | une entrée doit laisser une equity ≥ 50 % de l'exposition brute (règle AMF : 2:1 sur la crypto) |
-| `max_holding_s` | 604800 | 7 jours |
+| `liquidation_fee_bp` | 500 | fee added on a margin closeout (prudence: Kraken would take 2.5%) |
+| `closeout_margin_bp` | 2500 | closeout if equity falls below 25% of gross exposure (half of the 50% margin of the AMF rule) |
+| `initial_margin_bp` | 5000 | an entry must leave an equity >= 50% of gross exposure (AMF rule: 2:1 on crypto) |
+| `max_holding_s` | 604800 | 7 days |
 
-## 3. État d'un portefeuille (`MarginAccount`)
+## 3. State of a portfolio (`MarginAccount`)
 
-- **`collateral_ueur`**. Au départ, il vaut le capital. Il n'est jamais négatif après un événement.
-- **`positions`**, avec au plus une position par instrument. Une position porte :
-  - `qty` (signée) et `entry_uusd` (prix d'entrée moyen) ;
-  - `opened_ts` ;
-  - `open_seq`, le seq du fill d'ouverture, qui l'identifie parmi les réouvertures ;
-  - `stop_uusd` et `take_profit_uusd`, éventuellement nuls, chacun avec le ts de l'ordre qui l'a posé (`stop_armed_ts`, `take_profit_armed_ts`).
-- **Historique des quantités** de chaque instrument : la liste des couples (ts du fill, quantité après le fill), qui sert au funding.
-- **Cumuls** :
-  - `fees_paid_ueur` ;
-  - `funding_paid_ueur` (signé, > 0 = payé) ;
-  - `realized_pnl_ueur` (P&L de prix seulement) ;
-  - `absorbed_deficit_ueur` ;
-  - le nombre d'heures sans taux publié (`missing_funding`).
-- **Drapeaux** : `frozen_until_ts`, `halted`.
+- **`collateral_ueur`**. At the start, it equals the capital. It is never negative after an event.
+- **`positions`**, with at most one position per instrument. A position carries:
+  - `qty` (signed) and `entry_uusd` (average entry price);
+  - `opened_ts`;
+  - `open_seq`, the seq of the opening fill, which identifies it among reopenings;
+  - `stop_uusd` and `take_profit_uusd`, possibly null, each with the ts of the order that set it (`stop_armed_ts`, `take_profit_armed_ts`).
+- **Quantity history** of each instrument: the list of pairs (ts of the fill, quantity after the fill), used for funding.
+- **Cumulative totals**:
+  - `fees_paid_ueur`;
+  - `funding_paid_ueur` (signed, > 0 = paid);
+  - `realized_pnl_ueur` (price P&L only);
+  - `absorbed_deficit_ueur`;
+  - the number of hours with no published rate (`missing_funding`).
+- **Flags**: `frozen_until_ts`, `halted`.
 
-**Invariant :**
+**Invariant:**
 
     collateral = capital + realized_pnl − fees_paid − funding_paid + absorbed_deficit
 
-**Solde négatif.** Si un événement laisse `collateral < 0`, alors `absorbed_deficit += −collateral` et `collateral = 0`. C'est la protection contre le solde négatif.
+**Negative balance.** If an event leaves `collateral < 0`, then `absorbed_deficit += −collateral` and `collateral = 0`. This is the negative balance protection.
 
-## 4. Événements du journal de la ligue (`var-perp/journal/events.jsonl`)
+## 4. Events of the league journal (`var-perp/journal/events.jsonl`)
 
-Le journal est le même code que le journal spot, `arene.journal.Journal` : chaîné, sans float. Le ledger se reconstruit uniquement à partir de ces événements, dans l'ordre des `seq`.
+The journal is the same code as the spot journal, `arena.journal.Journal`: chained, with no floats. The ledger is rebuilt solely from these events, in `seq` order.
 
-**Il refuse :**
-- un `order_id` déjà vu ;
-- un funding déjà réglé pour (portefeuille, instrument, stamp) ;
-- un résumé de clôture ou une mesure d'equity en double ;
-- un fill dont le ts est **antérieur** au fill précédent du portefeuille, ou à un stamp de funding déjà réglé sur cet instrument.
+**It refuses:**
+- an `order_id` already seen;
+- a funding already settled for (portfolio, instrument, stamp);
+- a duplicate closeout summary or equity measurement;
+- a fill whose ts is **earlier** than the portfolio's previous fill, or than a funding stamp already settled on that instrument.
 
-Le simulateur valide chaque événement auprès du ledger **avant** de l'écrire : un événement refusé n'atteint jamais le journal.
+The simulator validates each event with the ledger **before** writing it: a refused event never reaches the journal.
 
 ### `portfolio_opened`
 
@@ -94,156 +92,156 @@ Le simulateur valide chaque événement auprès du ledger **avant** de l'écrire
 
 `{order_id, portfolio, instrument, qty, price_uusd, fee_ueur, fx_bid, fx_ask, reason, fill_model_version, ts}`
 
-- **`qty` est la variation signée** : > 0 achète, < 0 vend.
-- **`reason`** vaut `intent`, `stop`, `take_profit`, `margin_closeout`, `max_holding`, `halt` ou `kill_switch`.
+- **`qty` is the signed change**: > 0 buys, < 0 sells.
+- **`reason`** is `intent`, `stop`, `take_profit`, `margin_closeout`, `max_holding`, `halt` or `kill_switch`.
 
-Application par le ledger (position avant le fill : `q`, `e` ; variation `d` au prix `p`) :
+Application by the ledger (position before the fill: `q`, `e`; change `d` at price `p`):
 
-1. **Ouverture ou augmentation** : pas de position, ou `sgn(d) = sgn(q)`.
-   - Nouvelle quantité : `q + d`.
-   - Prix moyen :
-     - long : `ceil((|q|×e + |d|×p) / (|q|+|d|))` ;
-     - short : `floor(...)` de la même expression.
-   - Défavorable dans les deux cas.
-   - `opened_ts` et `open_seq` sont ceux du fill d'ouverture, et ne changent pas lors d'une augmentation.
-2. **Réduction ou fermeture** : `sgn(d) ≠ sgn(q)` et `|d| ≤ |q|`.
-   - P&L réalisé : `r = floor(sgn(q) × (p − e) × |d| / 10^8)` en µUSD, soit une division entière vers −∞.
-   - Converti par R3, il s'ajoute à `realized_pnl` et au collatéral.
-   - Si `|d| = |q|`, la position et ses ordres conditionnels disparaissent.
-3. **Retournement** (`|d| > |q|` de sens opposé) : **refusé**. Il faut une fermeture, puis une ouverture.
-4. **Frais** : `fee_ueur` est retiré du collatéral et ajouté à `fees_paid`. Le ledger refuse un frais négatif.
-5. **Historique** : le couple (ts, quantité après le fill) s'ajoute à l'historique de l'instrument.
-6. **Solde négatif** : règle du §3.
+1. **Opening or increase**: no position, or `sgn(d) = sgn(q)`.
+   - New quantity: `q + d`.
+   - Average price:
+     - long: `ceil((|q|×e + |d|×p) / (|q|+|d|))`;
+     - short: `floor(...)` of the same expression.
+   - Unfavorable in both cases.
+   - `opened_ts` and `open_seq` are those of the opening fill, and do not change on an increase.
+2. **Reduction or close**: `sgn(d) ≠ sgn(q)` and `|d| <= |q|`.
+   - Realized P&L: `r = floor(sgn(q) × (p − e) × |d| / 10^8)` in µUSD, i.e. an integer division toward −∞.
+   - Converted by R3, it is added to `realized_pnl` and to the collateral.
+   - If `|d| = |q|`, the position and its conditional orders disappear.
+3. **Flip** (`|d| > |q|` in the opposite direction): **refused**. A close, then an opening, are required.
+4. **Fees**: `fee_ueur` is deducted from the collateral and added to `fees_paid`. The ledger refuses a negative fee.
+5. **History**: the pair (ts, quantity after the fill) is appended to the instrument's history.
+6. **Negative balance**: rule of §3.
 
 ### `conditional_order`
 
 `{portfolio, instrument, kind: "stop" | "take_profit", price_uusd | null, ts}`
 
-- Pose, modifie ou annule (`null`) le stop ou l'objectif d'une position **existante**.
-- Le prix doit être un entier > 0.
-- Le `ts` de l'événement devient le moment où l'ordre est armé.
+- Sets, modifies or cancels (`null`) the stop or target of an **existing** position.
+- The price must be an integer > 0.
+- The event's `ts` becomes the moment when the order is armed.
 
 ### `funding`
 
 `{portfolio, instrument, stamp, qty_seconds, rate_nusd, fx_bid, fx_ask, amount_ueur}`
 
-- **`stamp`** = H, une heure ronde. Le taux horodaté H par Kraken paie l'heure [H − 1 h, H).
-- **`qty_seconds`** est l'intégrale de la quantité signée sur [H − 1 h, H), calculée sur l'historique du §3 :
-  - pour chaque intervalle entre deux fills, la quantité tenue × la durée en secondes ;
-  - une position ouverte ou fermée pendant l'heure ne paie donc que le temps où elle a été tenue.
-  - Le ledger la recalcule et refuse un désaccord, ou une heure où aucune position n'a été tenue.
-- **Montant payé**, en µUSD : `m = qty_seconds × rate_nusd / (10^8 × 10^3 × 3600)`. S'il est positif, il est payé : un long paie quand le taux est positif, un short paie quand il est négatif. Arrondis :
-  - payé : `ceil(m)` µUSD, puis `cost_eur` ;
-  - reçu : `floor(−m)` µUSD, puis `gain_eur`, compté négatif.
-- **`amount_ueur`** (> 0 = payé) est recalculé par le ledger, qui refuse un désaccord.
-- Effet : `collateral −= amount_ueur` et `funding_paid += amount_ueur`, puis la règle du solde négatif.
-- **Une seule fois** par (portefeuille, instrument, stamp), et toujours dans l'ordre croissant des stamps.
-- Un fill postérieur ne peut plus tomber dans une heure déjà réglée.
-- Le règlement peut se faire en retard : `qty_seconds` vient de l'historique, pas de la position au moment du règlement.
+- **`stamp`** = H, a round hour. The rate timestamped H by Kraken pays the hour [H − 1 h, H).
+- **`qty_seconds`** is the integral of the signed quantity over [H − 1 h, H), computed on the history of §3:
+  - for each interval between two fills, the quantity held × the duration in seconds;
+  - a position opened or closed during the hour therefore pays only for the time it was held.
+  - The ledger recomputes it and refuses a mismatch, or an hour in which no position was held.
+- **Amount paid**, in µUSD: `m = qty_seconds × rate_nusd / (10^8 × 10^3 × 3600)`. If it is positive, it is paid: a long pays when the rate is positive, a short pays when it is negative. Rounding:
+  - paid: `ceil(m)` µUSD, then `cost_eur`;
+  - received: `floor(−m)` µUSD, then `gain_eur`, counted negative.
+- **`amount_ueur`** (> 0 = paid) is recomputed by the ledger, which refuses a mismatch.
+- Effect: `collateral −= amount_ueur` and `funding_paid += amount_ueur`, then the negative balance rule.
+- **Only once** per (portfolio, instrument, stamp), and always in increasing stamp order.
+- A later fill can no longer fall within an already settled hour.
+- Settlement may be late: `qty_seconds` comes from the history, not from the position at the time of settlement.
 
 ### `funding_missing`
 
 `{portfolio, instrument, stamp, qty_seconds}`
 
-Une heure tenue pour laquelle Kraken n'a publié aucun taux.
-- Rien n'est prélevé, mais l'heure est comptée.
-- Elle compte aussi comme réglée : on ne peut plus la payer ensuite.
+An hour held for which Kraken published no rate.
+- Nothing is charged, but the hour is counted.
+- It also counts as settled: it can no longer be paid afterwards.
 
 ### `margin_closeout`
 
 `{portfolio, minute, equity_ueur, threshold_ueur, gross_ueur, order_ids, resumed_after_crash}`
 
-Résumé écrit **après** les `perp_fill` de raison `margin_closeout`, une seule fois par (portefeuille, minute).
+Summary written **after** the `perp_fill` events with reason `margin_closeout`, only once per (portfolio, minute).
 
 ### `minute_incomplete`
 
 `{portfolio, minute, instruments}`
 
-Une minute traitée sans la bougie d'un ou plusieurs instruments détenus (voir §5).
+A minute processed without the candle of one or more held instruments (see §5).
 
 ### `perp_equity`
 
 `{portfolio, ts, collateral_ueur, unrealized_ueur, equity_ueur, gross_ueur, marks, fx_bid, fx_ask}`
 
-Mesure écrite par le simulateur, une seule fois par (portefeuille, ts). Elle sert au pic d'equity et aux statistiques.
+Measurement written by the simulator, only once per (portfolio, ts). It is used for the equity peak and for statistics.
 
-## 5. Simulateur (`pessimiste-perp-v1`)
+## 5. Simulator (`pessimiste-perp-v1`)
 
-### Ordre au marché sur un quote (bid, ask)
+### Market order on a quote (bid, ask)
 
-- **Prix :**
-  - achat (`d > 0`) : `tick_up(ceil(ask × (10000 + slippage_bp) / 10000))` ;
-  - vente (`d < 0`) : `tick_down(floor(bid × (10000 − slippage_bp) / 10000))`.
-- **Frais :** `fee_uusd = ceil(notional_up(d, prix) × taker_fee_bp / 10000)`, puis `fee_ueur = cost_eur(fee_uusd)`.
-  - Pour tout fill, stop, objectif et clôture compris, le notionnel des frais est pris **au prix d'exécution**.
-- **Entrée** (raison `intent`, qui ouvre ou augmente une position) : elle est **refusée** dans quatre cas.
-  - le portefeuille est arrêté ;
-  - il est gelé (`ts < frozen_until_ts`) ;
-  - il n'a plus de collatéral ;
-  - **la marge initiale n'est pas couverte après l'ordre**, c'est-à-dire `equity × 10000 < initial_margin_bp × exposition brute`.
-    - Ce calcul se fait sur l'état après le fill, frais compris.
-    - L'instrument traité est valorisé au milieu du quote, et les autres au mark fourni par l'appelant.
-    - Sans mark pour un instrument détenu, l'ordre est refusé.
-- **Réductions et fermetures** : elles passent toujours.
-- **Identifiant déjà utilisé :**
-  - même portefeuille, instrument et quantité : rien n'est fait ;
-  - autre demande : erreur.
+- **Price:**
+  - buy (`d > 0`): `tick_up(ceil(ask × (10000 + slippage_bp) / 10000))`;
+  - sell (`d < 0`): `tick_down(floor(bid × (10000 − slippage_bp) / 10000))`.
+- **Fees:** `fee_uusd = ceil(notional_up(d, price) × taker_fee_bp / 10000)`, then `fee_ueur = cost_eur(fee_uusd)`.
+  - For every fill, stops, targets and closeouts included, the fee notional is taken **at the execution price**.
+- **Entry** (reason `intent`, which opens or increases a position): it is **refused** in four cases.
+  - the portfolio is halted;
+  - it is frozen (`ts < frozen_until_ts`);
+  - it has no collateral left;
+  - **the initial margin is not covered after the order**, that is `equity × 10000 < initial_margin_bp × gross exposure`.
+    - This calculation is done on the state after the fill, fees included.
+    - The traded instrument is valued at the quote midpoint, and the others at the mark supplied by the caller.
+    - Without a mark for a held instrument, the order is refused.
+- **Reductions and closes**: they always go through.
+- **Identifier already used:**
+  - same portfolio, instrument and quantity: nothing is done;
+  - any other request: error.
 
-### Valorisation
+### Valuation
 
-- **P&L latent** d'une position au mark `m` : `u = floor(sgn(q) × (m − e) × |q| / 10^8)` µUSD, converti par R3 **position par position**.
-- **Equity** = collatéral + Σ des latents convertis.
-- **Exposition brute** (EUR) = Σ `cost_eur(notional_up(q, m))`.
+- **Unrealized P&L** of a position at mark `m`: `u = floor(sgn(q) × (m − e) × |q| / 10^8)` µUSD, converted by R3 **position by position**.
+- **Equity** = collateral + Σ of the converted unrealized amounts.
+- **Gross exposure** (EUR) = Σ `cost_eur(notional_up(q, m))`.
 
-### Traitement d'une minute M (de M à M + 59 s)
+### Processing a minute M (from M to M + 59 s)
 
-Les minutes se traitent dans l'ordre chronologique, avec la bougie **mark** (et la bougie **trade** si elle existe) de chaque instrument détenu.
+Minutes are processed in chronological order, with the **mark** candle (and the **trade** candle if it exists) of each held instrument.
 
-**Horodatage.** Les fills d'une minute sont horodatés **à sa fin**, `M + 59`, ou au dernier fill du portefeuille s'il est plus tard. Une minute ne peut donc pas être traitée après un fill plus récent : il faut traiter les minutes avant de passer de nouveaux ordres.
+**Timestamping.** The fills of a minute are timestamped **at its end**, `M + 59`, or at the portfolio's last fill if that is later. A minute therefore cannot be processed after a more recent fill: the minutes must be processed before placing new orders.
 
-On applique trois étapes **dans cet ordre**.
+Three steps are applied **in this order**.
 
-1. **Clôture sur marge, sur le compte entier**, toutes positions comprises, même celles ouvertes pendant la minute (pessimiste).
-   - Pire mark de la minute : `mark.low` pour un long, `mark.high` pour un short. Les pires cas de tous les instruments sont supposés simultanés.
-   - On calcule l'equity et l'exposition brute à ces pires marks.
-   - Si `equity × 10000 < closeout_margin_bp × exposition`, **toutes** les positions sont fermées :
-     - prix, sur la bougie mark : vente à `tick_down(floor(mark.low × (10000 − slippage_bp)/10000))`, rachat à `tick_up(ceil(mark.high × (10000 + slippage_bp)/10000))` ;
-     - au moins un tick ;
-     - frais : `ceil(notional_up(q, prix) × (taker_fee_bp + liquidation_fee_bp) / 10000)`, convertis par `cost_eur`.
-   - Puis l'événement `margin_closeout`. Le reste de la minute est ignoré pour ce portefeuille.
-   - **Reprise après un crash :** si une clôture de cette minute est commencée (un fill `margin_closeout` existe sans son résumé), elle est **terminée** sans retester la marge. La décision est durable.
-2. **Stops**, armés **avant la fin** de la minute (`stop_armed_ts < M + 60`). Un stop posé pendant la minute s'applique donc à toute la minute (pessimiste).
-   - **Long de stop `s`** : déclenché si `mark.low ≤ s`.
-     - Base : `min(s, trade.open)`, ou `mark.open` sans bougie trade.
-     - Prix : `tick_down(floor(base × (10000 − slippage_bp)/10000))`.
-   - **Short de stop `s`** : déclenché si `mark.high ≥ s`.
-     - Base : `max(s, trade.open)`, ou `mark.open` sans bougie trade.
-     - Prix : `tick_up(ceil(base × (10000 + slippage_bp)/10000))`.
-   - Un prix nul devient un tick, et c'est signalé.
-   - Fermeture complète, au tarif taker. Raison `stop`.
-3. **Objectifs** des positions encore ouvertes, armés **et** ouverts au plus tard au début de la minute (`max(take_profit_armed_ts, opened_ts) ≤ M`). Un ordre limite ne peut pas profiter d'un prix antérieur à son existence.
-   - **Long d'objectif `t`** : exécuté si `trade.high ≥ t + tick`, au prix `t`, sans glissement.
-   - **Short d'objectif `t`** : exécuté si `trade.low ≤ t − tick`, au prix `t`.
-   - Sans bougie trade, pas d'objectif. Fermeture complète, au tarif taker. Raison `take_profit`.
+1. **Margin closeout, on the whole account**, all positions included, even those opened during the minute (pessimistic).
+   - Worst mark of the minute: `mark.low` for a long, `mark.high` for a short. The worst cases of all instruments are assumed simultaneous.
+   - Equity and gross exposure are computed at these worst marks.
+   - If `equity × 10000 < closeout_margin_bp × exposure`, **all** positions are closed:
+     - price, on the mark candle: sell at `tick_down(floor(mark.low × (10000 − slippage_bp)/10000))`, buy back at `tick_up(ceil(mark.high × (10000 + slippage_bp)/10000))`;
+     - at least one tick;
+     - fees: `ceil(notional_up(q, price) × (taker_fee_bp + liquidation_fee_bp) / 10000)`, converted by `cost_eur`.
+   - Then the `margin_closeout` event. The rest of the minute is ignored for that portfolio.
+   - **Resume after a crash:** if a closeout of this minute has been started (a `margin_closeout` fill exists without its summary), it is **completed** without re-testing the margin. The decision is durable.
+2. **Stops**, armed **before the end** of the minute (`stop_armed_ts < M + 60`). A stop placed during the minute therefore applies to the whole minute (pessimistic).
+   - **Long with stop `s`**: triggered if `mark.low <= s`.
+     - Base: `min(s, trade.open)`, or `mark.open` without a trade candle.
+     - Price: `tick_down(floor(base × (10000 − slippage_bp)/10000))`.
+   - **Short with stop `s`**: triggered if `mark.high >= s`.
+     - Base: `max(s, trade.open)`, or `mark.open` without a trade candle.
+     - Price: `tick_up(ceil(base × (10000 + slippage_bp)/10000))`.
+   - A zero price becomes one tick, and this is flagged.
+   - Full close, at the taker rate. Reason `stop`.
+3. **Targets** of the positions still open, armed **and** opened at the latest at the start of the minute (`max(take_profit_armed_ts, opened_ts) <= M`). A limit order cannot benefit from a price prior to its existence.
+   - **Long with target `t`**: executed if `trade.high >= t + tick`, at price `t`, without slippage.
+   - **Short with target `t`**: executed if `trade.low <= t − tick`, at price `t`.
+   - Without a trade candle, no target. Full close, at the taker rate. Reason `take_profit`.
 
-**Glissement de sortie.** L'appelant peut ajouter, par instrument, un glissement supplémentaire aux stops et aux clôtures : le pire demi-spread des 7 derniers jours, relevé par la veille. C'est l'optimisme résiduel R4 de l'étude.
+**Exit slippage.** The caller may add, per instrument, an extra slippage to stops and closeouts: the worst half-spread of the last 7 days, measured by the watcher. This accounts for the residual optimism of the model.
 
-**Bougie manquante** pour un instrument détenu :
-- l'événement `minute_incomplete` est écrit ;
-- son stop et son objectif ne sont pas évalués ;
-- la clôture sur marge le valorise à son dernier mark connu, fourni par l'appelant. Sans ce mark, elle n'est pas testée, et c'est signalé.
+**Missing candle** for a held instrument:
+- the `minute_incomplete` event is written;
+- its stop and its target are not evaluated;
+- the margin closeout values it at its last known mark, supplied by the caller. Without that mark, it is not tested, and this is flagged.
 
-**Isolement.** L'erreur d'un portefeuille n'empêche pas le traitement des autres.
+**Isolation.** The error of one portfolio does not prevent the processing of the others.
 
-### Taux de change, détention maximale, identifiants
+### Exchange rate, maximum holding, identifiers
 
-- **EUR/USD.** Le taux utilisé est celui du dernier relevé à la minute ou avant. Il est écrit dans chaque événement.
-- **Détention maximale.** Quand `ts − opened_ts ≥ max_holding_s`, la position est fermée au quote courant, comme un ordre au marché. Raison `max_holding`.
-- **Mise à plat** (`halt`, `kill_switch`) : toutes les positions au marché. Sans quote pour un instrument détenu, c'est une erreur, jamais une absence silencieuse.
-- **Identifiants**, qui portent l'identité de la position (`open_seq`) :
-  - stop : `stop:<portefeuille>:<instrument>:<open_seq>:<minute>` ;
-  - objectif : `take_profit:<portefeuille>:<instrument>:<open_seq>:<minute>` ;
-  - clôture : `margin_closeout:<portefeuille>:<instrument>:<open_seq>:<minute>` ;
-  - détention : `max_holding:<portefeuille>:<instrument>:<open_seq>` ;
-  - mise à plat : `<raison>:<portefeuille>:<instrument>:<open_seq>`.
-- **Écritures.** Elles se font sous un verrou exclusif (`<journal>.sim.lock`) : le contrôle d'idempotence et l'écriture sont atomiques.
+- **EUR/USD.** The rate used is that of the last reading at the minute or before. It is written in each event.
+- **Maximum holding.** When `ts − opened_ts >= max_holding_s`, the position is closed at the current quote, like a market order. Reason `max_holding`.
+- **Flattening** (`halt`, `kill_switch`): all positions at market. Without a quote for a held instrument, it is an error, never a silent omission.
+- **Identifiers**, which carry the identity of the position (`open_seq`):
+  - stop: `stop:<portfolio>:<instrument>:<open_seq>:<minute>`;
+  - target: `take_profit:<portfolio>:<instrument>:<open_seq>:<minute>`;
+  - closeout: `margin_closeout:<portfolio>:<instrument>:<open_seq>:<minute>`;
+  - holding: `max_holding:<portfolio>:<instrument>:<open_seq>`;
+  - flattening: `<reason>:<portfolio>:<instrument>:<open_seq>`.
+- **Writes.** They are done under an exclusive lock (`<journal>.sim.lock`): the idempotence check and the write are atomic.

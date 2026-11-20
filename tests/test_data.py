@@ -1,4 +1,4 @@
-"""Tests du module de données : sans réseau (transport httpx mocké, fixtures enregistrées) sauf `reseau`."""
+"""Data module tests: no network (mocked httpx transport, recorded fixtures) except those marked `network`."""
 
 from __future__ import annotations
 
@@ -8,15 +8,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from arene.config import ConfigError, load_config, load_instruments
-from arene.data import DataError, RateLimitedHttp, to_qty, to_ueur
-from arene.data.binance import BinanceClient, DayBar
-from arene.data.kraken import KrakenClient, KrakenError
-from arene.data.store import BarStore
-from arene.types import Bar
+from arena.config import ConfigError, load_config, load_instruments
+from arena.data import DataError, RateLimitedHttp, to_qty, to_ueur
+from arena.data.binance import BinanceClient, DayBar
+from arena.data.kraken import KrakenClient, KrakenError
+from arena.data.store import BarStore
+from arena.types import Bar
 
 FIX = Path(__file__).parent / "fixtures"
-CONFIG = Path(__file__).resolve().parent.parent / "config" / "arene.toml"
+CONFIG = Path(__file__).resolve().parent.parent / "config" / "arena.toml"
 H4 = 14400
 
 
@@ -60,7 +60,7 @@ LAST_TS = int(OHLC_ROWS[-1][0])
 # --- conversions -----------------------------------------------------------------------------
 
 
-def test_conversion_exacte():
+def test_conversion_exact():
     assert to_ueur("56622.4") == 56_622_400_000
     assert to_qty("130.20355035") == 13_020_355_035
     assert to_ueur("0.00001") == 10
@@ -72,7 +72,7 @@ def test_conversion_exacte():
 # --- Kraken ----------------------------------------------------------------------------------
 
 
-def test_ohlc_exclut_barre_en_cours():
+def test_ohlc_excludes_current_bar():
     c = kraken(ok("kraken_ohlc.json"), now=LAST_TS + 3600)
     bars = c.ohlc("BTC/EUR", "XBTEUR")
     assert len(bars) == len(OHLC_ROWS) - 1
@@ -80,12 +80,12 @@ def test_ohlc_exclut_barre_en_cours():
     assert [b.ts for b in bars] == sorted(b.ts for b in bars)
 
 
-def test_ohlc_garde_derniere_barre_si_close():
+def test_ohlc_keeps_last_bar_if_closed():
     c = kraken(ok("kraken_ohlc.json"), now=LAST_TS + H4)
     assert len(c.ohlc("BTC/EUR", "XBTEUR")) == len(OHLC_ROWS)
 
 
-def test_ohlc_conversion_champs():
+def test_ohlc_conversion_fields():
     c = kraken(ok("kraken_ohlc.json"), now=LAST_TS + H4)
     b = c.ohlc("BTC/EUR", "XBTEUR")[-1]
     assert b == Bar(
@@ -93,7 +93,7 @@ def test_ohlc_conversion_champs():
     )
 
 
-def test_ohlc_parametres_requete():
+def test_ohlc_request_parameters():
     seen = {}
 
     def h(req: httpx.Request) -> httpx.Response:
@@ -109,7 +109,7 @@ def test_ticker_quote():
     assert (q.symbol, q.ts, q.ask, q.bid) == ("BTC/EUR", 1_800_000_000, 67_181_100_000, 67_181_000_000)
 
 
-def test_asset_pairs_entiers():
+def test_asset_pairs_integers():
     p = kraken(ok("kraken_assetpairs.json"), now=0).asset_pairs(["XBTEUR", "ETHEUR", "XRPEUR"])
     assert (p["XBTEUR"].tick_ueur, p["XBTEUR"].lot_min_qty, p["XBTEUR"].cost_min_ueur) == (
         100_000,
@@ -120,12 +120,12 @@ def test_asset_pairs_entiers():
     assert p["XRPEUR"].tick_ueur == 10 and p["XRPEUR"].lot_min_qty == 400_000_000
 
 
-def test_asset_pairs_paire_absente():
-    with pytest.raises(DataError, match="absentes"):
+def test_asset_pairs_missing_pair():
+    with pytest.raises(DataError, match="missing"):
         kraken(ok("kraken_assetpairs.json"), now=0).asset_pairs(["XBTEUR", "DOGEEUR"])
 
 
-def test_erreur_kraken_typee():
+def test_kraken_error_typed():
     body = {"error": ["EQuery:Unknown asset pair"], "result": {}}
     calls = []
 
@@ -136,10 +136,10 @@ def test_erreur_kraken_typee():
     with pytest.raises(KrakenError) as ei:
         kraken(h, now=0).ohlc("X/EUR", "FOOEUR")
     assert ei.value.errors == ["EQuery:Unknown asset pair"]
-    assert len(calls) == 1  # erreur définitive : pas de nouvelle tentative
+    assert len(calls) == 1  # permanent error: no retry
 
 
-def test_erreur_kraken_passagere_reessayee():
+def test_transient_kraken_error_is_retried():
     n = {"i": 0}
 
     def h(req):
@@ -152,7 +152,7 @@ def test_erreur_kraken_passagere_reessayee():
     assert n["i"] == 3
 
 
-def test_retry_sur_5xx_puis_succes():
+def test_retry_on_5xx_then_success():
     ft = FakeTime()
     n = {"i": 0}
 
@@ -163,10 +163,10 @@ def test_retry_sur_5xx_puis_succes():
     c = KrakenClient(make_http(h, ft), now=lambda: 1)
     assert c.ticker("BTC/EUR", "XBTEUR").bid == 67_181_000_000
     assert n["i"] == 3
-    assert 1.0 in ft.sleeps and 2.0 in ft.sleeps  # backoff exponentiel
+    assert 1.0 in ft.sleeps and 2.0 in ft.sleeps  # exponential backoff
 
 
-def test_retry_epuise_apres_3_tentatives():
+def test_retry_exhausted_after_3_attempts():
     n = {"i": 0}
 
     def h(req):
@@ -178,7 +178,7 @@ def test_retry_epuise_apres_3_tentatives():
     assert n["i"] == 3
 
 
-def test_pas_de_retry_sur_4xx():
+def test_no_retry_on_4xx():
     n = {"i": 0}
 
     def h(req):
@@ -190,20 +190,20 @@ def test_pas_de_retry_sur_4xx():
     assert n["i"] == 1
 
 
-def test_retry_sur_erreur_reseau():
+def test_retry_on_network_error():
     n = {"i": 0}
 
     def h(req):
         n["i"] += 1
         if n["i"] == 1:
-            raise httpx.ConnectTimeout("délai")
+            raise httpx.ConnectTimeout("timeout")
         return httpx.Response(200, content=fx("kraken_ticker.json"))
 
     assert kraken(h, now=1).ticker("BTC/EUR", "XBTEUR").ask > 0
     assert n["i"] == 2
 
 
-def test_limite_1_requete_par_seconde():
+def test_limit_1_request_per_second():
     ft = FakeTime()
     http = make_http(ok("kraken_ticker.json"), ft)
     c = KrakenClient(http, now=lambda: 1)
@@ -217,8 +217,8 @@ def test_limite_1_requete_par_seconde():
 KL = json.loads(fx("binance_klines.json"))
 
 
-def test_binance_exclut_jour_en_cours_et_convertit():
-    now = KL[-1][6] // 1000 - 100  # le dernier jour n'est pas terminé
+def test_binance_excludes_current_day_and_converts():
+    now = KL[-1][6] // 1000 - 100  # the last day is not over
     c = BinanceClient(make_http(ok("binance_klines.json")), now=lambda: now)
     bars = c.klines_1d("BTCUSDT")
     assert len(bars) == len(KL) - 1
@@ -227,7 +227,7 @@ def test_binance_exclut_jour_en_cours_et_convertit():
     assert b.close == 75_867_590_000 and b.volume == 521_590_597_000 and b.taker_buy_base == 265_902_676_000
 
 
-def test_binance_jour_termine_inclus():
+def test_binance_finished_day_included():
     c = BinanceClient(make_http(ok("binance_klines.json")), now=lambda: KL[-1][6] // 1000 + 5)
     assert len(c.klines_1d("BTCUSDT")) == len(KL)
 
@@ -245,7 +245,7 @@ def test_store_dedup(tmp_path):
     assert s.add("BTC/EUR", H4, [bar(H4, 999), bar(2 * H4)]) == 1
     lines = s.path("BTC/EUR", H4).read_text().splitlines()
     assert len(lines) == 3
-    assert s.load("BTC/EUR", H4, 10 * H4)[1].close == 100  # l'existant gagne
+    assert s.load("BTC/EUR", H4, 10 * H4)[1].close == 100  # the existing one wins
     assert s.path("BTC/EUR", H4) == tmp_path / "kraken" / "BTC-EUR_4h.jsonl"
 
 
@@ -262,13 +262,13 @@ def test_store_update_incremental(tmp_path):
     assert sinces == [None, H4]
 
 
-def test_store_load_aucune_barre_future(tmp_path):
+def test_store_load_no_future_bar(tmp_path):
     s = BarStore(tmp_path, "kraken")
     s.add("BTC/EUR", H4, [bar(i * H4) for i in range(6)])
     for until in (0, 1, H4 - 1, H4, 3 * H4 + 5, 100 * H4):
         got = s.load("BTC/EUR", H4, until)
         assert all(b.ts + H4 <= until for b in got), until
-    # barre ouverte à 3*H4 mais non terminée à until = 3*H4 + 5 : exclue
+    # bar opened at 3*H4 but not finished at until = 3*H4 + 5: excluded
     assert [b.ts for b in s.load("BTC/EUR", H4, 3 * H4 + 5)] == [0, H4, 2 * H4]
     assert s.load("ETH/EUR", H4, 10**9) == []
 
@@ -290,7 +290,7 @@ def test_store_binance_roundtrip(tmp_path):
     assert s.path("BTCUSDT", 86400).name == "BTCUSDT_1d.jsonl"
 
 
-def test_store_ligne_corrompue(tmp_path):
+def test_store_corrupted_line(tmp_path):
     s = BarStore(tmp_path, "kraken")
     s.add("BTC/EUR", H4, [bar(0)])
     with s.path("BTC/EUR", H4).open("a") as f:
@@ -302,30 +302,30 @@ def test_store_ligne_corrompue(tmp_path):
 # --- Config ----------------------------------------------------------------------------------
 
 
-def test_config_et_instruments_enrichis():
+def test_config_and_instruments_enriched():
     cfg = load_config(CONFIG)
     assert cfg.capital_ueur == 1_000_000_000 and cfg.interval_s == H4
     assert len(cfg.sha256) == 64 and len(cfg.instrument_refs) == 6
     assert cfg.models[0].daily_budget_uusd == 100_000 and cfg.models[2].price_out_uusd_per_mtok == 20_000_000
-    assert (cfg.temoins.e0065.L, cfg.temoins.e0065.k, cfg.temoins.e0065.H) == (20, 3, 10)
+    assert (cfg.benchmarks.e0065.L, cfg.benchmarks.e0065.k, cfg.benchmarks.e0065.H) == (20, 3, 10)
     c = kraken(ok("kraken_assetpairs.json"), now=0)
-    # le fixture ne couvre que 3 des 6 paires : l'enrichissement doit échouer proprement
+    # the fixture covers only 3 of the 6 pairs: the enrichment must fail cleanly
     with pytest.raises(DataError):
         load_instruments(cfg, c)
 
 
-def test_config_invalide(tmp_path):
+def test_config_invalid(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text('venue_mode = "paper"\n')
     with pytest.raises(ConfigError):
         load_config(p)
 
 
-# --- Réseau réel (données publiques, sans clé) -----------------------------------------------
+# --- Real network (public data, no key) -----------------------------------------------
 
 
-@pytest.mark.reseau
-def test_reseau_kraken_et_binance():
+@pytest.mark.network
+def test_network_kraken_and_binance():
     import time
 
     http = RateLimitedHttp()

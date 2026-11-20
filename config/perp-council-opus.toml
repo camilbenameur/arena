@@ -1,0 +1,19 @@
+# The Opus council of the league of the councils (docs/SPEC-COUNCILS.md): a second council,
+# ten Haiku advisers and an Opus President, inspired by the same trading skills. The same ten Haiku
+# advisers, prompts and policy as the Haiku council (config/perp-council.toml): only the President differs.
+# It plays the triggers of config/perp-llm.toml. Hashed (sha256 of the bytes) and journaled with each round.
+enabled = true
+portfolio = "council-perp:opus"
+name = "Opus Council"
+model = "claude-haiku-5-5"            # the ten advisers
+president_model = "claude-opus-5-5"
+# A round is ten Haiku calls (about 0.02 $) and one Opus call (about 0.04 to 0.08 $: the Opus portfolio of the
+# perp league costs 0.037 $ a round on average, the President reads ten opinions more): about 0.06 to 0.10 $, so
+# 9 to 26 $ a day at 150 to 260 rounds. A ceiling against a runaway, not a target.
+daily_budget_usd = "25.00"
+members_parallel = 4      # stage A: 9 members, 4 `claude` processes at a time (and max_member_processes of the league)
+member_timeout_s = 90     # per adviser call (Haiku: 8 s median)
+president_timeout_s = 240  # per President call (the Opus portfolio of the league: 240 s too)
+member_max_tool_calls = 3
+# Its own risk policy, profile "aggressive" (a file of config/)
+policy = "policy-perp-council.toml"

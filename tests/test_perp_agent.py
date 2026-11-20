@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from arene.perp import indicators as ind
-from arene.perp.agent import (
+from arena.perp import indicators as ind
+from arena.perp.agent import (
     DEFAULT_WORKDIR,
     INSTRUMENTS,
     OUTPUT_SCHEMA,
@@ -24,13 +24,13 @@ from arene.perp.agent import (
     parse_decision,
     parse_stream,
 )
-from arene.perp.agent_round import run_agent_round
-from arene.perp.ledger import replay
-from arene.perp.market import market_view
-from arene.perp.mcp_server import RESPONSE_MAX_CHARS, RoundTools
-from arene.perp.riskd import evaluate_perp
-from arene.perp.round_data import market_block
-from arene.perp.types import BookSnapshot, OpenInterest
+from arena.perp.agent_round import run_agent_round
+from arena.perp.ledger import replay
+from arena.perp.market import market_view
+from arena.perp.mcp_server import RESPONSE_MAX_CHARS, RoundTools
+from arena.perp.riskd import evaluate_perp
+from arena.perp.round_data import market_block
+from arena.perp.types import BookSnapshot, OpenInterest
 from tests.test_perp_watcher import CFG, POLICY, SPECS, SYMBOLS, T0, World
 
 FAKE = Path(__file__).parent / "fake_claude.py"
@@ -99,12 +99,12 @@ def test_full_round_with_tools_decision_and_execution(tmp_path):
     res, events = round_for(w)
     assert res.error is None and res.mcp_status == "connected"
     calls = [e["payload"] for e in events if e["type"] == "tool_call"]
-    assert [c["tool"] for c in calls] == ["derives", "simuler_ordre"]
+    assert [c["tool"] for c in calls] == ["derivatives", "simulate_order"]
     assert all(isinstance(c["response"], str) and isinstance(c["arguments"], str) for c in calls)
     assert all(hashlib.sha256(c["response"].encode()).hexdigest() == c["response_sha256"] for c in calls)
     dec = next(e["payload"] for e in events if e["type"] == "agent_decision")
     assert dec["parse_error"] is None and dec["cost_uusd"] == 12_346 and dec["input_tokens"] == 1200
-    assert dec["parsed"]["actions"][0]["invalidation"] == "clôture 4 h sous 68000"
+    assert dec["parsed"]["actions"][0]["invalidation"] == "4 h close below 68000"
     verdicts = [
         e["payload"] for e in events if e["type"] == "perp_verdict" and e["payload"]["portfolio"] == LLM
     ]
@@ -124,7 +124,7 @@ def test_simulate_order_tool_equals_the_final_verdict(tmp_path):
     rd = next(e["payload"] for e in w.events() if e["type"] == "round_data")
     tools = RoundTools(w.var / rd["path"], LLM, 4)
     out, err = tools.call(
-        "simuler_ordre",
+        "simulate_order",
         {
             "instrument": "PF_ETHUSD",
             "action": "open_short",
@@ -136,13 +136,13 @@ def test_simulate_order_tool_equals_the_final_verdict(tmp_path):
     )
     assert not err
     v = evaluate_perp(
-        __import__("arene.perp.riskd", fromlist=["PerpIntent"]).PerpIntent(
+        __import__("arena.perp.riskd", fromlist=["PerpIntent"]).PerpIntent(
             "simulation", LLM, T0 + 140, "PF_ETHUSD", "open_short", size_bp=1050, stop_bp=400, horizon_h=24, expected_move_bp=500
         ),
         tools._account(), tools._view(), tools._specs(), tools._counters(), tools._policy(),
         CFG.simulation, T0 + 140, False,
     )  # fmt: skip
-    assert out["approuve"] == v.approved and out["codes_de_refus"] == list(v.reasons)
+    assert out["approved"] == v.approved and out["refusal_codes"] == list(v.reasons)
 
 
 def test_tool_budget_and_bad_arguments(tmp_path):
@@ -152,8 +152,8 @@ def test_tool_budget_and_bad_arguments(tmp_path):
     assert len(calls) == 5 and calls[-1]["is_error"] and "budget" in calls[-1]["response"]
     rd = next(e["payload"] for e in events if e["type"] == "round_data")
     tools = RoundTools(w.var / rd["path"], LLM, 4)
-    assert tools.call("bougies", {"instrument": "PF_DOGEUSD", "intervalle": "1h"})[1]
-    assert tools.call("rien", {})[1]
+    assert tools.call("candles", {"instrument": "PF_DOGEUSD", "interval": "1h"})[1]
+    assert tools.call("nothing", {})[1]
     with pytest.raises(ValueError):
         RoundTools(w.var / rd["path"], "someone-else", 4)
 
@@ -217,7 +217,7 @@ def test_command_and_environment(tmp_path, monkeypatch):
     cmd = d.command(tmp_path / "mcp.json")
     for flag in ("--strict-mcp-config", "--no-session-persistence", "--verbose"):
         assert flag in cmd
-    assert cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--allowedTools") + 1] == "mcp__arene__*"
+    assert cmd[cmd.index("--tools") + 1] == "" and cmd[cmd.index("--allowedTools") + 1] == "mcp__arena__*"
     assert cmd[cmd.index("--output-format") + 1] == "stream-json"
     assert json.loads(cmd[cmd.index("--json-schema") + 1]) == OUTPUT_SCHEMA
     assert "--disable-slash-commands" in cmd and cmd[cmd.index("--max-budget-usd") + 1] == "1.00"
@@ -239,7 +239,7 @@ def test_command_and_environment(tmp_path, monkeypatch):
 def test_parse_stream_ignores_other_tools_and_floats_never_appear():
     lines = [
         json.dumps(
-            {"type": "system", "subtype": "init", "mcp_servers": [{"name": "arene", "status": "connected"}]}
+            {"type": "system", "subtype": "init", "mcp_servers": [{"name": "arena", "status": "connected"}]}
         ),
         json.dumps(
             {
@@ -285,7 +285,7 @@ def test_indicators_are_integers_and_sane():
 
 def _rpc_session(round_dir: Path, lines: list[str]) -> list[dict]:
     p = subprocess.run(
-        [sys.executable, "-m", "arene.perp.mcp_server", "--round-dir", str(round_dir), "--portfolio", LLM],
+        [sys.executable, "-m", "arena.perp.mcp_server", "--round-dir", str(round_dir), "--portfolio", LLM],
         input="\n".join(lines) + "\n",
         capture_output=True,
         text=True,
@@ -314,11 +314,11 @@ def test_the_mcp_server_survives_any_input(tmp_path):
         ),
         json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}),
         (
-            '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"simuler_ordre","arguments":'
+            '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"simulate_order","arguments":'
             '{"instrument":"PF_XBTUSD","action":"open_long","size_pct":1e999999999}}}'
         ),
         (
-            '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"simuler_ordre","arguments":'
+            '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"simulate_order","arguments":'
             '{"instrument":"PF_XBTUSD","action":"open_long","size_pct":1e30,"stop_pct":3}}}'
         ),
         "not json",
@@ -333,14 +333,14 @@ def test_the_mcp_server_survives_any_input(tmp_path):
     assert len(by_id[3]["result"]["tools"]) == 6  # still alive after every bad input
     tools = RoundTools(d, LLM, 20)
     for name, args in (
-        ("bougies", {"instrument": "PF_XBTUSD", "intervalle": "1h", "n": 48.5}),
-        ("bougies", {"instrument": "PF_XBTUSD", "intervalle": "2h"}),
-        ("bougies", {"instrument": "PF_XBTUSD", "intervalle": "1h", "x": 1}),
-        ("simuler_ordre", {"instrument": "PF_XBTUSD", "action": "open_long", "horizon_h": 10**30}),
-        ("historique", "pas un objet"),
+        ("candles", {"instrument": "PF_XBTUSD", "interval": "1h", "n": 48.5}),
+        ("candles", {"instrument": "PF_XBTUSD", "interval": "2h"}),
+        ("candles", {"instrument": "PF_XBTUSD", "interval": "1h", "x": 1}),
+        ("simulate_order", {"instrument": "PF_XBTUSD", "action": "open_long", "horizon_h": 10**30}),
+        ("history", "not an object"),
     ):
         payload, err = tools.call(name, args)
-        assert err and "arguments invalides" in payload["erreur"] and "Python" not in payload["erreur"], args
+        assert err and "invalid arguments" in payload["error"] and "Python" not in payload["error"], args
 
 
 def test_tool_responses_stay_small(tmp_path):
@@ -356,11 +356,11 @@ def test_tool_responses_stay_small(tmp_path):
     rd = next(e["payload"] for e in w.events() if e["type"] == "round_data")
     tools = RoundTools(w.var / rd["path"], LLM, 20)
     for name, args in (
-        ("historique", {"n": 10}),
-        ("bougies", {"instrument": "PF_XBTUSD", "intervalle": "5m", "n": 24}),
-        ("indicateurs", {"instrument": "PF_XBTUSD", "intervalle": "5m"}),
-        ("derives", {"instrument": "PF_XBTUSD"}),
-        ("simuler_ordre", {"instrument": "PF_XBTUSD", "action": "open_long", "size_pct": 10, "stop_pct": 3,
+        ("history", {"n": 10}),
+        ("candles", {"instrument": "PF_XBTUSD", "interval": "5m", "n": 24}),
+        ("indicators", {"instrument": "PF_XBTUSD", "interval": "5m"}),
+        ("derivatives", {"instrument": "PF_XBTUSD"}),
+        ("simulate_order", {"instrument": "PF_XBTUSD", "action": "open_long", "size_pct": 10, "stop_pct": 3,
                            "horizon_h": 24, "expected_move_pct": 5}),
     ):  # fmt: skip
         payload, err = tools.call(name, args)
@@ -384,8 +384,8 @@ def test_empty_book_side_and_closed_open_interest(tmp_path):
     ]  # the current hour is not closed
     round_for(w)
     rd = next(e["payload"] for e in w.events() if e["type"] == "round_data")
-    payload, err = RoundTools(w.var / rd["path"], LLM, 4).call("carnet", {"instrument": "PF_XBTUSD"})
-    assert not err and payload["carnet"] is None
+    payload, err = RoundTools(w.var / rd["path"], LLM, 4).call("order_book", {"instrument": "PF_XBTUSD"})
+    assert not err and payload["order_book"] is None
 
 
 def test_a_round_is_played_once(tmp_path):
@@ -461,7 +461,7 @@ def test_retry_only_after_a_transport_failure(tmp_path):
     assert len(calls) == 1 and res.attempts == 1 and res.cost_uusd == 20_000 and res.decision is None
     # a transport failure (no result event): one retry, costs summed, first error kept
     calls.clear()
-    ok = {"actions": [], "justification": "rien"}
+    ok = {"actions": [], "justification": "nothing"}
     res = AgentDecider(
         "m",
         LLM,
@@ -493,7 +493,7 @@ def test_a_timeout_keeps_the_partial_stream(tmp_path):
                 {
                     "type": "tool_use",
                     "id": "a",
-                    "name": "mcp__arene__derives",
+                    "name": "mcp__arena__derivatives",
                     "input": {"instrument": "PF_XBTUSD"},
                 }
             ]
@@ -515,14 +515,14 @@ def test_a_timeout_keeps_the_partial_stream(tmp_path):
     d.mkdir()
     res = AgentDecider("m", LLM, tmp_path / "w", runner=runner, timeout_s=3).decide(d, {})
     assert res.rc == TIMEOUT_RC and "timeout" in res.error and res.attempts == 1
-    assert [c.tool for c in res.tool_calls] == ["derives"]
+    assert [c.tool for c in res.tool_calls] == ["derivatives"]
 
 
 def test_pending_mcp_with_a_tool_answer_keeps_the_decision_and_arguments_keep_their_numbers():
     lines = [
-        json.dumps({"type": "system", "subtype": "init", "mcp_servers": [{"name": "arene", "status": "pending"}]}),
+        json.dumps({"type": "system", "subtype": "init", "mcp_servers": [{"name": "arena", "status": "pending"}]}),
         (
-            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"mcp__arene__simuler_ordre",'
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"mcp__arena__simulate_order",'
             '"input":{"size_pct":20.50,"instrument":"PF_XBTUSD"}}]}}'
         ),
         json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "a", "content": "{}"}]}}),
@@ -572,7 +572,7 @@ def test_no_retry_once_the_model_answered_and_env_is_whitelisted(tmp_path, monke
 
 def test_malformed_stream_lines_never_crash():
     lines = ["123", "null", "[1]", '{"type":"user","message":{"content":"hi"}}',
-             '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"mcp__arene__bougies","input":{"n":1e99999999999999999999}}]}}',
+             '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"mcp__arena__candles","input":{"n":1e99999999999999999999}}]}}',
              '{"type":"result","subtype":"success","is_error":false,"total_cost_usd":"abc","structured_output":{"actions":[],"justification":""}}']  # fmt: skip
     res = parse_stream(lines)
     assert res.cost_uusd == 0 and res.error == "unreadable total_cost_usd" and res.tool_calls == []
@@ -629,7 +629,7 @@ def test_an_unprotected_position_is_reported_open_and_closed_at_the_next_tick(tm
 
 
 def test_first_call_guards():
-    from arene.perp.first_call import check_init, spot_cycle_too_close
+    from arena.perp.first_call import check_init, spot_cycle_too_close
 
     day = 20_000 * 86_400
     assert spot_cycle_too_close(day + 4 * 3600 + 5 * 60 - 19 * 60)  # 19 min before 04:05
@@ -637,9 +637,9 @@ def test_first_call_guards():
     assert spot_cycle_too_close(day + 2 * 3600) is None
     assert spot_cycle_too_close(day - 60)  # 23:59, before 00:05 of the next day
     good = {
-        "mcp_servers": [{"name": "arene", "status": "connected"}],
-        "tools": ["StructuredOutput", *(f"mcp__arene__{t}" for t in ("bougies", "carnet", "derives",
-                                                                     "indicateurs", "simuler_ordre", "historique"))],
+        "mcp_servers": [{"name": "arena", "status": "connected"}],
+        "tools": ["StructuredOutput", *(f"mcp__arena__{t}" for t in ("candles", "order_book", "derivatives",
+                                                                     "indicators", "simulate_order", "history"))],
         "permissionMode": "dontAsk", "model": "m", "apiKeySource": "none", "agents": ["Explore"],
     }  # fmt: skip
     assert check_init(good, "m") == []
@@ -735,7 +735,7 @@ def test_an_invalid_order_is_rejected_alone():
 
 
 def test_levels_must_be_near_and_not_crossed():
-    from arene.perp.agent_orders import validate_levels
+    from arena.perp.agent_orders import validate_levels
 
     marks = {"PF_XBTUSD": 70_000_000_000}
     cases = [
@@ -757,7 +757,7 @@ def test_levels_must_be_near_and_not_crossed():
 
 
 def _state(w, name=LLM):
-    from arene.perp.agent_orders import pending_state
+    from arena.perp.agent_orders import pending_state
 
     return pending_state(w.events(), name)
 
@@ -802,29 +802,29 @@ def test_an_invalid_decision_keeps_the_set(tmp_path):
 
 
 def test_rejected_elements_are_journaled_and_shown_next_round(tmp_path):
-    from arene.perp.agent_round import snapshot
+    from arena.perp.agent_round import snapshot
 
     w = league(tmp_path)
     crossed = {**ALERT, "condition": "above", "price_usd": 69_000}
     far = {**ENTRY, "price_usd": 95_000}
     extra = {"*": decision(alerts=[crossed, ALERT], entry_orders=[far, {**ENTRY, "size_pct": 101}])}
     round_for(w, runner=fake_runner(extra=extra), round_id=1)
-    rej = w.events("agent_orders_set")[0]["payload"]["rejected"]
-    assert sorted((r["kind"], r["k"]) for r in rej) == [("alert", 0), ("entry", 0), ("entry", 1)]
+    rejected = w.events("agent_orders_set")[0]["payload"]["rejected"]
+    assert sorted((r["kind"], r["k"]) for r in rejected) == [("alert", 0), ("entry", 0), ("entry", 1)]
     assert len(_state(w).pending) == 1
     round_for(w, runner=fake_runner(extra={"*": decision()}), round_id=2, now=T0 + 150)
     rd = [e["payload"] for e in w.events("round_data")][-1]
     data = json.loads((w.var / rd["path"] / "round.json").read_text())
-    comp = snapshot(data, "rendezvous", None)["compte"]
-    assert len(comp["alertes_en_attente"]) == 1 and comp["alertes_en_attente"][0]["niveau_usd"] == "69437"
-    assert comp["alertes_en_attente"][0]["echeance_utc"].endswith("Z")
-    assert {(x["type"], x["rang"]) for x in comp["depuis_ta_derniere_ronde"]["elements_rejetes"]} == {
-        ("alerte", 0), ("ordre_d_entree", 0), ("ordre_d_entree", 1)
+    comp = snapshot(data, "rendezvous", None)["account"]
+    assert len(comp["pending_alerts"]) == 1 and comp["pending_alerts"][0]["level_usd"] == "69437"
+    assert comp["pending_alerts"][0]["expiry_utc"].endswith("Z")
+    assert {(x["type"], x["rank"]) for x in comp["since_your_last_round"]["rejected_items"]} == {
+        ("alert", 0), ("entry_order", 0), ("entry_order", 1)
     }  # fmt: skip
 
 
 def test_orders_are_private_to_their_portfolio(tmp_path):
-    from arene.perp.agent_round import snapshot
+    from arena.perp.agent_round import snapshot
 
     w = league(tmp_path)
     w.w.sim.open_portfolio(OTHER, "llm", T0 + 130)
@@ -834,18 +834,18 @@ def test_orders_are_private_to_their_portfolio(tmp_path):
     rd = next(e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == OTHER)
     raw = (w.var / rd["path"] / "round.json").read_text()
     assert "69437" not in raw and "70500" not in raw and "support" not in raw
-    comp = snapshot(json.loads(raw), "rendezvous", None)["compte"]
-    assert comp["alertes_en_attente"] == [] and comp["ordres_d_entree_en_attente"] == []
-    assert not any(comp["depuis_ta_derniere_ronde"].values())
+    comp = snapshot(json.loads(raw), "rendezvous", None)["account"]
+    assert comp["pending_alerts"] == [] and comp["pending_entry_orders"] == []
+    assert not any(comp["since_your_last_round"].values())
     # the tools of the other portfolio read that round.json only
-    out, err = RoundTools(w.var / rd["path"], OTHER, 4).call("historique", {})
+    out, err = RoundTools(w.var / rd["path"], OTHER, 4).call("history", {})
     assert not err and "69437" not in json.dumps(out)
     # its owner sees them
     round_for(w, runner=fake_runner(extra={"*": decision()}), round_id=3, now=T0 + 160)
     rd = [e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == LLM][-1]
-    mine = snapshot(json.loads((w.var / rd["path"] / "round.json").read_text()), "rendezvous", None)["compte"]
-    assert len(mine["alertes_en_attente"]) == 1 and len(mine["ordres_d_entree_en_attente"]) == 1
-    assert mine["ordres_d_entree_en_attente"][0]["taille_pct"] == "10"
+    mine = snapshot(json.loads((w.var / rd["path"] / "round.json").read_text()), "rendezvous", None)["account"]
+    assert len(mine["pending_alerts"]) == 1 and len(mine["pending_entry_orders"]) == 1
+    assert mine["pending_entry_orders"][0]["size_pct"] == "10"
 
 
 def test_the_schema_requires_horizon_and_move_on_entry_orders_only():
@@ -863,7 +863,7 @@ def test_the_schema_requires_horizon_and_move_on_entry_orders_only():
 
 
 def test_no_fresh_view_after_the_call_keeps_the_set_in_place(tmp_path):
-    from arene.perp.agent_round import finish_agent_round, prepare_agent_round
+    from arena.perp.agent_round import finish_agent_round, prepare_agent_round
 
     w = league(tmp_path)
     extra = {"*": decision(alerts=[ALERT])}

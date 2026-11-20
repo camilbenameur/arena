@@ -1,0 +1,12 @@
+[Unit]
+Description=Arena perp league: watcher every 5 minutes, after the market-data collector
+
+[Timer]
+# The collector runs at :02/5 (about 30 s); the watcher at :03:30/5 reads what it stored.
+OnCalendar=*-*-* *:03/5:30 UTC
+Persistent=true
+AccuracySec=5s
+Unit=arena-perp-watcher.service
+
+[Install]
+WantedBy=timers.target

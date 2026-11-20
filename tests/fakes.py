@@ -1,7 +1,7 @@
-"""Doublures déterministes pour les tests du cycle : marché synthétique, clients factices, décideurs factices.
+"""Deterministic test doubles for the cycle tests: synthetic market, fake clients, fake deciders.
 
-Aucun réseau. Le marché est une fonction pure de (symbole, ts) : même appel, même barre. Les krachs sont des
-décalages de niveau (en pour-mille) à partir d'un ts, avec un gap à l'ouverture de la première barre touchée.
+No network. The market is a pure function of (symbol, ts): same call, same bar. Crashes are
+level shifts (in per-mille) from a ts on, with a gap at the open of the first bar hit.
 """
 
 from __future__ import annotations
@@ -14,16 +14,16 @@ from typing import Any
 
 import httpx
 
-from arene.cycle import Clients
-from arene.data.binance import DayBar
-from arene.data.kraken import PairInfo
-from arene.deciders.llm import DecisionResult, parse_decision
-from arene.paths import REPO, Paths
-from arene.types import Bar, Quote
+from arena.cycle import Clients
+from arena.data.binance import DayBar
+from arena.data.kraken import PairInfo
+from arena.deciders.llm import DecisionResult, parse_decision
+from arena.paths import REPO, Paths
+from arena.types import Bar, Quote
 
 H4 = 14_400
 DAY = 86_400
-T0 = 20_400 * DAY  # début de jour UTC, multiple de 4 h
+T0 = 20_400 * DAY  # start of a UTC day, multiple of 4 h
 SYMBOLS = ("BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "LINK/EUR", "LTC/EUR")
 BASES = {
     "BTC/EUR": 60_000_000_000,
@@ -53,13 +53,13 @@ def _h(sym: str, k: int) -> int:
 
 
 class FakeKraken:
-    """Même interface que KrakenClient : asset_pairs, ohlc (barres closes seulement), ticker."""
+    """Same interface as KrakenClient: asset_pairs, ohlc (closed bars only), ticker."""
 
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
-        self.crashes: list[tuple[str, int, int]] = []  # (symbole ou "*", à partir du ts, facteur en pour-mille)
+        self.crashes: list[tuple[str, int, int]] = []  # (symbol or "*", from ts, factor in per-mille)
         self.fail_ticker = False
-        self.lag_s = 0  # retard de publication simulé (barres closes masquées)
+        self.lag_s = 0  # simulated publication delay (closed bars hidden)
 
     def crash(self, symbol: str, from_ts: int, permille: int) -> None:
         self.crashes.append((symbol, from_ts, permille))
@@ -72,7 +72,7 @@ class FakeKraken:
         return lvl
 
     def _raw_close(self, sym: str, k: int) -> int:
-        wiggle = (_h(sym, k) % 201) - 100  # +-1 % autour de la base, sans dérive
+        wiggle = (_h(sym, k) % 201) - 100  # +-1% around the base, no drift
         return BASES[sym] * (10_000 + wiggle) // 10_000
 
     def bar(self, sym: str, ts: int) -> Bar:
@@ -87,23 +87,23 @@ class FakeKraken:
         return {p: PAIR_INFO[p] for p in pairs}
 
     def minute_bar(self, sym: str, ts: int) -> Bar:
-        """Bougie d'une minute : plate au dernier cours de clôture 4 h (même niveau que le ticker). Surchargeable."""
+        """One-minute candle: flat at the last 4 h close (same level as the ticker). Overridable."""
         c = self.bar(sym, ts // H4 * H4 - H4).close
         return Bar(sym, 60, ts, c, c, c, c, 1_000_000)
 
     def ohlc(self, symbol: str, pair: str, interval_s: int = H4, since: int | None = None) -> list[Bar]:
-        if interval_s == 60:  # bougies 1 min closes, ts > since (comme Kraken)
+        if interval_s == 60:  # closed 1 min candles, ts > since (like Kraken)
             last = self.clock.now // 60 * 60 - 60
             lo = last - 60 * 60 * 12 if since is None else since // 60 * 60 + 60
             return [self.minute_bar(symbol, ts) for ts in range(max(lo, T0 - 20 * DAY), last + 1, 60)]
-        last = (self.clock.now - self.lag_s) // H4 * H4 - H4  # dernière barre close
+        last = (self.clock.now - self.lag_s) // H4 * H4 - H4  # last closed bar
         first = T0 - 20 * DAY
         lo = first if since is None else max(first, since // H4 * H4 + H4)
         return [self.bar(symbol, ts) for ts in range(lo, last + 1, H4)]
 
     def ticker(self, symbol: str, pair: str) -> Quote:
         if self.fail_ticker:
-            raise RuntimeError("ticker en panne (test)")
+            raise RuntimeError("ticker down (test)")
         last = self.clock.now // H4 * H4 - H4
         c = self.bar(symbol, last).close
         return Quote(symbol, self.clock.now, c * 9_995 // 10_000, c * 10_005 // 10_000)
@@ -127,7 +127,7 @@ class FakeBinance:
 
 
 class Env:
-    """Une arène de test : répertoires temporaires, marché factice, transport HTTP enregistré."""
+    """A test arena: temporary directories, fake market, recorded HTTP transport."""
 
     def __init__(self, root: Path, secrets: dict[str, str] | None = None) -> None:
         self.root = root
@@ -135,10 +135,10 @@ class Env:
         self.sec.mkdir(parents=True, exist_ok=True)
         for k, v in (secrets or {}).items():
             (self.sec / k).write_text(v)
-        # Copie de la config réelle en mode "api" : un test ne doit jamais lancer `claude -p` sur l'abonnement.
-        cfg_text = (REPO / "config" / "arene.toml").read_text()
-        test_cfg = root / "arene-test.toml"
-        test_cfg.write_text(cfg_text.replace('decider_backend = "abonnement"', 'decider_backend = "api"'))
+        # Copy of the real config in "api" mode: a test must never launch `claude -p` on the subscription.
+        cfg_text = (REPO / "config" / "arena.toml").read_text()
+        test_cfg = root / "arena-test.toml"
+        test_cfg.write_text(cfg_text.replace('decider_backend = "subscription"', 'decider_backend = "api"'))
         self.paths = Paths(
             var=root / "var", secrets=self.sec, user_kill=root / "user_KILL",
             config=test_cfg, policy=REPO / "config" / "policy.toml",
@@ -160,7 +160,7 @@ class Env:
         return T0 + i * H4 + 300
 
     def events(self) -> list[dict]:
-        from arene.journal import Journal
+        from arena.journal import Journal
 
         return Journal(self.paths.journal).events()
 
@@ -168,7 +168,7 @@ class Env:
         return [e for e in self.events() if e["type"] in types]
 
 
-# ---------------------------------------------------------------- décideurs factices
+# ---------------------------------------------------------------- fake deciders
 
 Plan = Callable[[int, dict], "list[dict] | str | None"]
 
@@ -183,7 +183,7 @@ def action(symbol: str, side: str = "buy", size: int = 10, stop: int = 5, move: 
 
 
 class ScriptedDecider:
-    """Décideur factice : `plan(index_du_cycle, snapshot)` renvoie des actions, une chaîne brute, ou None."""
+    """Fake decider: `plan(cycle_index, snapshot)` returns actions, a raw string, or None."""
 
     def __init__(self, model: str, portfolio: str, plan: Plan, model_returned: str | None = None) -> None:
         self.model, self.portfolio, self.plan, self.model_returned = model, portfolio, plan, model_returned
@@ -225,16 +225,16 @@ def default_plan(idx: int, snap: dict) -> list[dict] | None:
 
 
 def make_deciders(haiku_plan: Plan = default_plan) -> dict[str, Any]:
-    """Haiku : plan scripté ; Sonnet : JSON invalide ; Opus : pas de clé."""
+    """Haiku: scripted plan; Sonnet: invalid JSON; Opus: no key."""
     return {
         HAIKU: ScriptedDecider("claude-haiku-5-5", HAIKU, haiku_plan),
-        SONNET: ScriptedDecider("claude-sonnet-5-5", SONNET, lambda i, s: "ceci n'est pas du JSON {"),
+        SONNET: ScriptedDecider("claude-sonnet-5-5", SONNET, lambda i, s: "this is not JSON {"),
         OPUS: NoKeyDecider("claude-opus-5-5", OPUS),
     }
 
 
 def fake_anthropic_client(text: str, model: str) -> Callable[[str], Any]:
-    """client_factory pour un vrai LLMDecider : renvoie toujours `text`, annonce le modèle `model`."""
+    """client_factory for a real LLMDecider: always returns `text`, announces model `model`."""
 
     def factory(api_key: str) -> Any:
         def create(**kw: Any) -> Any:

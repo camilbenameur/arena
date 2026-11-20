@@ -1,0 +1,19 @@
+# The Haiku council of the perp league (docs/SPEC-PERP-COUNCIL-HAIKU.md): ten Haiku advisers, each with the
+# personality of one step of the best trading skills, and a Haiku President, in the league of the councils
+# (config/council-league.toml, docs/SPEC-COUNCILS.md). They trade aggressively, with the goal of doubling the stake
+# in a few days. It plays the triggers of config/perp-llm.toml (scheduled rounds, cadence, wake-ups, rounds_per_day).
+# Hashed (sha256 of the bytes) and journaled with each round.
+enabled = true
+portfolio = "council-perp:haiku"
+name = "Haiku Council"
+model = "claude-haiku-5-5"            # the ten advisers
+president_model = "claude-haiku-5-5"
+# A council round is eleven Haiku calls: about 0.02 $ (0.0014 to 0.002 $ a call), about 3 to 5 $ a day at 150 to
+# 260 rounds. A ceiling against a runaway, not a target.
+daily_budget_usd = "10.00"
+members_parallel = 4      # stage A: 9 members, 4 `claude` processes at a time (and max_member_processes of the league)
+member_timeout_s = 90     # per adviser call (Haiku: 8 s median)
+president_timeout_s = 90
+member_max_tool_calls = 3
+# Its own risk policy, profile "aggressive" (a file of config/)
+policy = "policy-perp-council.toml"

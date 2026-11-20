@@ -1,8 +1,9 @@
-"""Site : ligue dérivés au premier plan, ligue comptant en second (docs/COORDINATION-dashboard.md, 12/11, 21 h 30)."""
+"""Site: the derivatives league in the foreground, the spot league second."""
 
 from __future__ import annotations
 
 import html
+import html as html_lib
 import json
 import re
 import sys
@@ -17,18 +18,20 @@ import perp_fixture as F
 from test_site import ROOT, synthetic_journal
 from test_site import _cfg as _config
 
-from arene.journal import Journal
-from arene.perp.news import CalendarEvent
-from arene.risk.policy import load_policy
-from arene.site import build
-from arene.site import perp as P
-from arene.site.render import jj_mm
+from arena.journal import Journal
+from arena.perp.news import CalendarEvent
+from arena.risk.policy import load_policy
+from arena.site import build
+from arena.site import perp as P
+from arena.site.render import short_date
 
 
 def _cfg():
     return _config(), load_policy(ROOT / "config" / "policy.toml")
 
 NOW = F.T0 + 2 * 86_400 + 100
+ARBITRAGEUR = P.MEMBERS["arbitrageur"][0]
+NOTE_ETH = "weekly support"  # note of the ETH alert, as written in the fixture
 
 
 @pytest.fixture(scope="module")
@@ -39,82 +42,82 @@ def site(tmp_path_factory) -> Path:
     out = tmp / "site"
     config, policy = _cfg()
     build(spot.path, out, config=config,
-          policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)  # fmt: skip
+          policy=policy, now_ts=NOW, public=True, root_path="/arena/", perp_journal=perp)  # fmt: skip
     return out
 
 
-def lire(site: Path, nom: str) -> str:
-    return (site / nom).read_text(encoding="utf-8")
+def read(site: Path, name: str) -> str:
+    return (site / name).read_text(encoding="utf-8")
 
 
-def texte(html: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html))
+def text(html: str) -> str:
+    return html_lib.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)))
 
 
-def test_accueil_des_trois_ligues_puis_une_page_par_ligue(site):
-    """Décision du propriétaire du 15/11 : l'accueil présente les trois ligues ; les IA seules (dérivés) passent sur derives.html."""
-    acc = lire(site, "index.html")
-    for page in ("conseils.html", "derives.html", "comptant.html"):
+def test_home_of_the_three_leagues_then_a_page_per_league(site):
+    """The home page presents the three leagues; the solo AIs (derivatives) live on derivatives.html."""
+    acc = read(site, "index.html")
+    for page in ("councils.html", "derivatives.html", "spot.html"):
         assert f'href="{page}"' in acc and (site / page).exists()
-    assert acc.count('class="ligue-carte"') == 3 and 'class="scores mini"' in acc
-    idx = lire(site, "derives.html")
-    assert "<title>Ligue des IA seules" in idx
-    assert 'href="comptant.html"' in idx
-    assert "Ligue comptant" in lire(site, "comptant.html")
-    for pf in F.LLMS + F.TEMOINS:
-        assert (site / "derives" / f"{P.slug(pf)}.html").exists()
-    # Les pages modèles du comptant ramènent au comptant, plus à l'accueil.
-    page = next((site / "modele").iterdir()).read_text(encoding="utf-8")
-    assert 'href="../comptant.html"' in page
+    assert acc.count('class="league-card"') == 3 and 'class="scores mini"' in acc
+    idx = read(site, "derivatives.html")
+    assert "<title>Solo AIs league" in idx
+    assert 'href="spot.html"' in idx
+    assert "Spot league" in read(site, "spot.html")
+    for pf in F.LLMS + F.BENCHMARKS:
+        assert (site / "derivatives" / f"{P.slug(pf)}.html").exists()
+    # The spot model pages link back to the spot league, no longer to the home page.
+    page = next((site / "model").iterdir()).read_text(encoding="utf-8")
+    assert 'href="../spot.html"' in page
 
 
-def test_rien_de_prive_ne_sort(site):
+def test_nothing_private_leaks(site):
     for f in site.rglob("*"):
         if f.suffix in (".html", ".json"):
             t = f.read_text(encoding="utf-8")
-            for interdit in ("/home/", "var-perp/rounds", "2.1.99", "bougies-secret", "stderr", "Traceback", "the host", "cli_version",
+            for forbidden in ("/home/", "var-perp/rounds", "2.1.99", "candles-secret", "stderr", "Traceback", "the host", "cli_version",
                              "tools_offered", "llm_config_sha256", "message_sha256"):  # fmt: skip
-                assert interdit not in t, (f.name, interdit)
+                assert forbidden not in t, (f.name, forbidden)
 
 
-def test_publication_le_verificateur_ne_bloque_pas(site):
+def test_publication_the_verifier_does_not_block(site):
     sys.path.insert(0, str(Path(__file__).parent.parent / "ops"))
-    import publier
+    import publish
 
-    assert publier.verifier(site) == []
-
-
-def test_decision_complete_justification_invalidation_outils_verdict_execution(site):
-    t = texte(lire(site, "derives/llm-perp-claude-fable-5-2.html"))
-    assert F.FABLE_RAISON.split(":")[0] in t
-    assert "Invalide si" in t and "3 300 $" in t
-    assert "A consulté indicateurs ETH 4h, funding ETH" in t
-    assert "accepté" in t and "vente" in t and "Ferme son pari sur l’ether" in t
+    assert publish.verify(site) == []
 
 
-def test_refus_du_garde_fou_en_clair(site):
-    t = texte(lire(site, "derives/llm-perp-claude-opus-5-5.html"))
-    assert "refusé" in t
-    assert "coûts trop grands face au mouvement attendu" in t
-    assert "EDGE_TOO_SMALL" not in t  # le code brut reste dans le JSON, pas dans la page
+def test_full_decision_justification_invalidation_tools_verdict_execution(site):
+    t = text(read(site, "derivatives/llm-perp-claude-fable-5-2.html"))
+    assert F.FABLE_REASON.split(":")[0] in t
+    assert "Invalid if" in t and "$3,300" in t
+    assert "Consulted indicators ETH 4h, funding ETH" in t
+    assert "accepted" in t and "sell" in t and "closes its bet on ether" in t.lower()
 
 
-def test_reveil_saut_et_echec(site):
-    assert "réveil · SOL" in texte(lire(site, "derives/llm-perp-claude-opus-5-5.html"))
-    t = texte(lire(site, "derives/llm-perp-claude-haiku-5-5.html"))
-    assert "budget du jour atteint" in t
-    assert "réponse illisible" in t
+def test_guardrail_refusal_in_plain_text(site):
+    t = text(read(site, "derivatives/llm-perp-claude-opus-5-5.html"))
+    assert "rejected" in t
+    assert P.CODES["EDGE_TOO_SMALL"] in t
+    assert "EDGE_TOO_SMALL" not in t  # the raw code stays in the JSON, not on the page
 
 
-def test_positions_sens_stop_objectif_et_gel(site):
-    t = texte(lire(site, "derives/llm-perp-claude-opus-5-5.html"))
-    assert "long" in t and "Stop" in t and "Objectif" in t
-    assert "gelé" in t
-    tr = texte(lire(site, "derives/benchmark-perp-trend.html"))
+def test_wakeup_skip_and_failure(site):
+    assert "wake-up · SOL" in text(read(site, "derivatives/llm-perp-claude-opus-5-5.html"))
+    t = text(read(site, "derivatives/llm-perp-claude-haiku-5-5.html"))
+    assert P.JUMPS["daily_budget"] in t
+    assert "unreadable response" in t
+
+
+def test_positions_side_stop_target_and_freeze(site):
+    t = text(read(site, "derivatives/llm-perp-claude-opus-5-5.html"))
+    assert "long" in t and "Stop" in t and "Target" in t
+    assert "frozen" in t
+    tr = text(read(site, "derivatives/benchmark-perp-trend.html"))
     assert "short" in tr and "long" in tr
 
 
-def test_chiffres_coherents_avec_le_dernier_releve(site):
+def test_figures_consistent_with_the_last_statement(site):
     events = list(Journal(Path(site).parent / "var-perp" / "journal" / "events.jsonl").iter_events())
     last = {}
     for e in events:
@@ -122,73 +125,73 @@ def test_chiffres_coherents_avec_le_dernier_releve(site):
             last[e["payload"]["portfolio"]] = e["payload"]
     d = P.compute(Path(site).parent / "var-perp" / "journal" / "events.jsonl", NOW)
     for p in d["portfolios"]:
-        le = last[p["id"]]
-        assert p["equity_ueur"] == le["equity_ueur"]
-        assert p["levier"] == pytest.approx(le["gross_ueur"] / le["equity_ueur"])
+        latest = last[p["id"]]
+        assert p["equity_ueur"] == latest["equity_ueur"]
+        assert p["leverage"] == pytest.approx(latest["gross_ueur"] / latest["equity_ueur"])
     fable = next(p for p in d["portfolios"] if p["id"] == F.LLMS[3])
     funding = [e["payload"]["amount_ueur"] for e in events if e["type"] == "funding" and e["payload"]["portfolio"] == F.LLMS[3]]
     assert fable["funding_net_ueur"] == sum(funding)
 
 
-def test_methode_explique_la_ligue(site):
-    t = texte(lire(site, "methode.html"))
-    assert "La ligue dérivés" in t and "Ce que l’IA peut consulter" in t and "La ligue comptant" in t
+def test_method_explains_the_league(site):
+    t = text(read(site, "method.html"))
+    assert "The derivatives league" in t and "What the AI can consult" in t and "The spot league" in t
 
 
-def test_sans_ia_encore_les_temoins_seuls(tmp_path):
+def test_without_ai_yet_only_the_benchmarks(tmp_path):
     j = Journal(tmp_path / "events.jsonl")
-    for pf in F.TEMOINS:
+    for pf in F.BENCHMARKS:
         j.append("portfolio_opened", {"portfolio": pf, "kind": "benchmark", "league": "perp", "capital_ueur": 1_000_000_000,
                                       "venue_mode": "paper"}, F.T0)  # fmt: skip
     d = P.compute(tmp_path / "events.jsonl", F.T0 + 600)
-    assert d and not d["llm_presents"] and len(d["portfolios"]) == 3
+    assert d and not d["llms_present"] and len(d["portfolios"]) == 3
 
 
-def test_sans_journal_derives_le_site_reste_celui_du_comptant(tmp_path):
+def test_without_perp_journal_the_site_stays_the_spot_one(tmp_path):
     spot = tmp_path / "var" / "journal" / "events.jsonl"
     synthetic_journal(spot)
     config, policy = _cfg()
     build(spot, tmp_path / "site", config=config, policy=policy, now_ts=NOW, perp_journal=tmp_path / "absent.jsonl")
-    assert not (tmp_path / "site" / "comptant.html").exists()
-    assert "Vue d’ensemble" in (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    assert not (tmp_path / "site" / "spot.html").exists()
+    assert "Overview" in (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
 
 
-def test_court():
-    assert [P.court(x) for x in ("PF_XBTUSD", "BTC-PERP", "PF_LINKUSD", "XRP-PERP")] == ["BTC", "BTC", "LINK", "XRP"]
+def test_short():
+    assert [P.short(x) for x in ("PF_XBTUSD", "BTC-PERP", "PF_LINKUSD", "XRP-PERP")] == ["BTC", "BTC", "LINK", "XRP"]
 
 
-def _mini(tmp_path, actions, errors, tool_args, statut="filled"):
+def _mini(tmp_path, actions, errors, tool_args, status="filled"):
     j = Journal(tmp_path / "events.jsonl")
     pf = F.LLMS[0]
     j.append("portfolio_opened", {"portfolio": pf, "kind": "llm", "league": "perp", "capital_ueur": 1_000_000_000, "venue_mode": "paper"}, F.T0)
-    j.append("tool_call", {"portfolio": pf, "round": F.T0, "n": 1, "tool": "simuler_ordre", "arguments": tool_args,
+    j.append("tool_call", {"portfolio": pf, "round": F.T0, "n": 1, "tool": "simulate_order", "arguments": tool_args,
                            "response": "{}", "response_sha256": "0" * 64, "is_error": False}, F.T0)  # fmt: skip
     j.append("agent_decision", {"portfolio": pf, "round": F.T0, "kind": "rendezvous", "model_requested": "x",
                                 "parsed": {"actions": actions, "justification": "j", "action_errors": errors},
                                 "parse_error": None, "cost_uusd": 10}, F.T0)  # fmt: skip
     j.append("perp_verdict", {"intent_id": "i0", "portfolio": pf, "instrument": "PF_XBTUSD", "action": "open_long",
                               "approved": True, "reasons": [], "qty": 1000, "policy_sha256": "0", "error": None}, F.T0)  # fmt: skip
-    j.append("perp_execution", {"intent_id": "i0", "portfolio": pf, "instrument": "PF_XBTUSD", "status": statut, "error": None}, F.T0)
+    j.append("perp_execution", {"intent_id": "i0", "portfolio": pf, "instrument": "PF_XBTUSD", "status": status, "error": None}, F.T0)
     return P.compute(tmp_path / "events.jsonl", F.T0 + 60)["portfolios"][0]["decisions"][0]
 
 
-def test_action_ecartee_ne_vole_pas_le_verdict_de_l_action_valide(tmp_path):
+def test_a_discarded_action_does_not_steal_the_valid_action_verdict(tmp_path):
     a = {"instrument": "PF_XBTUSD", "action": "open_long", "size_pct": "10", "stop_pct": "2"}
     d = _mini(tmp_path, [a], [{"k": 0, "error": "bad"}], '{"action": ["x"], "instrument": {"a": 1}}')
-    valide, ecartee = d["actions"]
-    assert valide["verdict"] == {"approuve": True, "motifs": []} and valide["execution"] == "filled"
-    assert ecartee["ecartee"] and ecartee["action"] is None
-    assert d["outils"] == [{"outil": "simuler_ordre", "args": "", "erreur": False}]  # arguments absurdes : ni plantage ni texte
+    valid, discarded = d["actions"]
+    assert valid["verdict"] == {"approved": True, "reason_list": []} and valid["execution"] == "filled"
+    assert discarded["discarded"] and discarded["action"] is None
+    assert d["tools"] == [{"tool": "simulate_order", "args": "", "error": False}]  # absurd arguments: neither a crash nor any text
 
 
-def test_statut_d_execution_montre_meme_avec_fills(tmp_path):
-    from arene.site.render_perp import _execution
+def test_execution_status_shows_even_with_fills(tmp_path):
+    from arena.site.render_perp import _execution
 
-    a = {"instrument": "BTC", "execution": "closed_without_stop", "fills": [{"qty": 10, "prix_uusd": 1_000_000, "frais_ueur": 1}]}
-    assert "position refermée" in _execution(a)
+    a = {"instrument": "BTC", "execution": "closed_without_stop", "fills": [{"qty": 10, "price_uusd": 1_000_000, "fees_ueur": 1}]}
+    assert P.EXECUTIONS["closed_without_stop"] in _execution(a)
 
 
-# --- Alertes et ordres d'entrée des agents (docs/SPEC-PERP-ALERTES-ORDRES.md) ---
+# --- Agents' alerts and entry orders (docs/SPEC-PERP-ORDER-ALERTS.md) ---
 
 
 def _fable(site):
@@ -196,351 +199,351 @@ def _fable(site):
     return next(p for p in d["portfolios"] if p["id"] == F.LLMS[3])
 
 
-def test_ordre_d_entree_declenche_garde_son_verdict_et_son_fill(site):
+def test_a_triggered_entry_order_keeps_its_verdict_and_fill(site):
     fable = _fable(site)
-    ordre = [d for d in fable["decisions"] if d["kind"] == "ordre"]
-    assert len(ordre) == 1
-    a = ordre[0]["actions"][0]
+    order = [d for d in fable["decisions"] if d["kind"] == "order"]
+    assert len(order) == 1
+    a = order[0]["actions"][0]
     assert a["action"] == "open_long" and a["instrument"] == "SOL"
-    assert a["verdict"] == {"approuve": True, "motifs": []} and a["execution"] == "filled" and len(a["fills"]) == 1
-    assert a["invalidation"] == F.INVAL_ORDRE and a["stop_pct"] == 4
-    # La décision précédente (fermer ETH) garde son seul verdict et son seul fill.
-    ferme = next(d for d in fable["decisions"] if d["kind"] == "rendezvous" and d["actions"] and d["actions"][0]["action"] == "close")
-    assert len(ferme["actions"]) == 1 and len(ferme["actions"][0]["fills"]) == 1
-    assert fable["n_ordres"] == 3  # short ETH, fermeture, ordre SOL
+    assert a["verdict"] == {"approved": True, "reason_list": []} and a["execution"] == "filled" and len(a["fills"]) == 1
+    assert a["invalidation"] == F.INVALID_ORDER and a["stop_pct"] == 4
+    # The previous decision (closing ETH) keeps its own verdict and its own fill only.
+    closed = next(d for d in fable["decisions"] if d["kind"] == "rendezvous" and d["actions"] and d["actions"][0]["action"] == "close")
+    assert len(closed["actions"]) == 1 and len(closed["actions"][0]["fills"]) == 1
+    assert fable["n_orders"] == 3  # short ETH, close, SOL order
 
 
-def test_en_attente_et_historique(site):
-    at = _fable(site)["attente"]
-    assert [(x["instrument"], x["condition"], x["note"]) for x in at["alertes"]] == [("ETH", "below", "support hebdomadaire")]
-    assert at["ordres"] == []
-    issues = {(x["type"], x["instrument"]): (x["issue"], x.get("issue_detail")) for x in at["historique"]}
-    assert issues[("alerte", "BTC")] == ("declenche", None)
-    assert issues[("ordre", "SOL")] == ("declenche", "exécuté")
-    assert issues[("alerte", "LTC")] == ("fin", "expiré")
+def test_pending_and_history(site):
+    pending = _fable(site)["pending"]
+    assert [(x["instrument"], x["condition"], x["note"]) for x in pending["alerts"]] == [("ETH", "below", NOTE_ETH)]
+    assert pending["orders"] == []
+    issues = {(x["type"], x["instrument"]): (x["issue"], x.get("issue_detail")) for x in pending["history"]}
+    assert issues[("alert", "BTC")] == ("fired", None)
+    assert issues[("order", "SOL")] == ("fired", "executed")
+    assert issues[("alert", "LTC")] == ("end", "expired")
 
 
-def test_page_montre_reveil_prive_pose_et_attente(site):
-    t = texte(lire(site, "derives/llm-perp-claude-fable-5-2.html"))
-    assert "En attente" in t and "support hebdomadaire" in t
-    assert "son alerte · BTC au-dessus de 89 540,50 $" in t
-    assert "ordre d’entrée · SOL sous" in t
-    assert "A laissé pour la suite" in t and F.NOTE_ALERTE in t and F.INVAL_ORDRE in t
-    assert "refusé à la création : niveau à plus de 25 % du prix" in t
-    assert "away from the mark" not in t  # le texte technique du refus ne sort pas
-    # Haiku n'a rien laissé : seul son prochain appel régulier est en attente.
-    att = re.search(r'<section aria-labelledby="titre-attente">(.*?)</section>', lire(site, "derives/llm-perp-claude-haiku-5-5.html")).group(1)
-    assert "Appel régulier" in texte(att) and "<strong>Alerte</strong>" not in att and "<strong>Ordre" not in att
-    assert "Entre deux rendez-vous" in texte(lire(site, "methode.html"))
+def test_page_shows_private_wakeup_placed_and_pending(site):
+    t = text(read(site, "derivatives/llm-perp-claude-fable-5-2.html"))
+    assert "Pending" in t and NOTE_ETH in t
+    assert "its alert · BTC above $89,540.50" in t
+    assert "entry order · SOL below" in t
+    assert "Left for later" in t and F.ALERT_NOTE in t and F.INVALID_ORDER in t
+    assert "refused at creation: level more than 25% away from the price" in t
+    assert "away from the mark" not in t  # the technical refusal text does not come out
+    # Haiku left nothing: only its next regular call is pending.
+    pending_html = re.search(r'<section aria-labelledby="title-pending">(.*?)</section>', read(site, "derivatives/llm-perp-claude-haiku-5-5.html")).group(1)
+    assert "Regular call" in text(pending_html) and "<strong>Alert</strong>" not in pending_html and " order</strong>" not in pending_html
+    assert "Between scheduled rounds" in text(read(site, "method.html"))
 
 
-def test_prix_en_direct_estimation_cote_navigateur(site):
-    """Demande du propriétaire du 14/11 : prix à quelques secondes. Le navigateur lit le flux public de Kraken et
-    revalorise les positions publiées ; la CSP n'ouvre ce flux que sur les pages dérivés qui en ont besoin."""
+def test_live_price_estimate_browser_side(site):
+    """Prices within a few seconds: the browser reads Kraken's public feed and revalues the published positions;
+    the CSP only opens this feed on the derivatives pages that need it."""
     import json
 
-    from arene.site.render import CSP, CSP_DIRECT
+    from arena.site.render import CSP, CSP_DIRECT
 
-    idx = lire(site, "derives.html")
+    idx = read(site, "derivatives.html")
     assert f'content="{CSP_DIRECT}"' in idx and "connect-src wss://futures.kraken.com" in CSP_DIRECT
     assert (site / "assets" / "direct.js").exists() and 'assets/direct.js"></script>' in idx
     data = json.loads(re.search(r'<script id="direct-data" type="application/json">(.*?)</script>', idx).group(1))
-    assert data["flux"] == "wss://futures.kraken.com/ws/v1"
-    assert set(data["produits"]) <= set(P.PRODUITS) and data["produits"]
+    assert data["flow"] == "wss://futures.kraken.com/ws/v1"
+    assert set(data["products"]) <= set(P.PRODUCTS) and data["products"]
     for slug, pf in data["pf"].items():
-        assert f'data-direct="rend" data-pf="{slug}"' in idx and f'data-direct="val" data-pf="{slug}"' in idx
+        assert f'data-direct="ret" data-pf="{slug}"' in idx and f'data-direct="val" data-pf="{slug}"' in idx
         assert len(pf["fx"]) == 2 and pf["pos"]
         for x in pf["pos"]:
             assert set(x) == {"p", "q", "e", "l"} and x["q"] != 0
-    # Rien du journal au-delà des chiffres publiés (ni id d'ordre, ni portefeuille brut).
+    # Nothing from the journal beyond the published figures (no order id, no raw portfolio).
     assert "llm-perp:" not in json.dumps(data) and "intent" not in json.dumps(data)
-    assert 'data-direct-etat data-court hidden' in idx and "<span data-direct-mot>" in idx
-    # Page d'un portefeuille avec positions : prix actuel et latent revalorisés, état sous « Positions ».
-    pages = {f.name: f.read_text(encoding="utf-8") for f in (site / "derives").glob("*.html")}
-    avec = [n for n, h in pages.items() if 'data-direct="mark"' in h]
-    assert avec, "aucune page de portefeuille revalorisée en direct"
+    assert 'data-direct-status data-short hidden' in idx and "<span data-direct-word>" in idx
+    # Page of a portfolio with positions: current price and unrealized P&L revalued, state under "Positions".
+    pages = {f.name: f.read_text(encoding="utf-8") for f in (site / "derivatives").glob("*.html")}
+    with_direct_marks = [n for n, h in pages.items() if 'data-direct="mark"' in h]
+    assert with_direct_marks, "no portfolio page revalued live"
     for n, h in pages.items():
-        if n in avec:
-            assert 'data-direct="lat"' in h and '<p class="direct-etat" data-direct-etat hidden></p>' in h
+        if n in with_direct_marks:
+            assert 'data-direct="lat"' in h and '<p class="direct-status" data-direct-status hidden></p>' in h
             assert f'content="{CSP_DIRECT}"' in h and "direct.js" in h
-        else:  # sans position : ni script, ni connexion
+        else:  # without a position: no script, no connection
             assert f'content="{CSP}"' in h and "direct.js" not in h
-    # La courbe reste celle du journal : son dernier point est un relevé, pas « en direct ».
-    assert '"dernier":"Dernier relevé"' in idx
-    # Le comptant et la méthode n'ouvrent aucune connexion.
-    for nom_page in ("comptant.html", "methode.html"):
-        html = lire(site, nom_page)
+    # The curve stays the journal's: its last point is a snapshot, not "live".
+    assert '"last":"Latest snapshot"' in idx
+    # The spot league and the method open no connection.
+    for page_name in ("spot.html", "method.html"):
+        html = read(site, page_name)
         assert f'content="{CSP}"' in html and "direct.js" not in html
 
 
-def test_appels_reguliers_groupes_rappel_et_quota(site):
-    """Rondes `cadence` et `scheduled` (≈ 6 par heure) : pastille discrète, suites sans ordre repliées en une ligne,
-    rappel demandé en attente, appels du jour face au plafond (docs/COORDINATION-dashboard.md, 13 et 14/11)."""
-    page = lire(site, f"derives/{P.slug(F.LLMS[1])}.html")
-    t = texte(page)
-    assert '<span class="pastille discret">appel régulier</span>' in page
-    assert '<span class="pastille neutre">à sa demande</span>' in page
-    groupe = re.search(r'<li class="ligne groupe-calme"><details><summary>(.*?)</summary>', page)
-    assert groupe and "4 décisions sans ordre" in texte(groupe.group(1))
-    # Le rappel demandé (encore à venir) est en attente, et dans ce qu'elle a laissé à chaque décision.
-    assert "Rappel qu’elle a demandé" in t and "Rappel demandé pour" in t
-    assert "réveil demandé invalide" in t and F.SECRET not in page
-    assert "appels aujourd’hui," in t and "Appel régulier" in t and "au plus tard à" in t
-    meth = texte(lire(site, "methode.html"))
-    assert "Appel régulier" in meth and "Rappel demandé" in meth and "2 % en 1 h" in meth.replace(" ", " ")
+def test_regular_calls_grouped_recall_and_quota(site):
+    """`cadence` and `scheduled` rounds (about 6 per hour): discreet pill, runs without orders folded into one line,
+    requested recall pending, calls of the day against the cap."""
+    page = read(site, f"derivatives/{P.slug(F.LLMS[1])}.html")
+    t = text(page)
+    assert '<span class="pill subtle">regular call</span>' in page
+    assert '<span class="pill neutral">at its request</span>' in page
+    group = re.search(r'<li class="line group-calm"><details><summary>(.*?)</summary>', page)
+    assert group and "4 decisions without orders" in text(group.group(1))
+    # The requested recall (still to come) is pending, and in what it left at each decision.
+    assert "Recall it requested" in t and "Recall requested for" in t
+    assert "invalid wake-up request" in t and F.SECRET not in page
+    assert "calls today," in t and "Regular call" in t and "at the latest at" in t
+    meth = text(read(site, "method.html"))
+    assert "Regular call" in meth and "Recall requested" in meth and "2% move in 1 h" in meth.replace("\xa0", " ")
 
 
 # ---------------------------------------------------------------------------
-# Ligue des conseils : Conseil Haiku et Conseil Opus, hors de la ligue dérivés (demande du propriétaire du 15/11)
+# Councils league: the Haiku council and the Opus council, outside the derivatives league
 # ---------------------------------------------------------------------------
 
 
 def _n(s: str) -> str:
-    """Sans espaces (fines, insécables, normales) ni apostrophes courbes : la typographie française du site."""
+    """Without spaces (thin, no-break, regular) or curly apostrophes, to compare texts regardless of typography."""
     return re.sub(r"[\s\u00a0\u202f]+", "", html.unescape(s)).replace("\u2019", "'")
 
 
-def _ligne_tableau(idx: str, nom: str) -> str:
-    return next(r for r in re.findall(r"<tr[^>]*>.*?</tr>", idx, flags=re.DOTALL) if f">{nom}</a>" in r)
+def _table_row(idx: str, name: str) -> str:
+    return next(r for r in re.findall(r"<tr[^>]*>.*?</tr>", idx, flags=re.DOTALL) if f">{name}</a>" in r)
 
 
 def _perp(site: Path):
     return P.compute(Path(site).parent / "var-perp" / "journal" / "events.jsonl", NOW)
 
 
-def test_derives_sans_les_conseils(site):
+def test_perp_without_the_councils(site):
     d = _perp(site)
-    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["temoin"] * 3
-    assert not any(s["kind"] == "conseil" for s in d["chart"]["series"])
-    idx = lire(site, "derives.html")
-    assert "Conseil" not in texte(re.search(r"<tbody.*</table>", idx, flags=re.DOTALL).group(0))
-    comparatif = re.search(r'<table class="tableau comparatif.*?</table>', idx, flags=re.DOTALL).group(0)
-    assert len(re.findall(r"<tbody[^>]*>.*?</tbody>", comparatif, flags=re.DOTALL)) == 2  # IA, témoins
-    classement = texte(re.search(r'<ol class="scores".*?</ol>', idx, flags=re.DOTALL).group(0))
-    assert "Claude" in classement and "Conseil" not in classement and "sans IA" in classement
-    assert "trait--conseil" not in idx and "Agressif" not in idx and "un conseil agressif" not in texte(idx)
-    for nom in ("council-perp-haiku", "council-perp-opus"):
-        assert not (site / "derives" / f"{nom}.html").exists()
-    dj = lire(site, "data/derives.json")
-    assert "council-perp" not in dj and "Conseil" not in dj
-    # La landing renvoie vers l'autre ligue, à côté du lien Comptant.
-    assert 'href="conseils.html"' in idx and "ligue des conseils" in texte(idx)
+    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["benchmark"] * 3
+    assert not any(s["kind"] == "council" for s in d["chart"]["series"])
+    idx = read(site, "derivatives.html")
+    assert "Council" not in text(re.search(r"<tbody.*</table>", idx, flags=re.DOTALL).group(0))
+    comparison = re.search(r'<table class="table comparison.*?</table>', idx, flags=re.DOTALL).group(0)
+    assert len(re.findall(r"<tbody[^>]*>.*?</tbody>", comparison, flags=re.DOTALL)) == 2  # AIs, benchmarks
+    ranking = text(re.search(r'<ol class="scores".*?</ol>', idx, flags=re.DOTALL).group(0))
+    assert "Claude" in ranking and "Council" not in ranking and "no AI" in ranking
+    assert "stroke--council" not in idx and "Aggressive" not in idx and "an aggressive council" not in text(idx)
+    for name in ("council-perp-haiku", "council-perp-opus"):
+        assert not (site / "derivatives" / f"{name}.html").exists()
+    dj = read(site, "data/derivatives.json")
+    assert "council-perp" not in dj and "Council" not in dj
+    # The landing page links to the other league, next to the spot link.
+    assert 'href="councils.html"' in idx and "councils league" in text(idx)
 
 
-def test_ligue_des_conseils_tableau_classement_et_navigation(site):
-    d = _perp(site)["conseils"]
-    assert [(p["id"], p["kind"]) for p in d["portfolios"]] == [(F.CONSEIL, "conseil"), (F.OPUS, "conseil"), (F.TEMOINS[0], "temoin")]
-    assert {p["id"]: p["name"] for p in d["portfolios"]} == {F.CONSEIL: "Conseil Haiku", F.OPUS: "Conseil Opus", F.TEMOINS[0]: "Témoin panier 1x"}
+def test_council_league_table_ranking_and_navigation(site):
+    d = _perp(site)["councils"]
+    assert [(p["id"], p["kind"]) for p in d["portfolios"]] == [(F.COUNCIL, "council"), (F.OPUS, "council"), (F.BENCHMARKS[0], "benchmark")]
+    assert {p["id"]: p["name"] for p in d["portfolios"]} == {F.COUNCIL: P.NAMES[F.COUNCIL], F.OPUS: P.NAMES[F.OPUS], F.BENCHMARKS[0]: P.NAMES[P.BASKET]}
     assert [s["id"] for s in d["chart"]["series"]] == [p["id"] for p in d["portfolios"]]
-    page = lire(site, "conseils.html")
-    t = texte(page)
-    assert "Haiku ou Opus à la présidence" in page and "Seul leur président change" in t
-    comparatif = re.search(r'<table class="tableau comparatif.*?</table>', page, flags=re.DOTALL).group(0)
-    corps = re.findall(r"<tbody[^>]*>.*?</tbody>", comparatif, flags=re.DOTALL)
-    assert len(corps) == 2 and "Conseil Haiku" in corps[0] and "Conseil Opus" in corps[0] and "Témoin panier 1x" in corps[1]
-    assert P.MARQUE_CONSEIL in texte(corps[0])
-    assert "10 Haiku · président Haiku" in texte(_ligne_tableau(page, "Conseil Haiku"))
-    assert "10 Haiku · président Opus" in texte(_ligne_tableau(page, "Conseil Opus"))
-    assert "hors règle 2x" in texte(_ligne_tableau(page, "Conseil Opus"))
-    assert 'href="conseils/council-perp-opus.html"' in page and 'href="derives/benchmark-perp-basket-1x.html"' in page
-    assert "Claude Haiku 5.5" not in "".join(corps) and "Témoin tendance" not in t  # ni les IA ni les autres témoins
-    # L'expérience en une phrase, puis le classement et la courbe aux deux teintes, la navigation et le prix en direct.
-    assert "Dix conseillers Claude Haiku" in t and "Haiku pour l’un, Opus pour l’autre" in t
-    assert "trait--conseil" in page and "trait--conseil2" in page and "c--conseil2" in page
-    classement = texte(re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0))
-    assert "Conseil Haiku" in classement and "Conseil Opus" in classement and "sans IA" in classement
-    assert re.search(r'<nav class="nav"[^>]*>.*?<a href="conseils.html" aria-current="page">Conseils</a>', page, flags=re.DOTALL)
+    page = read(site, "councils.html")
+    t = text(page)
+    assert "Haiku or Opus as president" in page and "Only their president changes" in t
+    comparison = re.search(r'<table class="table comparison.*?</table>', page, flags=re.DOTALL).group(0)
+    body = re.findall(r"<tbody[^>]*>.*?</tbody>", comparison, flags=re.DOTALL)
+    assert len(body) == 2 and P.NAMES[F.COUNCIL] in body[0] and P.NAMES[F.OPUS] in body[0] and P.NAMES[P.BASKET] in body[1]
+    assert P.COUNCIL_BADGE in text(body[0])
+    assert P.SUBTITLES[F.COUNCIL] in text(_table_row(page, P.NAMES[F.COUNCIL]))
+    assert P.SUBTITLES[F.OPUS] in text(_table_row(page, P.NAMES[F.OPUS]))
+    assert "outside the 2x rule" in text(_table_row(page, P.NAMES[F.OPUS]))
+    assert 'href="councils/council-perp-opus.html"' in page and 'href="derivatives/benchmark-perp-basket-1x.html"' in page
+    assert "Claude Haiku 5.5" not in "".join(body) and P.NAMES[P.TREND] not in t  # neither the AIs nor the other benchmarks
+    # The experiment in one sentence, then the ranking and the curve in both tints, the navigation and the live price.
+    assert "Ten Claude Haiku advisers" in t and "Haiku for one, Opus for the other" in t
+    assert "stroke--council" in page and "stroke--council2" in page and "c--council2" in page
+    ranking = text(re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0))
+    assert P.NAMES[F.COUNCIL] in ranking and P.NAMES[F.OPUS] in ranking and "no AI" in ranking
+    assert re.search(r'<nav class="nav"[^>]*>.*?<a href="councils.html" aria-current="page">Councils</a>', page, flags=re.DOTALL)
     assert 'id="direct-data"' in page and "council-perp-opus" in re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)
-    # Les autres pages du site la proposent aussi.
-    assert 'href="conseils.html"' in lire(site, "comptant.html") and 'href="conseils.html"' in lire(site, "methode.html")
-    cj = json.loads(lire(site, "data/conseils.json"))
-    assert cj["venue_mode"] == "paper" and {p["id"] for p in cj["portfolios"]} == {F.CONSEIL, F.OPUS, F.TEMOINS[0]}
+    # The other pages of the site offer it too.
+    assert 'href="councils.html"' in read(site, "spot.html") and 'href="councils.html"' in read(site, "method.html")
+    cj = json.loads(read(site, "data/councils.json"))
+    assert cj["venue_mode"] == "paper" and {p["id"] for p in cj["portfolios"]} == {F.COUNCIL, F.OPUS, F.BENCHMARKS[0]}
 
 
-def test_conseil_haiku_page_ancienne_et_nouvelle_ronde(site):
-    html_ = lire(site, "conseils/council-perp-haiku.html")
-    t = texte(html_)
-    assert P.MARQUE_CONSEIL in t and "ne pourrait pas passer au réel telle quelle" in t and "10 Haiku · président Haiku" in t
-    assert _n("objectif 2 000 €") in _n(t)
-    assert "Ligue des conseils" in t and "conseils.html#m-conseils" in html_
-    # Deux rondes repliées : l'ancienne à 8 avis (7 rendus + 1 absent, aucun Arbitragiste), la récente à 9 (Arbitragiste).
+def test_council_haiku_old_page_and_new_round(site):
+    html_ = read(site, "councils/council-perp-haiku.html")
+    t = text(html_)
+    assert P.COUNCIL_BADGE in t and P.COUNCIL_OUTSIDE_RULE in t and P.SUBTITLES[F.COUNCIL] in t
+    assert _n("target €2,000") in _n(t)
+    assert "Councils league" in t and "councils.html#m-councils" in html_
+    # Two folded rounds: the old one with 8 opinions (7 returned + 1 absent, no Arbitrageur), the recent one with 9 (Arbitrageur).
     assert html_.count('class="deliberation"') == 2
-    assert _n("8 avis · 1 absent") in _n(t) and _n("9 avis · 1 absent") in _n(t)
-    assert _n("Étape A · 7 avis indépendants") in _n(t) and _n("Étape A · 8 avis indépendants") in _n(t)  # absents déduits
-    assert "L’Arbitragiste de paires" in t and _n(F.ARG_ARBITRAGE) in _n(t)
-    assert t.count("L’Arbitragiste de paires") == 1  # un seul : l'ancienne ronde n'en avait pas
-    # Président Haiku : champ absent des anciennes décisions, présent dans la récente ; consignes v1 puis v2.
-    assert t.count("Président · Haiku") >= 3 and "Président · Opus" not in t
-    assert "consignes v1" in t and "consignes v2" in t and "Conseillers Haiku" in t
-    # Coût réel de la ronde (sans nombre d'appels codé en dur), jamais « 10 appels ».
-    assert "10 appels" not in t and "coût réel des rondes" in t and "dont Président" not in t
+    assert _n("8 opinions · 1 absent") in _n(t) and _n("9 opinions · 1 absent") in _n(t)
+    assert _n("Step A · 7 independent opinions") in _n(t) and _n("Step A · 8 independent opinions") in _n(t)  # absentees deducted
+    assert ARBITRAGEUR in t and _n(F.ARG_ARBITRAGE) in _n(t)
+    assert t.count(ARBITRAGEUR) == 1  # only one: the old round had none
+    # Haiku President: field absent from the old decisions, present in the recent one; instructions v1 then v2.
+    assert t.count("President · Haiku") >= 3 and "President · Opus" not in t
+    assert "instructions v1" in t and "instructions v2" in t and "Advisers Haiku" in t
+    # Actual cost of the round (no hard-coded number of calls), never "10 calls".
+    assert "10 calls" not in t and "actual cost of the rounds" in t and "incl. President" not in t
     assert "OSError" not in html_
 
 
-def test_conseil_opus_page_modele_du_president_et_cout_a_part(site):
-    html_ = lire(site, "conseils/council-perp-opus.html")
-    t = texte(html_)
-    assert "Conseil Opus" in t and "10 Haiku · président Opus" in t and P.MARQUE_CONSEIL in t
-    assert 'class="tete-modele teinte-2"' in html_ and 'class="teinte-2"' in html_
-    assert _n("Étape C · le Président tranche Président · Opus") in _n(t)
-    assert _n("9 avis · 1 absent") in _n(t) and _n("Étape A · 8 avis indépendants") in _n(t)
-    assert "L’Arbitragiste de paires" in t and "consignes v2" in t
-    # Le Président pèse l'essentiel : son coût est montré à part, par ronde et au total.
-    assert _n("0,2150 $ dont Président 0,1800 $") in _n(t)
-    assert _n("coût réel des rondes · dont Président 0,1800 $") in _n(t)
-    assert _n(F.RAISON_OPUS) in _n(t)
-    assert "A consulté simulation d’ordre ETH" in t
+def test_council_opus_page_chair_model_and_separate_cost(site):
+    html_ = read(site, "councils/council-perp-opus.html")
+    t = text(html_)
+    assert P.NAMES[F.OPUS] in t and P.SUBTITLES[F.OPUS] in t and P.COUNCIL_BADGE in t
+    assert 'class="head-model tint-2"' in html_ and 'class="tint-2"' in html_
+    assert _n("Step C · the President decides President · Opus") in _n(t)
+    assert _n("9 opinions · 1 absent") in _n(t) and _n("Step A · 8 independent opinions") in _n(t)
+    assert ARBITRAGEUR in t and "instructions v2" in t
+    # The President weighs most: its cost is shown separately, per round and in total.
+    assert _n("$0.2150 incl. President $0.1800") in _n(t)
+    assert _n("actual cost of the rounds · incl. President $0.1800") in _n(t)
+    assert _n(F.OPUS_REASON) in _n(t)
+    assert "Consulted order simulation ETH" in t
     assert 'data-direct="lat" data-pf="council-perp-opus" data-p="PF_SOLUSD"' in html_
-    # Ses refus se lisent aux bornes de sa politique.
-    assert "levier au-delà de 2" not in t
+    # Its rejections read against the bounds of its own policy.
+    assert "leverage above 2" not in t
 
 
-def test_conseil_ordre_des_membres_et_contenu_d_un_avis(site):
-    t = texte(lire(site, "conseils/council-perp-opus.html"))
-    i_a, i_b, i_c = t.index("Étape A"), t.index("Étape B"), t.index("Étape C · le Président a lu")
+def test_council_member_order_and_content_of_an_opinion(site):
+    t = text(read(site, "councils/council-perp-opus.html"))
+    i_a, i_b, i_c = t.index("Step A"), t.index("Step B"), t.index("Step C · the President read")
     assert i_a < i_b < i_c
-    noms = [P.MEMBRES[m][0] for m in P.ORDRE_MEMBRES if P.MEMBRES[m][1] == "A"]
-    assert "L’Arbitragiste de paires" in noms and noms.index("L’Arbitragiste de paires") == noms.index("Le Contrarien") + 1
-    pos = [t.index(n, i_a) for n in noms]
+    names = [P.MEMBERS[m][0] for m in P.MEMBERS_ORDER if P.MEMBERS[m][1] == "A"]
+    assert ARBITRAGEUR in names and names.index(ARBITRAGEUR) == names.index(P.MEMBERS["contrarian"][0]) + 1
+    pos = [t.index(n, i_a) for n in names]
     assert pos == sorted(pos) and pos[-1] < i_b
-    assert "L’Avocat du diable" in t[i_b:i_c] and "Attaque le short ETH" in t[i_b:i_c]
-    assert all(_n(x) in _n(t) for x in (F.ARG_CARTO, F.ARG_AVOCAT, F.ARG_ARBITRAGE))
-    assert _n("short ETH · conviction 65 · 250 % · stop 2,5 % · niveau clé 3 150,00 $") in _n(t)
-    assert "absent erreur interne" in t
-    assert _n("9 avis · 1 absent · short ETH ×7, plat ×1 · l’Avocat attaque le short ETH") in _n(t)
-    carto = t[t.index("Le Cartographe", i_a): t.index("Le Suiveur", i_a)]
-    assert "A consulté indicateurs ETH 4h" in carto and "A consulté funding ETH" in t[i_b:i_c]
+    assert P.MEMBERS["advocate"][0] in t[i_b:i_c] and "Attacks the short ETH" in t[i_b:i_c]
+    assert all(_n(x) in _n(t) for x in (F.ARG_MAPPER, F.ARG_ADVOCATE, F.ARG_ARBITRAGE))
+    assert _n("short ETH · conviction 65 · 250% · stop 2.5% · key level $3,150.00") in _n(t)
+    assert "absent internal error" in t
+    assert _n("9 opinions · 1 absent · short ETH ×7, flat ×1 · the Devil’s Advocate attacks the short ETH") in _n(t)
+    mapper = t[t.index(P.MEMBERS["mapper"][0], i_a): t.index(P.MEMBERS["follower"][0], i_a)]
+    assert "Consulted indicators ETH 4h" in mapper and "Consulted funding ETH" in t[i_b:i_c]
 
 
-def test_conseil_haiku_refus_aux_bornes_de_sa_politique(site):
-    t = texte(lire(site, "conseils/council-perp-haiku.html"))
-    assert "levier au-delà de 10" in t and "liquidation atteinte avant le stop" in t and "levier au-delà de 2" not in t
+def test_council_haiku_refusal_at_the_bounds_of_its_policy(site):
+    t = text(read(site, "councils/council-perp-haiku.html"))
+    assert P.COUNCIL_CODES["MAX_LEVERAGE"] in t and P.COUNCIL_CODES["LIQUIDATION_BEFORE_STOP"] in t and "leverage above 2" not in t
 
 
-def test_conseils_methode_dans_la_ligue_des_conseils(site):
-    t = texte(lire(site, "conseils.html")).replace("\xa0", " ").replace("\u202f", " ")
-    m = t[t.index("Les conseils : méthode"):]
-    for x in ("10 au plus", "500 %", "1 000 %", "avant la liquidation", "25 %", "60 %", "24 ouvertures par 24 h",
-              "ni gel quotidien, ni budget de frais", "−90 %", "marge de maintenance", "dix Claude Haiku 5.5",
-              "Conseil Haiku 10 $ par jour", "Conseil Opus 25 $ par jour", "équivalent catalogue", "Arbitragiste de paires",
-              "pair-trade-screener", "TradingAgents", "Président"):  # fmt: skip
+def test_councils_method_in_the_council_league(site):
+    t = text(read(site, "councils.html")).replace("\xa0", " ").replace("\u202f", " ")
+    m = t[t.index("Councils: method"):]
+    for x in ("At most 10", "500%", "1,000%", "before liquidation", "25%", "60%", "24 openings per 24 h",
+              "no daily freeze, no fee budget", "−90%", "maintenance margin", "ten Claude Haiku 5.5",
+              f"{P.NAMES[F.COUNCIL]} $10 per day", f"{P.NAMES[F.OPUS]} $25 per day", "list-price equivalent", ARBITRAGEUR,
+              "pair-trade-screener", "TradingAgents", "President"):  # fmt: skip
         assert x in m, x
-    # La méthode générale des dérivés n'en parle plus que pour renvoyer ici.
-    g = texte(lire(site, "methode.html"))
-    assert "Hors catégorie" not in g and "Les membres" not in g and "conseils.html#m-conseils" in lire(site, "methode.html")
+    # The general derivatives method only mentions them to point here.
+    g = text(read(site, "method.html"))
+    assert "Out of category" not in g and "The members" not in g and "councils.html#m-councils" in read(site, "method.html")
 
 
-def test_courbe_relie_le_direct_aux_series(site):
-    """direct.js nomme chaque portefeuille par son slug, que porte sa série : la courbe peut ajouter son point en direct."""
-    for nom in ("derives.html", "conseils.html"):
-        page = lire(site, nom)
+def test_curve_links_the_live_to_the_series(site):
+    """direct.js names each portfolio by its slug, which its series carries: the curve can add its live point."""
+    for name in ("derivatives.html", "councils.html"):
+        page = read(site, name)
         direct = json.loads(html.unescape(re.search(r'<script id="direct-data"[^>]*>(.*?)</script>', page).group(1)))
-        courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
-        assert direct["pf"] and set(direct["pf"]) <= {s.get("slug") for s in courbe["series"]}, nom
+        curve = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
+        assert direct["pf"] and set(direct["pf"]) <= {s.get("slug") for s in curve["series"]}, name
 
 
-def test_conseil_arrete_le_dit(tmp_path):
+def test_council_stopped_says_so(tmp_path):
     spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
-    perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", ruine=True)
+    perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", ruin=True)
     config, policy = _cfg()
-    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
-    t = texte((tmp_path / "site" / "conseils" / "council-perp-haiku.html").read_text(encoding="utf-8"))
-    assert "Conseil arrêté" in t and "ruine" in t and "Seul l’opérateur de l’arène peut le relancer" in t
-    assert "arrêté, ruine" in texte((tmp_path / "site" / "conseils.html").read_text(encoding="utf-8"))
+    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, root_path="/arena/", perp_journal=perp)
+    t = text((tmp_path / "site" / "councils" / "council-perp-haiku.html").read_text(encoding="utf-8"))
+    assert "Council stopped" in t and "ruin" in t and "Only the arena operator can restart it" in t
+    assert "stopped, ruined" in text((tmp_path / "site" / "councils.html").read_text(encoding="utf-8"))
 
 
-def test_conseil_deliberations_anciennes_hors_page(tmp_path, monkeypatch):
+def test_council_old_deliberations_off_page(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "DELIBERATIONS_MAX", 1)
     perp = F.build(tmp_path / "events.jsonl")
-    d = P.compute(perp, NOW)["conseils"]
-    c = next(p for p in d["portfolios"] if p["id"] == F.CONSEIL)
-    rondes = [x for x in c["decisions"] if x.get("conseil")]
-    assert rondes[0]["conseil"]["avis"] and rondes[1]["conseil"]["avis"] == [] and rondes[1]["conseil"]["avis_hors_page"] == 9
-    assert rondes[1]["conseil"]["president"] == "Haiku"  # le modèle du Président reste dit, avis ou non
+    d = P.compute(perp, NOW)["councils"]
+    c = next(p for p in d["portfolios"] if p["id"] == F.COUNCIL)
+    rounds = [x for x in c["decisions"] if x.get("council")]
+    assert rounds[0]["council"]["opinions"] and rounds[1]["council"]["opinions"] == [] and rounds[1]["council"]["opinions_outside_page"] == 9
+    assert rounds[1]["council"]["president"] == "Haiku"  # the President's model is still stated, with or without opinions
 
 
-def _ajoute(perp, pf, round_, *, council=None, opinions=(), opened=True):
+def _append_council_round(perp, pf, round_, *, council=None, opinions=(), opened=True):
     j = Journal(perp)
     r = F.T0 + 2 * 86_400 - 300 if round_ is None else round_
     if opened:
         j.append("portfolio_opened", {"portfolio": pf, "kind": "council", "league": "perp", "capital_ueur": 1_000_000_000,
                                       "venue_mode": "paper"}, r - 1)  # fmt: skip
     for op in opinions:
-        j.append("council_opinion", {"portfolio": pf, "round": r, "member": "suiveur", "stage": "A", "opinion": op, "error": None}, r)
+        j.append("council_opinion", {"portfolio": pf, "round": r, "member": "follower", "stage": "A", "opinion": op, "error": None}, r)
     j.append("agent_decision", {"portfolio": pf, "round": r, "kind": "cadence", "parsed": {"actions": [], "justification": "ok"},
                                 "parse_error": None, "council": council}, r)  # fmt: skip
     return r
 
 
-def test_conseil_evenements_malformes_ne_cassent_rien(tmp_path):
+def test_council_malformed_events_break_nothing(tmp_path):
     perp = F.build(tmp_path / "events.jsonl")
-    ops = ({"avis": 5}, {"avis": [{"instrument": "PF_XBTUSD", "position": "long", "conviction": "x", "niveau_cle_usd": "1e400",
-                                    "taille_pct": "1e400"}], "cible": [1]}, "texte")  # fmt: skip
-    r = _ajoute(perp, F.CONSEIL, None, opinions=ops, opened=False,
-                council={"members_ok": 9, "members_failed": 2, "president_model": 7, "president_cost_uusd": "beaucoup",
+    ops = ({"opinions": 5}, {"opinions": [{"instrument": "PF_XBTUSD", "position": "long", "conviction": "x", "key_level_usd": "1e400",
+                                    "size_pct": "1e400"}], "target": [1]}, "text")  # fmt: skip
+    r = _append_council_round(perp, F.COUNCIL, None, opinions=ops, opened=False,
+                council={"members_ok": 9, "members_failed": 2, "president_model": 7, "president_cost_uusd": "many",
                          "members_model": ["x"], "prompts_version": {"v": 2}, "name": 3})  # fmt: skip
-    d = P.compute(perp, NOW)["conseils"]
-    c = next(p for p in d["portfolios"] if p["id"] == F.CONSEIL)
-    ronde = next(x for x in c["decisions"] if x["round"] == r)
-    assert len(ronde["conseil"]["avis"]) == 1  # rejoué : un seul avis du Suiveur, le dernier
-    assert ronde["conseil"]["avis"][0]["absent"]
-    assert ronde["conseil"]["president"] is None and ronde["conseil"]["consignes"] is None and ronde["conseil"]["cout_president_uusd"] is None
+    d = P.compute(perp, NOW)["councils"]
+    c = next(p for p in d["portfolios"] if p["id"] == F.COUNCIL)
+    llm_round = next(x for x in c["decisions"] if x["round"] == r)
+    assert len(llm_round["council"]["opinions"]) == 1  # replayed: a single opinion from the Follower, the last one
+    assert llm_round["council"]["opinions"][0]["absent"]
+    assert llm_round["council"]["president"] is None and llm_round["council"]["instructions"] is None and llm_round["council"]["chair_cost_uusd"] is None
 
 
-def test_conseil_inconnu_nom_generique_sans_planter(tmp_path):
+def test_unknown_council_generic_name_without_crashing(tmp_path):
     spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
     perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl")
-    _ajoute(perp, F.INCONNU, None, council={"president_model": "claude-sonnet-5-5"})
-    assert P.nom(F.INCONNU) == "Conseil Zeta" and P.nom("council-perp:") == "Conseil"
+    _append_council_round(perp, F.UNKNOWN, None, council={"president_model": "claude-sonnet-5-5"})
+    assert P.name(F.UNKNOWN) == "Zeta Council" and P.name("council-perp:") == "Council"
     config, policy = _cfg()
-    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, root_path="/arena/", perp_journal=perp)
     out = tmp_path / "site"
-    page = (out / "conseils.html").read_text(encoding="utf-8")
-    assert ">Conseil Zeta</a>" in page
-    z = texte((out / "conseils" / "council-perp-zeta.html").read_text(encoding="utf-8"))
-    assert "Président · Sonnet" in z and "Conseil Zeta" in z
+    page = (out / "councils.html").read_text(encoding="utf-8")
+    assert ">Zeta Council</a>" in page
+    z = text((out / "councils" / "council-perp-zeta.html").read_text(encoding="utf-8"))
+    assert "President · Sonnet" in z and "Zeta Council" in z
 
 
-def test_sans_conseil_pas_de_ligue_des_conseils(tmp_path):
-    """Un journal sans conseil : ni page, ni lien dans la navigation, ni donnée."""
+def test_without_council_no_council_league(tmp_path):
+    """A journal without a council: no page, no navigation link, no data."""
     spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
-    perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", conseils=False)
-    assert P.compute(perp, NOW)["conseils"] is None
+    perp = F.build(tmp_path / "var-perp" / "journal" / "events.jsonl", councils=False)
+    assert P.compute(perp, NOW)["councils"] is None
     config, policy = _cfg()
-    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    build(spot.path, tmp_path / "site", config=config, policy=policy, now_ts=NOW, public=True, root_path="/arena/", perp_journal=perp)
     out = tmp_path / "site"
-    assert not (out / "conseils.html").exists() and not (out / "conseils").exists() and not (out / "data" / "conseils.json").exists()
+    assert not (out / "councils.html").exists() and not (out / "councils").exists() and not (out / "data" / "councils.json").exists()
     for f in out.rglob("*.html"):
-        assert "conseils.html" not in f.read_text(encoding="utf-8"), f.name
+        assert "councils.html" not in f.read_text(encoding="utf-8"), f.name
 
 
-# --- Actualités (annonces de Kraken, calendrier macro) -------------------------------------------------------
+# --- News (Kraken announcements, macro calendar) -------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
-def site_actus(tmp_path_factory) -> Path:
-    tmp = tmp_path_factory.mktemp("actus")
+def site_news(tmp_path_factory) -> Path:
+    tmp = tmp_path_factory.mktemp("news")
     spot = synthetic_journal(tmp / "var" / "journal" / "events.jsonl")
-    perp = F.ajoute_actualites(F.build(tmp / "var-perp" / "journal" / "events.jsonl"))
+    perp = F.add_news(F.build(tmp / "var-perp" / "journal" / "events.jsonl"))
     cal = [
         CalendarEvent(
             "cpi-2026-12",
             "cpi",
-            "le CPI de décembre 2026 (BLS)",
+            "the December 2026 CPI (BLS)",
             NOW + 2 * 86_400,
             "https://www.bls.gov/schedule/",
         ),
         CalendarEvent(
             "ppi-2026-12",
             "ppi",
-            "le PPI de décembre 2026 (BLS)",
+            "the December 2026 PPI (BLS)",
             NOW + 3 * 86_400,
             "https://www.bls.gov/schedule/",
         ),
         CalendarEvent(
             "nfp-2027-01",
             "nfp",
-            "l’emploi de janvier 2027 (BLS)",
+            "the January 2027 jobs report (BLS)",
             NOW + 20 * 86_400,
             "https://www.bls.gov/schedule/",
         ),
@@ -561,7 +564,7 @@ def site_actus(tmp_path_factory) -> Path:
             policy=policy,
             now_ts=NOW,
             public=True,
-            racine="/arene/",
+            root_path="/arena/",
             perp_journal=perp,
         )
     finally:
@@ -569,73 +572,79 @@ def site_actus(tmp_path_factory) -> Path:
     return out
 
 
-def _bloc(html: str) -> str:
-    return re.search(r'<section aria-labelledby="titre-actualites">(.*?)</section>', html, re.DOTALL).group(1)
+def _incident(site: Path) -> str:
+    """Title of the incident announcement of the fixture (the one that is not the escaping trap)."""
+    announcements = json.loads(read(site, "data/derivatives.json"))["news"]["announcements"]
+    return next(x["title"] for x in announcements if x["title"] != F.TRAP_TITLE)
 
 
-def test_actualites_declencheurs_des_decisions(site_actus):
-    t = texte(lire(site_actus, "derives/llm-perp-claude-fable-5-2.html"))
-    assert "annonce de Kraken · Délai sur les ordres des dérivés" in t
-    c = texte(lire(site_actus, "conseils/council-perp-haiku.html"))
-    assert f"publication macro · après {F.LIBELLE_CPI}" in c
-    s = texte(lire(site_actus, "derives/llm-perp-claude-sonnet-5-5.html"))
-    assert "appel régulier" in s and "annonce de Kraken jointe" in s
+def _block(html: str) -> str:
+    return re.search(r'<section aria-labelledby="title-news">(.*?)</section>', html, re.DOTALL).group(1)
 
 
-def test_actualites_bloc_de_l_accueil_derives_et_des_conseils(site_actus):
-    for nom in ("derives.html", "conseils.html"):
-        b = _bloc(lire(site_actus, nom))
-        t = texte(b)
-        assert "le CPI de décembre 2026 (BLS)" in t and "rappelle les IA 3 min après" in t
+def test_news_triggers_of_the_decisions(site_news):
+    t = text(read(site_news, "derivatives/llm-perp-claude-fable-5-2.html"))
+    assert f"Kraken announcement · {_incident(site_news)}" in t
+    c = text(read(site_news, "councils/council-perp-haiku.html"))
+    assert f"macro release · after {F.CPI_LABEL}" in c
+    s = text(read(site_news, "derivatives/llm-perp-claude-sonnet-5-5.html"))
+    assert "regular call" in s and "Kraken announcement attached" in s
+
+
+def test_news_block_on_the_home_page_of_perp_and_councils(site_news):
+    for name in ("derivatives.html", "councils.html"):
+        b = _block(read(site_news, name))
+        t = text(b)
+        assert "the December 2026 CPI (BLS)" in t and "recalls the AIs 3 min after" in t
         assert (
-            "le PPI de décembre 2026" in t and t.count("rappelle les IA") == 1
-        )  # le PPI ne rappelle pas les IA
-        assert "janvier 2027" not in t  # au-delà de 7 jours
-        assert "Ancienne annonce" not in t
-        assert "retrait" not in t and "Maintenance" in t and "programmée" in t and "contrats : BTC" in t
+            "the December 2026 PPI" in t and t.count("recalls the AIs") == 1
+        )  # the PPI does not recall the AIs
+        assert "January 2027" not in t  # beyond 7 days
+        assert "Old announcement" not in t
+        assert "withdrawal" not in t and "Maintenance" in t and "scheduled" in t and "contracts: BTC" in t
         assert 'href="https://stspg.io/abc"' in b
 
 
-def test_actualites_une_annonce_a_plusieurs_versions_montre_la_derniere(site_actus):
-    t = texte(_bloc(lire(site_actus, "derives.html")))
-    assert t.count("Délai sur les ordres des dérivés") == 1
-    assert "résolu" in t and "en analyse" not in t
+def test_news_announcement_with_several_versions_shows_the_last(site_news):
+    t = text(_block(read(site_news, "derivatives.html")))
+    assert t.count(_incident(site_news)) == 1
+    assert "resolved" in t and "investigating" not in t
 
 
-def test_actualites_titre_echappe_et_lien_non_https_ecarte(site_actus):
-    b = _bloc(lire(site_actus, "derives.html"))
+def test_news_title_escaped_and_non_https_link_discarded(site_news):
+    b = _block(read(site_news, "derivatives.html"))
     assert "<script>" not in b and "&lt;script&gt;alert(1)&lt;/script&gt;" in b
     assert "javascript:" not in b
 
 
-def test_actualites_methode_et_export(site_actus):
-    t = texte(lire(site_actus, "methode.html"))
+def test_news_method_and_export(site_news):
+    t = text(read(site_news, "method.html"))
     assert (
-        "jamais les chiffres publiés" in t
+        "never the published figures" in t
         and "3 min" in t
-        and 'id="m-actualites"' in lire(site_actus, "methode.html")
+        and 'id="m-news"' in read(site_news, "method.html")
     )
-    for nom in ("derives.json", "conseils.json"):
-        a = json.loads(lire(site_actus, f"data/{nom}"))["actualites"]
-        assert len(a["calendrier"]) == 2 and {x["title"] for x in a["annonces"]} == {
-            "Délai sur les ordres des dérivés",
-            F.TITRE_PIEGE,
+    for name in ("derivatives.json", "councils.json"):
+        a = json.loads(read(site_news, f"data/{name}"))["news"]
+        assert len(a["calendar"]) == 2 and {x["title"] for x in a["announcements"]} == {
+            _incident(site_news),
+            F.TRAP_TITLE,
         }
 
 
-def test_actualites_sans_annonce_ni_calendrier(site, monkeypatch):
-    b = _bloc(lire(site, "derives.html"))
-    assert "Aucune annonce de Kraken sur les dérivés depuis 7 jours." in texte(b)
-    assert json.loads(lire(site, "data/derives.json"))["actualites"]["annonces"] == []
+def test_news_without_announcement_or_calendar(site, monkeypatch):
+    b = _block(read(site, "derivatives.html"))
+    assert "No Kraken derivatives announcement in the last 7 days." in text(b)
+    assert json.loads(read(site, "data/derivatives.json"))["news"]["announcements"] == []
 
 
-def test_actualites_calendrier_illisible_est_omis(tmp_path, monkeypatch):
+def test_news_unreadable_calendar_is_omitted(tmp_path, monkeypatch):
     def boom():
-        raise ValueError("config cassée")
+        raise ValueError("broken config")
 
     monkeypatch.setattr(P, "load_news_config", boom)
     perp = F.build(tmp_path / "p" / "events.jsonl")
-    assert P.compute(perp, NOW)["actualites"]["calendrier"] is None
+    assert P.compute(perp, NOW)["news"]["calendar"] is None
 
 
 @pytest.fixture(scope="module")
@@ -645,64 +654,63 @@ def site_archives(tmp_path_factory) -> Path:
     perp = F.build(tmp / "var-perp" / "journal" / "events.jsonl", archive=True)
     out = tmp / "site"
     config, policy = _cfg()
-    build(spot.path, out, config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    build(spot.path, out, config=config, policy=policy, now_ts=NOW, public=True, root_path="/arena/", perp_journal=perp)
     return out
 
 
-def test_conseils_archives_courbe_en_pointilles_arretee_au_retrait(site_archives):
+def test_archived_councils_dotted_curve_stopped_at_withdrawal(site_archives):
     site = site_archives
-    d = _perp(site)["conseils"]
-    fin = F.T0 + 2 * 86_400 - 3_600
-    par_id = {p["id"]: p for p in d["portfolios"]}
-    assert par_id[F.CONSEIL]["archive"] == {"ts": fin, "raison": "refonte"}  # the note stays in the journal, never published
-    assert par_id[F.TEMOINS[0]]["archive"] is None
+    d = _perp(site)["councils"]
+    end = F.T0 + 2 * 86_400 - 3_600
+    by_id = {p["id"]: p for p in d["portfolios"]}
+    assert by_id[F.COUNCIL]["archive"] == {"ts": end, "reason": "overhaul"}  # the note stays in the journal, never published
+    assert by_id[F.BENCHMARKS[0]]["archive"] is None
     series = {s["id"]: s for s in d["chart"]["series"]}
-    assert series[F.CONSEIL]["archive_ts"] == fin and "archive_ts" not in series[F.TEMOINS[0]]
+    assert series[F.COUNCIL]["archive_ts"] == end and "archive_ts" not in series[F.BENCHMARKS[0]]
     x = d["chart"]["x"]
-    assert fin in x and x[-1] > fin  # le témoin continue après le retrait
-    for pf in (F.CONSEIL, F.OPUS):
+    assert end in x and x[-1] > end  # the benchmark continues after the withdrawal
+    for pf in (F.COUNCIL, F.OPUS):
         v = series[pf]["values"]
-        assert v[x.index(fin)] is not None and all(w is None for w, t in zip(v, x, strict=True) if t > fin)
-        assert par_id[pf]["rendement"] == pytest.approx(v[x.index(fin)] / 100 - 1, abs=1e-4)  # figé au retrait
-    # le graphique : style en pointillés, mêmes teintes ; légende avec la date de retrait
-    page = lire(site, "conseils.html")
-    courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
-    st = {s["id"]: t for s, t in zip(courbe["series"], courbe["styles"], strict=True)}
-    assert st[F.CONSEIL]["dash"] == [1, 6] and st[F.CONSEIL]["archive"] and st[F.CONSEIL]["color"] == "--conseil"
-    assert st[F.OPUS]["dash"] == [1, 6] and st[F.OPUS]["color"] == "--conseil2"
-    assert not st[F.TEMOINS[0]].get("archive") and st[F.TEMOINS[0]]["dash"] != [1, 6]
-    legende = re.search(r'<ul class="legende".*?</ul>', page, flags=re.DOTALL).group(0)
-    assert legende.count(f"retiré le {jj_mm(fin)}") == 2 and legende.count("legende-tag") == 2 and "stroke-dasharray" in legende
-    assert legende.count("legende-tag") == 2 and "stroke-dasharray" in legende
-    assert "Courbes en pointillés" in texte(page) and "archivé" in texte(page)
+        assert v[x.index(end)] is not None and all(w is None for w, t in zip(v, x, strict=True) if t > end)
+        assert by_id[pf]["net_return"] == pytest.approx(v[x.index(end)] / 100 - 1, abs=1e-4)  # frozen at the withdrawal
+    # the chart: dotted style, same tints; legend with the withdrawal date
+    page = read(site, "councils.html")
+    curve = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', page).group(1)))
+    st = {s["id"]: t for s, t in zip(curve["series"], curve["styles"], strict=True)}
+    assert st[F.COUNCIL]["dash"] == [1, 6] and st[F.COUNCIL]["archive"] and st[F.COUNCIL]["color"] == "--council"
+    assert st[F.OPUS]["dash"] == [1, 6] and st[F.OPUS]["color"] == "--council2"
+    assert not st[F.BENCHMARKS[0]].get("archive") and st[F.BENCHMARKS[0]]["dash"] != [1, 6]
+    legend = re.search(r'<ul class="legend".*?</ul>', page, flags=re.DOTALL).group(0)
+    assert legend.count(f"withdrawn on {short_date(end)}") == 2 and legend.count("legend-tag") == 2 and "stroke-dasharray" in legend
+    assert "Dotted curves" in text(page) and "archived" in text(page)
 
 
-def test_conseils_archives_classement_et_tableau_marques_apres_les_actifs(site_archives):
-    page = lire(site_archives, "conseils.html")
-    classement = re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0)
-    lignes = re.findall(r'<li class="sc[^"]*".*?</li>', classement, flags=re.DOTALL)
-    noms = [re.search(r">([^<]+)</a>", li).group(1) for li in lignes]
-    assert noms[0] == "Témoin panier 1x" and set(noms[1:]) == {"Conseil Haiku", "Conseil Opus"}  # les archivés après
-    for li in lignes[1:]:
-        assert "sc-archive-ligne" in li and "sw-archive" in li and "archivé" in li and "retiré le" in texte(li)
-        assert '<span class="sc-rang">—</span>' in li  # plus classé
-    assert "sw-archive" not in lignes[0]
-    ligne = _ligne_tableau(page, "Conseil Haiku")
-    assert 'class="conseil archive"' in ligne and "archivé le" in texte(ligne)
-    # sa page : le dit, garde sa courbe en pointillés, ni appel prévu ni « en attente »
-    haiku = lire(site_archives, "conseils/council-perp-haiku.html")
-    t = texte(haiku)
-    assert "Conseil archivé" in t and "ses chiffres sont figés" in t and "En attente" not in t
-    courbe = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', haiku).group(1)))
-    assert courbe["styles"][0]["dash"] == [1, 6] and courbe["series"][0]["archive_ts"]
-    # la carte de l'accueil le dit aussi, et aucune page ne casse
-    accueil = texte(lire(site_archives, "index.html"))
-    assert "archivés" in accueil
-    assert 'trait--conseil"' in page
+def test_archived_councils_ranking_and_table_marked_after_the_active_ones(site_archives):
+    page = read(site_archives, "councils.html")
+    ranking = re.search(r'<ol class="scores".*?</ol>', page, flags=re.DOTALL).group(0)
+    lines = re.findall(r'<li class="sc[^"]*".*?</li>', ranking, flags=re.DOTALL)
+    names = [re.search(r">([^<]+)</a>", li).group(1) for li in lines]
+    assert names[0] == P.NAMES[P.BASKET] and set(names[1:]) == {P.NAMES[F.COUNCIL], P.NAMES[F.OPUS]}  # the archived ones after
+    for li in lines[1:]:
+        assert "sc-archive-line" in li and "sw-archive" in li and "archived" in li and "withdrawn on" in text(li)
+        assert '<span class="sc-rank">—</span>' in li  # no longer ranked
+    assert "sw-archive" not in lines[0]
+    line = _table_row(page, P.NAMES[F.COUNCIL])
+    assert 'class="council archive"' in line and "archived on" in text(line)
+    # its page: says so, keeps its dotted curve, no planned call and no "pending"
+    haiku = read(site_archives, "councils/council-perp-haiku.html")
+    t = text(haiku)
+    assert "Archived council" in t and "its figures are frozen" in t and "Pending" not in t
+    curve = json.loads(html.unescape(re.search(r'<script id="equity-data"[^>]*>(.*?)</script>', haiku).group(1)))
+    assert curve["styles"][0]["dash"] == [1, 6] and curve["series"][0]["archive_ts"]
+    # the home page card says so too, and no page breaks
+    home = text(read(site_archives, "index.html"))
+    assert "archived" in home
+    assert 'stroke--council"' in page
 
 
 # ---------------------------------------------------------------------------
-# Le Chasseur de mèches : le groupe « Robots » de la ligue dérivés
+# The Wick Hunter: the "Robots" group of the derivatives league
 # ---------------------------------------------------------------------------
 
 
@@ -710,46 +718,46 @@ def test_conseils_archives_classement_et_tableau_marques_apres_les_actifs(site_a
 def site_robots(tmp_path_factory) -> Path:
     tmp = tmp_path_factory.mktemp("perp-robots")
     spot = synthetic_journal(tmp / "var" / "journal" / "events.jsonl")
-    perp = F.build(tmp / "var-perp" / "journal" / "events.jsonl", conseils=False, robots=True)
+    perp = F.build(tmp / "var-perp" / "journal" / "events.jsonl", councils=False, robots=True)
     out = tmp / "site"
     config, policy = _cfg()
-    build(spot.path, out, config=config, policy=policy, now_ts=NOW, public=True, racine="/arene/", perp_journal=perp)
+    build(spot.path, out, config=config, policy=policy, now_ts=NOW, public=True, root_path="/arena/", perp_journal=perp)
     return out
 
 
-def test_robots_groupe_dans_la_ligue_derives_avec_regle_chocs_et_trades(site_robots):
+def test_robots_group_in_the_perp_league_with_rule_shocks_and_trades(site_robots):
     d = _perp(site_robots)
     robots = [p for p in d["portfolios"] if p["kind"] == "robot"]
     assert [p["id"] for p in robots] == [F.ROBOT, F.ROBOT_5MIN]
-    assert [p["name"] for p in robots] == ["Chasseur de mèches", "Chasseur au rythme de 5 min"]
-    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["robot"] * 2 + ["temoin"] * 3  # IA, robots, témoins
-    chasseur, temoin = robots
-    assert (chasseur["n_chocs"], chasseur["n_trades"]) == (1, 1) and (temoin["n_chocs"], temoin["n_trades"]) == (1, 0)
-    assert chasseur["n_operations"] == 2 and chasseur["positions"] == []  # entré puis sorti
-    idx = lire(site_robots, "derives.html")
-    comparatif = re.search(r'<table class="tableau comparatif.*?</table>', idx, flags=re.DOTALL).group(0)
-    assert 'groupe-robot' in comparatif and "Robots" in texte(comparatif) and len(re.findall(r"<tbody[^>]*>", comparatif)) == 3
-    ligne = texte(re.search(r'<tr class="robot[^"]*">.*?</tr>', comparatif, flags=re.DOTALL).group(0))
-    assert "Chasseur de mèches" in ligne and "4,5" in ligne and "1 choc vu" in ligne and "1 trade" in ligne
-    assert "robot-perp-chasseur" in idx and (site_robots / "derives" / "robot-perp-chasseur.html").exists()
+    assert [p["name"] for p in robots] == [P.NAMES[F.ROBOT], P.NAMES[F.ROBOT_5MIN]]
+    assert [p["kind"] for p in d["portfolios"]] == ["llm"] * 4 + ["robot"] * 2 + ["benchmark"] * 3  # AIs, robots, benchmarks
+    hunter, benchmark = robots
+    assert (hunter["n_shocks"], hunter["n_trades"]) == (1, 1) and (benchmark["n_shocks"], benchmark["n_trades"]) == (1, 0)
+    assert hunter["n_operations"] == 2 and hunter["positions"] == []  # entered then exited
+    idx = read(site_robots, "derivatives.html")
+    comparison = re.search(r'<table class="table comparison.*?</table>', idx, flags=re.DOTALL).group(0)
+    assert 'group-robot' in comparison and "Robots" in text(comparison) and len(re.findall(r"<tbody[^>]*>", comparison)) == 3
+    line = text(re.search(r'<tr class="robot[^"]*">.*?</tr>', comparison, flags=re.DOTALL).group(0))
+    assert P.NAMES[F.ROBOT] in line and "4.5" in line and "1 shock seen" in line and "1 trade" in line
+    assert "robot-perp-hunter" in idx and (site_robots / "derivatives" / "robot-perp-hunter.html").exists()
 
 
-def test_robots_couleur_propre_et_courbe_du_temoin_en_tirets(site_robots):
+def test_robots_own_color_and_benchmark_curve_dashed(site_robots):
     d = _perp(site_robots)
-    from arene.site.render import _styles
+    from arena.site.render import _styles
 
     st = dict(zip((s["id"] for s in d["chart"]["series"]), _styles(d["chart"], None), strict=True))
-    assert st[F.ROBOT]["color"] == "--chasseur" and st[F.ROBOT]["dash"] is None
-    assert st[F.ROBOT_5MIN]["color"] == "--chasseur" and st[F.ROBOT_5MIN]["dash"]
-    assert all(v["color"] != "--chasseur" for k, v in st.items() if k not in (F.ROBOT, F.ROBOT_5MIN))
-    css = (Path(__file__).parent.parent / "arene" / "site" / "assets" / "site.css").read_text(encoding="utf-8")
-    assert "--chasseur:" in css and ".trait--chasseur" in css
+    assert st[F.ROBOT]["color"] == "--hunter" and st[F.ROBOT]["dash"] is None
+    assert st[F.ROBOT_5MIN]["color"] == "--hunter" and st[F.ROBOT_5MIN]["dash"]
+    assert all(v["color"] != "--hunter" for k, v in st.items() if k not in (F.ROBOT, F.ROBOT_5MIN))
+    css = (Path(__file__).parent.parent / "arena" / "site" / "assets" / "site.css").read_text(encoding="utf-8")
+    assert "--hunter:" in css and ".stroke--hunter" in css
 
 
-def test_robots_page_du_chasseur_sans_nom_de_personne(site_robots):
-    page = lire(site_robots, "derives/robot-perp-chasseur.html")
-    t = texte(page)
-    assert "Chasseur de mèches" in t and "Chocs vus" in t and "Trades" in t and "robot sans IA" in t
-    for nom in ("owner-first-name", "owner-last-name"):  # le texte visible (le domaine de publication, hors sujet, n'est pas du texte)
-        assert nom not in t.lower() and nom not in texte(lire(site_robots, "derives.html")).lower()
-    assert any("Les robots" in texte(f.read_text(encoding="utf-8")) for f in site_robots.glob("*.html"))
+def test_robots_hunter_page_without_any_person_name(site_robots):
+    page = read(site_robots, "derivatives/robot-perp-hunter.html")
+    t = text(page)
+    assert P.NAMES[F.ROBOT] in t and "Shocks seen" in t and "Trades" in t and "robot without AI" in t
+    for name in ("owner-first-name", "owner-last-name"):  # the visible text (the publication domain, irrelevant, is not text)
+        assert name not in t.lower() and name not in text(read(site_robots, "derivatives.html")).lower()
+    assert any("The robots" in text(f.read_text(encoding="utf-8")) for f in site_robots.glob("*.html"))

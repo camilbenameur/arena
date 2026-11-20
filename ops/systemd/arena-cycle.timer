@@ -1,0 +1,11 @@
+[Unit]
+Description=Arena paper-trading league: trigger a cycle at HH:05 UTC, every 4 h
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:05:00 UTC
+Persistent=true
+AccuracySec=1s
+Unit=arena-cycle.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,57 @@
+# Risk policy for the research STRATEGIES (research-v1, PROTOCOL §6 C15 and §9).
+# Same keys as config/policy.toml (loaded by arena.risk.policy.load_policy, hashed file).
+#
+# Principle: riskd must never reject a strategy rule; here it only checks that the orders of a rule go
+# through the real arena code (whitelist, cash, exposure <= 100%, rounding).
+# Each value is therefore the widest that validate_policy accepts, unless noted.
+# Integers only. bp = 1/10,000 of equity.
+#
+# DOCUMENTED DEVIATIONS from the LLM policy (config/policy.toml):
+#  - max_order_bp / max_position_bp / max_exposure_bp: 10000 (a rule may hold 100% in one symbol;
+#    the sum of the weights is capped at 100% by the directional class).
+#  - max_trades_per_day: 12 = 6 sells + 6 buys, a full rotation of the 6 pairs at each decision.
+#  - min_interval_same_symbol_s: 1 and not 0 (validate_policy requires > 0); no effect for one decision
+#    per day.
+#  - stop_bp_min/max: 1 / 9999. NOTHING MAKES IT POSSIBLE to remove the STOP_REQUIRED rule: riskd rejects any
+#    buy without a stop. The replay (research/gates/arena_replay.py) therefore supplies stop_bp = 2500 on every
+#    buy and does NOT simulate the stop (a research rule has no stop): documented workaround.
+#  - max_cost_to_expected_move_pct: 100 (maximum accepted); EDGE_TOO_SMALL also requires a declared expected
+#    move > 0: the replay supplies expected_move_bp = 10000 (documented workaround, no economic meaning).
+#  - max_holding_s: 10 years. Enforced by the simulator (executor), not by riskd; the replay does not use
+#    the executor, so there is no forced exit.
+#  - daily_loss_freeze_bp, drawdown_halt_bp, monthly_fee_budget_bp: 10000 (never triggered before ruin).
+#    For paper trading (PROTOCOL §9) the halt must sit at the refutation threshold, specific to each candidate:
+#    it cannot be computed here, to be set at promotion.
+#  - max_quote_deviation_bp: 10000; max_spread_multiple: 3 (the replay supplies the current spread as the
+#    median, so the ratio is 1). They cannot be neutralized because NO_QUOTE/PRICE_SANITY/SPREAD_ANOMALY require
+#    consistent inputs: the replay supplies them.
+#  - min_order_ueur: 1 (the replay declares instruments without a Kraken minimum: documented bias, the
+#    arena's 5 EUR floor is ignored, the simulated capital is 10,000 EUR).
+
+symbols = ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "LINK/EUR", "LTC/EUR"]
+
+max_order_bp    = 10000
+max_position_bp = 10000
+max_exposure_bp = 10000
+
+max_trades_per_day         = 12
+max_orders_per_minute      = 20
+min_interval_same_symbol_s = 1
+
+stop_bp_min = 1
+stop_bp_max = 9999
+
+max_cost_to_expected_move_pct = 100
+
+max_holding_s = 315360000
+
+daily_loss_freeze_bp = 10000
+freeze_duration_s    = 86400
+drawdown_halt_bp     = 10000
+
+monthly_fee_budget_bp = 10000
+
+max_quote_deviation_bp = 10000
+max_spread_multiple    = 3
+
+min_order_ueur = 1

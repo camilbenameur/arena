@@ -1,8 +1,8 @@
-"""Tests de arene/risk/riskd.py : une règle = un test (juste sous / juste au-dessus du seuil),
-puis tests de propriété hypothesis (plus de 100 000 intentions générées au total).
+"""Tests of arena/risk/riskd.py: one rule = one test (just below / just above the threshold),
+then hypothesis property tests (more than 100,000 generated intents in total).
 
-Les tests de propriété recalculent TOUT indépendamment avec des fractions exactes (module `fractions`),
-sans réutiliser les fonctions de riskd : taille, position, exposition, cash après frais, liste blanche, stop...
+The property tests recompute EVERYTHING independently with exact fractions (`fractions` module),
+without reusing riskd's functions: size, position, exposure, cash after fees, whitelist, stop...
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from arene.risk import riskd
-from arene.risk.policy import Policy, load_policy
-from arene.risk.riskd import (
+from arena.risk import riskd
+from arena.risk.policy import Policy, load_policy
+from arena.risk.riskd import (
     ALL_CODES,
     BP,
     Counters,
@@ -26,7 +26,7 @@ from arene.risk.riskd import (
     evaluate,
     freeze_or_halt,
 )
-from arene.types import (
+from arena.types import (
     MICRO,
     QTY_SCALE,
     Instrument,
@@ -42,7 +42,7 @@ POLICY = load_policy(Path(__file__).resolve().parent.parent / "config" / "policy
 NOW = 1_700_000_000
 EUR = MICRO
 
-# Instruments du §1 de la spec (tick, ordre min, coût min), en unités entières.
+# Instruments of spec §1 (tick, min order, min cost), in integer units.
 INSTR: dict[str, Instrument] = {
     "BTC/EUR": Instrument("BTC/EUR", "XBTEUR", "BTCUSDT", 100_000, 6_000, 450_000),
     "ETH/EUR": Instrument("ETH/EUR", "ETHEUR", "ETHUSDT", 10_000, 200_000, 450_000),
@@ -51,7 +51,7 @@ INSTR: dict[str, Instrument] = {
     "LINK/EUR": Instrument("LINK/EUR", "LINKEUR", "LINKUSDT", 10, 35_000_000, 450_000),
     "LTC/EUR": Instrument("LTC/EUR", "LTCEUR", "LTCUSDT", 10_000, 8_000_000, 450_000),
 }
-# Prix de référence (µEUR par unité entière).
+# Reference prices (µEUR per whole unit).
 BASE_PRICE = {
     "BTC/EUR": 50_000 * EUR,
     "ETH/EUR": 2_000 * EUR,
@@ -64,7 +64,7 @@ FEE_BP, SLIP_BP = 50, 5
 BTC = "BTC/EUR"
 
 
-# --------------------------------------------------------------------------- aides de test
+# --------------------------------------------------------------------------- test helpers
 
 
 def quote(symbol: str = BTC, mid: int | None = None, spread: int | None = None) -> Quote:
@@ -80,7 +80,7 @@ def market(**kw: object) -> MarketView:
         "median_spreads_ueur": {s: BASE_PRICE[s] * 4 // 100_000 for s in INSTR},
         "marks": dict(BASE_PRICE),
     }
-    # BTC : bid 49 990, ask 50 010 (spread 20 EUR = 4 bp), médiane 20 EUR.
+    # BTC: bid 49,990, ask 50,010 (spread 20 EUR = 4 bp), median 20 EUR.
     base["quotes"][BTC] = quote(BTC)  # type: ignore[index]
     base["median_spreads_ueur"][BTC] = 20 * EUR  # type: ignore[index]
     base.update(kw)
@@ -103,7 +103,7 @@ def counters(**kw: int | None) -> Counters:
 
 
 def state(cash: int = 1_000 * EUR, positions: dict[str, int] | None = None, **kw: object) -> PortfolioState:
-    """`positions` : symbole -> valeur en µEUR au mark de référence."""
+    """`positions`: symbol -> value in µEUR at the reference mark."""
     pos: dict[str, Position] = {}
     for sym, value in (positions or {}).items():
         qty = value * QTY_SCALE // BASE_PRICE[sym]
@@ -159,22 +159,22 @@ def ok(v: Verdict) -> None:
     assert v.qty > 0
 
 
-# --------------------------------------------------------------------------- cas de référence
+# --------------------------------------------------------------------------- reference case
 
 
-def test_achat_de_reference_approuve_et_chiffres_exacts() -> None:
+def test_reference_buy_is_approved_with_exact_figures() -> None:
     v = run()
     ok(v)
     assert v.policy_sha256 == POLICY.sha256 and v.intent_id == "i1"
-    # prix d'exécution = ask 50 010 EUR x 1,0005 = 50 035,005 EUR -> tick 0,1 EUR : 50 035,1 EUR
+    # execution price = ask 50,010 EUR x 1.0005 = 50,035.005 EUR -> tick 0.1 EUR: 50,035.1 EUR
     px = 50_035_100_000
     assert v.qty == 100 * EUR * BP * QTY_SCALE // (px * (BP + FEE_BP))
     cost = -((-v.qty * px) // QTY_SCALE)
     fee = -((-cost * FEE_BP) // BP)
-    assert v.reserved_ueur == cost + fee <= 100 * EUR  # le budget de 10 % couvre frais compris
+    assert v.reserved_ueur == cost + fee <= 100 * EUR  # the 10% budget covers fees included
 
 
-def test_codes_exportes_et_tries() -> None:
+def test_codes_are_exported_and_sorted() -> None:
     assert list(ALL_CODES) == sorted(ALL_CODES)
     for code in (
         "NOT_WHITELISTED", "MAX_ORDER_SIZE", "MAX_POSITION", "MAX_EXPOSURE", "INSUFFICIENT_CASH",
@@ -185,7 +185,7 @@ def test_codes_exportes_et_tries() -> None:
         assert getattr(riskd, code) == code and code in ALL_CODES
 
 
-def test_tous_les_codes_violes_sont_renvoyes_tries() -> None:
+def test_all_violated_codes_are_returned_sorted() -> None:
     v = run(
         buy("DOGE/EUR", size_bp=3000, stop_bp=None, exp=None),
         state(frozen_until_ts=NOW + 1, halted=True),
@@ -201,13 +201,13 @@ def test_tous_les_codes_violes_sont_renvoyes_tries() -> None:
         assert code in v.reasons, code
 
 
-# --------------------------------------------------------------------------- une règle par test
+# --------------------------------------------------------------------------- one rule per test
 
 
 def test_not_whitelisted() -> None:
     v = run(buy("DOGE/EUR"))
     assert "NOT_WHITELISTED" in v.reasons and not v.approved
-    # symbole connu de l'instrument mais retiré de la liste blanche
+    # symbol known to the instrument but removed from the whitelist
     pol = dataclasses.replace(POLICY, symbols=("ETH/EUR",))
     only(run(policy=pol), "NOT_WHITELISTED")
     ok(run(policy=dataclasses.replace(POLICY, symbols=("BTC/EUR",))))
@@ -218,35 +218,35 @@ def test_max_order_size(size: int, good: bool) -> None:
     v = run(buy(size_bp=size))
     if good:
         ok(v)
-        # même à 20 % : coût + frais <= 20 % de l'equity
+        # even at 20%: cost + fees <= 20% of equity
         assert v.reserved_ueur <= 200 * EUR
     else:
         only(v, "MAX_ORDER_SIZE")
 
 
 def test_max_position() -> None:
-    # 30 % déjà en BTC (mark) + achat de 10 % : 3 995 bp <= 4 000 -> ok
+    # 30% already in BTC (mark) + 10% buy: 3,995 bp <= 4,000 -> ok
     ok(run(st_=state(cash=700 * EUR, positions={BTC: 300 * EUR})))
-    # 30,1 % + 10 % : ~4 005 bp > 4 000
+    # 30.1% + 10%: ~4,005 bp > 4,000
     only(run(st_=state(cash=699 * EUR, positions={BTC: 301 * EUR})), "MAX_POSITION")
-    # une position sur un AUTRE symbole ne compte pas dans le plafond du symbole
+    # a position on ANOTHER symbol does not count toward the symbol's cap
     ok(run(st_=state(cash=600 * EUR, positions={"ETH/EUR": 400 * EUR})))
 
 
-def test_max_exposure_et_cash() -> None:
-    # exposition 80 % + achat 20 % = 99,9 % <= 100 %, cash 200 EUR >= coût + frais : ok
+def test_max_exposure_and_cash() -> None:
+    # exposure 80% + 20% buy = 99.9% <= 100%, cash 200 EUR >= cost + fees: ok
     ok(run(buy(size_bp=2000), state(cash=200 * EUR, positions={"ETH/EUR": 400 * EUR, "SOL/EUR": 400 * EUR})))
-    # 85 % déjà investis : 85 + 19,9 > 100 % et cash 150 < 200
+    # 85% already invested: 85 + 19.9 > 100% and cash 150 < 200
     v = run(buy(size_bp=2000), state(cash=150 * EUR, positions={"ETH/EUR": 425 * EUR, "SOL/EUR": 425 * EUR}))
     assert not v.approved and {"MAX_EXPOSURE", "INSUFFICIENT_CASH"} <= set(v.reasons)
 
 
-def test_cash_insuffisant_a_cause_des_frais_seulement() -> None:
-    # equity 1000 EUR, achat de 20 % (budget 200 EUR frais compris). cash 199,5 EUR : le coût hors frais
-    # (~199,0) tient, coût + frais (~200) non -> INSUFFICIENT_CASH seul, exposition encore <= 100 %.
+def test_cash_is_insufficient_because_of_fees_only() -> None:
+    # equity 1000 EUR, 20% buy (budget 200 EUR fees included). cash 199.5 EUR: the cost excluding fees
+    # (~199.0) fits, cost + fees (~200) does not -> INSUFFICIENT_CASH alone, exposure still <= 100%.
     v = run(buy(size_bp=2000), state(cash=1_999 * EUR // 10, positions={"ETH/EUR": 8_005 * EUR // 10}))
     only(v, "INSUFFICIENT_CASH")
-    # cash exactement égal au total : approuvé, jamais de cash négatif
+    # cash exactly equal to the total: approved, never negative cash
     ok1 = run(buy(size_bp=2000), state(cash=200 * EUR, positions={"ETH/EUR": 800 * EUR}))
     ok(ok1)
     assert 200 * EUR - ok1.reserved_ueur >= 0
@@ -292,18 +292,18 @@ def test_stop(stop: int | None, codes: tuple[str, ...]) -> None:
     ("exp", "good"), [(346, True), (345, False), (None, False), (0, False), (-10, False)]
 )
 def test_edge_too_small(exp: int | None, good: bool) -> None:
-    # coût aller-retour = 2 x (50 + 5) + spread 4 bp = 114 bp ; 114 x 100 <= 33 x 346 (11 418) mais pas 345 (11 385)
+    # round-trip cost = 2 x (50 + 5) + spread 4 bp = 114 bp; 114 x 100 <= 33 x 346 (11,418) but not 345 (11,385)
     v = run(buy(exp=exp))
     ok(v) if good else only(v, "EDGE_TOO_SMALL")
 
 
-def test_edge_depend_des_frais_et_du_spread() -> None:
+def test_edge_depends_on_fees_and_spread() -> None:
     only(run(fee=60, slip=5, intent=buy(exp=346)), "EDGE_TOO_SMALL")  # 2 x 65 + 4 = 134 bp
     wide = market()
     wide.quotes[BTC] = quote(BTC, spread=100 * EUR)  # 20 bp
     wide.median_spreads_ueur[BTC] = 100 * EUR
     only(run(buy(exp=346), mkt=wide), "EDGE_TOO_SMALL")
-    ok(run(buy(exp=410), mkt=wide))  # 130 x 100 = 13 000 <= 33 x 410 (13 530)
+    ok(run(buy(exp=410), mkt=wide))  # 130 x 100 = 13,000 <= 33 x 410 (13,530)
 
 
 @pytest.mark.parametrize(("until", "good"), [(NOW, True), (NOW - 1, True), (NOW + 1, False)])
@@ -322,11 +322,11 @@ def test_fee_budget(fees: int, good: bool) -> None:
     ok(v) if good else only(v, "FEE_BUDGET")
 
 
-def test_fee_budget_sans_equity_de_debut_de_mois_refuse() -> None:
+def test_fee_budget_without_month_start_equity_is_refused() -> None:
     only(run(cnt=counters(equity_month_start_ueur=0)), "FEE_BUDGET")
 
 
-def test_kill_switch_refuse_les_achats() -> None:
+def test_kill_switch_refuses_buys() -> None:
     only(run(kill=True), "KILL_SWITCH")
 
 
@@ -335,13 +335,13 @@ def test_kill_switch_refuse_les_achats() -> None:
     [(48_600, True), (48_500, False), (51_000, True), (51_600, False), (50_000, True), (0, False)],
 )
 def test_price_sanity(close_eur: int, good: bool) -> None:
-    # mid = 50 000 EUR ; seuil 3 % de la dernière clôture
+    # mid = 50,000 EUR; threshold 3% of the last close
     m = market(last_closes={BTC: close_eur * EUR})
     v = run(mkt=m)
     ok(v) if good else only(v, "PRICE_SANITY")
 
 
-def test_price_sanity_cloture_absente() -> None:
+def test_price_sanity_missing_close() -> None:
     only(run(mkt=market(last_closes={})), "PRICE_SANITY")
 
 
@@ -349,25 +349,25 @@ def test_price_sanity_cloture_absente() -> None:
     ("median", "good"), [(6_666_667, True), (6_666_666, False), (20 * EUR, True), (0, False)]
 )
 def test_spread_anomaly(median: int, good: bool) -> None:
-    # spread 20 EUR ; limite = 3 x médiane
+    # spread 20 EUR; limit = 3 x median
     m = market(median_spreads_ueur={BTC: median})
     v = run(mkt=m)
     ok(v) if good else only(v, "SPREAD_ANOMALY")
 
 
-def test_spread_anomaly_mediane_absente() -> None:
+def test_spread_anomaly_missing_median() -> None:
     only(run(mkt=market(median_spreads_ueur={})), "SPREAD_ANOMALY")
 
 
 @pytest.mark.parametrize(("size", "good"), [(51, True), (50, False), (1, False)])
-def test_order_too_small_achat(size: int, good: bool) -> None:
-    # equity 1000 EUR : 50 bp = 5 EUR de budget, frais compris -> coût hors frais < 5 EUR : refusé
+def test_order_too_small_buy(size: int, good: bool) -> None:
+    # equity 1000 EUR: 50 bp = 5 EUR budget, fees included -> cost excluding fees < 5 EUR: refused
     v = run(buy(size_bp=size))
     ok(v) if good else only(v, "ORDER_TOO_SMALL")
 
 
-def test_order_too_small_quantite_minimale() -> None:
-    # XRP : ordre min 4 XRP. On abaisse le plancher en EUR de la politique pour isoler la règle de quantité.
+def test_order_too_small_minimum_quantity() -> None:
+    # XRP: min order 4 XRP. The policy's EUR floor is lowered to isolate the quantity rule.
     pol = dataclasses.replace(POLICY, min_order_ueur=1)
     flat = counters(
         equity_month_start_ueur=400 * EUR,
@@ -375,52 +375,52 @@ def test_order_too_small_quantite_minimale() -> None:
         equity_peak_ueur=400 * EUR,
         equity_now_ueur=400 * EUR,
     )
-    # budget 20 bp de 400 EUR = 0,8 EUR, soit ~0,4 XRP < 4 XRP (le coût minimal 0,45 EUR est lui respecté)
+    # budget 20 bp of 400 EUR = 0.8 EUR, i.e. ~0.4 XRP < 4 XRP (the 0.45 EUR minimum cost is respected)
     v = run(buy("XRP/EUR", size_bp=20), state(cash=400 * EUR), cnt=flat, policy=pol)
     only(v, "ORDER_TOO_SMALL")
 
 
-def test_equity_nulle_ou_negative() -> None:
+def test_equity_zero_or_negative() -> None:
     v = run(st_=state(cash=0))
     assert not v.approved and "NO_EQUITY" in v.reasons
     v = run(st_=state(cash=-5 * EUR))
     assert not v.approved and "NO_EQUITY" in v.reasons
 
 
-def test_quote_absent_ou_incoherent() -> None:
+def test_quote_missing_or_inconsistent() -> None:
     only(run(mkt=market(quotes={})), "NO_QUOTE")
     only(run(mkt=market(quotes={BTC: Quote(BTC, NOW, 100, 99)})), "NO_QUOTE")  # ask < bid
     only(run(mkt=market(quotes={BTC: Quote(BTC, NOW, 0, 100)})), "NO_QUOTE")
 
 
-def test_mark_manquant_pour_une_position_detenue() -> None:
+def test_missing_mark_for_a_held_position() -> None:
     m = market()
     del m.marks["ETH/EUR"]
     v = run(st_=state(cash=500 * EUR, positions={"ETH/EUR": 500 * EUR}), mkt=m)
     assert not v.approved and "NO_MARK" in v.reasons
 
 
-def test_parametres_absurdes() -> None:
+def test_absurd_parameters() -> None:
     only(run(fee=-1), "BAD_PARAMS")
     only(run(slip=-1), "BAD_PARAMS")
 
 
-def test_taille_absurde_achat() -> None:
+def test_absurd_size_buy() -> None:
     only(run(buy(size_bp=0)), "BAD_SIZE")
     only(run(buy(size_bp=-5)), "BAD_SIZE")
     v = run(buy(size_bp=10**40))
     assert not v.approved and "MAX_ORDER_SIZE" in v.reasons
 
 
-def test_cote_inconnu() -> None:
+def test_unknown_quote() -> None:
     i = dataclasses.replace(buy(), side="short")  # type: ignore[arg-type]
     only(run(i), "BAD_SIDE")
 
 
-# --------------------------------------------------------------------------- ventes
+# --------------------------------------------------------------------------- sells
 
 
-def test_vente_totale_et_partielle() -> None:
+def test_full_and_partial_sell() -> None:
     s = state(cash=500 * EUR, positions={BTC: 500 * EUR})
     pos_qty = s.positions[BTC].qty
     v = run(sell(size_bp=BP), s)
@@ -428,22 +428,22 @@ def test_vente_totale_et_partielle() -> None:
     assert v.qty == pos_qty
     v = run(sell(size_bp=5000), s)
     ok(v)
-    assert v.qty == pos_qty * 5000 // BP  # arrondi vers le bas
-    # montant attendu : au bid (49 990 EUR), arrondi vers le bas
+    assert v.qty == pos_qty * 5000 // BP  # rounded down
+    # expected amount: at the bid (49,990 EUR), rounded down
     assert v.reserved_ueur == v.qty * 49_990 * EUR // QTY_SCALE
 
 
 def test_no_short() -> None:
-    only(run(sell()), "NO_SHORT")  # aucune position
+    only(run(sell()), "NO_SHORT")  # no position
     s = state(cash=500 * EUR, positions={BTC: 500 * EUR})
-    only(run(sell(size_bp=10_001), s), "NO_SHORT")  # plus que la position
-    only(run(sell("ETH/EUR"), s), "NO_SHORT")  # position sur un autre symbole
+    only(run(sell(size_bp=10_001), s), "NO_SHORT")  # more than the position
+    only(run(sell("ETH/EUR"), s), "NO_SHORT")  # position on another symbol
 
 
 @pytest.mark.parametrize("size", [10_000, 9_999, 5_000, 1])
-def test_order_too_small_vente(size: int) -> None:
-    # position de 4 EUR (< plancher de 5 EUR) : seule la vente totale est exemptée.
-    # size_bp = 1 sur une si petite position arrondit à une quantité nulle : refus, jamais d'approbation à 0.
+def test_order_too_small_sell(size: int) -> None:
+    # position of 4 EUR (< 5 EUR floor): only the full sale is exempt.
+    # size_bp = 1 on such a small position rounds to a zero quantity: refused, never an approval at 0.
     s = state(cash=996 * EUR, positions={BTC: 4 * EUR})
     v = run(sell(size_bp=size), s)
     if size == BP:
@@ -452,21 +452,21 @@ def test_order_too_small_vente(size: int) -> None:
         only(v, "ORDER_TOO_SMALL")
 
 
-def test_vente_partielle_juste_sous_et_au_dessus_du_plancher() -> None:
-    # position de 10 EUR : vendre 50 % = 5 EUR (au bid 49 990 contre mark 50 000 : un peu moins) -> trop petit
+def test_partial_sell_just_below_and_above_the_floor() -> None:
+    # position of 10 EUR: selling 50% = 5 EUR (at the bid 49,990 vs mark 50,000: slightly less) -> too small
     s = state(cash=990 * EUR, positions={BTC: 10 * EUR})
     only(run(sell(size_bp=5000), s), "ORDER_TOO_SMALL")
-    ok(run(sell(size_bp=5100), s))  # ~5,1 EUR
+    ok(run(sell(size_bp=5100), s))  # ~5.1 EUR
 
 
-def test_vente_not_whitelisted_et_order_rate() -> None:
+def test_sell_not_whitelisted_and_order_rate() -> None:
     s = state(cash=500 * EUR, positions={BTC: 500 * EUR})
     only(run(sell(), s, policy=dataclasses.replace(POLICY, symbols=("ETH/EUR",))), "NOT_WHITELISTED")
     only(run(sell(), s, cnt=counters(orders_last_minute=POLICY.max_orders_per_minute)), "ORDER_RATE")
     ok(run(sell(), s, cnt=counters(orders_last_minute=POLICY.max_orders_per_minute - 1)))
 
 
-def test_vente_permise_si_gele_arrete_kill_switch_et_budgets_epuises() -> None:
+def test_sell_allowed_if_frozen_stopped_kill_switch_and_budgets_exhausted() -> None:
     s = state(
         cash=500 * EUR,
         positions={BTC: 500 * EUR},
@@ -478,16 +478,16 @@ def test_vente_permise_si_gele_arrete_kill_switch_et_budgets_epuises() -> None:
     ok(run(sell(size_bp=1000), s, cnt=c, kill=True))
 
 
-def test_vente_ignore_edge_taille_prix_et_spread() -> None:
+def test_sell_ignores_edge_size_price_and_spread() -> None:
     s = state(cash=500 * EUR, positions={BTC: 500 * EUR})
     m = market(last_closes={BTC: 1}, median_spreads_ueur={BTC: 0})
     i = dataclasses.replace(sell(), stop_bp=None, expected_move_bp=None)
     ok(run(i, s, m))
 
 
-def test_vente_totale_sans_quote_utilise_le_mark_ou_passe() -> None:
+def test_full_sell_without_quote_uses_the_mark_or_passes() -> None:
     s = state(cash=500 * EUR, positions={BTC: 500 * EUR})
-    ok(run(sell(), s, market(quotes={})))  # mark disponible
+    ok(run(sell(), s, market(quotes={})))  # mark available
     v = run(sell(), s, market(quotes={}, marks={}))
     ok(v)
     assert v.reserved_ueur == 0
@@ -500,35 +500,35 @@ def test_vente_totale_sans_quote_utilise_le_mark_ou_passe() -> None:
 @pytest.mark.parametrize(
     ("equity_now", "expected"),
     [
-        (951 * EUR, None),  # -4,9 %
-        (950 * EUR, "FROZEN"),  # -5 % pile
+        (951 * EUR, None),  # -4.9%
+        (950 * EUR, "FROZEN"),  # exactly -5%
         (900 * EUR, "FROZEN"),
-        (801 * EUR, "FROZEN"),  # drawdown 19,9 %
-        (800 * EUR, "HALTED"),  # -20 % pile
+        (801 * EUR, "FROZEN"),  # drawdown 19.9%
+        (800 * EUR, "HALTED"),  # exactly -20%
         (500 * EUR, "HALTED"),
     ],
 )
-def test_freeze_or_halt_seuils(equity_now: int, expected: str | None) -> None:
+def test_freeze_or_halt_thresholds(equity_now: int, expected: str | None) -> None:
     c = counters(equity_now_ueur=equity_now)
     code, until = freeze_or_halt(state(), c, POLICY, NOW)
     assert code == expected
     assert until == (NOW + POLICY.freeze_duration_s if expected == "FROZEN" else 0)
 
 
-def test_freeze_or_halt_rien_et_arret_deja_pose() -> None:
+def test_freeze_or_halt_nothing_and_stop_already_placed() -> None:
     assert freeze_or_halt(state(), counters(), POLICY, NOW) == (None, 0)
     assert freeze_or_halt(state(halted=True), counters(), POLICY, NOW) == ("HALTED", 0)
-    # equity de référence nulle : on ne peut pas mesurer, pas de gel
+    # zero reference equity: cannot be measured, no freeze
     assert freeze_or_halt(state(), counters(equity_24h_ago_ueur=0, equity_peak_ueur=0), POLICY, NOW) == (
         None,
         0,
     )
 
 
-def test_gel_recalcule_dans_evaluate_meme_si_le_drapeau_n_est_pas_pose() -> None:
-    # equity réelle (cash) 940 EUR vs 1000 EUR il y a 24 h : -6 % -> FROZEN même si state.frozen_until_ts == 0
+def test_freeze_recomputed_in_evaluate_even_if_flag_is_not_set() -> None:
+    # actual equity (cash) 940 EUR vs 1000 EUR 24 h ago: -6% -> FROZEN even if state.frozen_until_ts == 0
     only(run(st_=state(cash=940 * EUR), cnt=counters(equity_peak_ueur=940 * EUR)), "FROZEN")
-    # drawdown 25 % depuis le plus haut -> HALTED (et pas de gel 24 h : equity_24h_ago == equity)
+    # drawdown 25% from the peak -> HALTED (and no 24 h freeze: equity_24h_ago == equity)
     only(
         run(
             st_=state(cash=750 * EUR),
@@ -538,10 +538,10 @@ def test_gel_recalcule_dans_evaluate_meme_si_le_drapeau_n_est_pas_pose() -> None
     )
 
 
-# --------------------------------------------------------------------------- pureté, déterminisme
+# --------------------------------------------------------------------------- purity, determinism
 
 
-def test_pure_aucune_mutation_des_entrees() -> None:
+def test_pure_no_mutation_of_inputs() -> None:
     s = state(cash=500 * EUR, positions={BTC: 500 * EUR})
     m = market()
     snap_state = dataclasses.replace(s, positions={k: dataclasses.replace(v) for k, v in s.positions.items()})
@@ -552,17 +552,17 @@ def test_pure_aucune_mutation_des_entrees() -> None:
     assert (dict(m.quotes), dict(m.marks), dict(m.last_closes), dict(m.median_spreads_ueur)) == snap_market
 
 
-def test_deterministe() -> None:
+def test_deterministic() -> None:
     results = {run(buy(size_bp=s), cnt=counters(trades_24h=s % 3)) for s in (10, 700, 2500) for _ in range(5)}
     assert len(results) == 3
 
 
-def test_pas_de_float_dans_le_verdict() -> None:
+def test_no_float_in_the_verdict() -> None:
     v = run()
     assert type(v.qty) is int and type(v.reserved_ueur) is int
 
 
-# =========================================================================== propriétés (hypothesis)
+# =========================================================================== properties (hypothesis)
 
 TALLY = {"examples": 0, "approved_buy": 0, "approved_sell": 0, "rejected": 0}
 
@@ -595,36 +595,38 @@ def check_invariants(
     kill: bool,
     v: Verdict,
 ) -> None:
-    """Recalcul indépendant en arithmétique exacte : un verdict approuvé ne viole AUCUN plafond."""
+    """Independent recomputation in exact arithmetic: an approved verdict violates NO cap."""
     TALLY["examples"] += 1
     assert isinstance(v, Verdict)
     assert v.intent_id == intent.intent_id and v.policy_sha256 == pol.sha256
     assert type(v.qty) is int and type(v.reserved_ueur) is int
     assert list(v.reasons) == sorted(set(v.reasons))
     assert set(v.reasons) <= set(ALL_CODES)
-    assert "INTERNAL_ERROR" not in v.reasons, "exception interne interceptée : bug de riskd"
+    assert "INTERNAL_ERROR" not in v.reasons, "internal exception caught: riskd bug"
     if not v.approved:
         TALLY["rejected"] += 1
         assert v.reasons and v.qty == 0 and v.reserved_ueur == 0
         return
     assert v.reasons == () and v.qty > 0 and v.reserved_ueur >= 0
-    assert intent.symbol in pol.symbols  # liste blanche (achats et ventes)
+    assert intent.symbol in pol.symbols  # whitelist (buys and sells)
     assert c.orders_last_minute < pol.max_orders_per_minute
 
     if intent.side == Side.SELL:
         TALLY["approved_sell"] += 1
         held = s.positions[intent.symbol].qty
-        assert 0 < v.qty <= held, "vente à découvert"
+        assert 0 < v.qty <= held, "short sale"
         assert isinstance(intent.size_bp, int) and 0 < intent.size_bp <= BP
         assert v.qty <= held * intent.size_bp // BP or v.qty == held
         if v.qty != held:
             inst = instruments[intent.symbol]
             assert v.qty >= inst.lot_min_qty
-            px = m.quotes[intent.symbol].bid if intent.symbol in m.quotes else m.marks[intent.symbol]
+            quote = m.quotes.get(intent.symbol)
+            quote_valid = quote is not None and type(quote.bid) is int and type(quote.ask) is int and quote.bid > 0 and quote.ask >= quote.bid
+            px = quote.bid if quote_valid else m.marks[intent.symbol]  # same price as riskd: bid of a valid quote, else the mark
             assert Fraction(v.qty * px, QTY_SCALE) >= max(pol.min_order_ueur, inst.cost_min_ueur)
         return
 
-    # --- achat ---
+    # --- buy ---
     TALLY["approved_buy"] += 1
     assert intent.side == Side.BUY
     sym = intent.symbol
@@ -644,13 +646,13 @@ def check_invariants(
     equity = exact_equity(s, m.marks)
     assert equity > 0
 
-    # coût exact au pire prix d'exécution (ask + glissement), plus frais
+    # exact cost at the worst execution price (ask + slippage), plus fees
     px = Fraction(q.ask * (BP + slip), BP)
     notional = Fraction(v.qty) * px / QTY_SCALE
     total = notional * (BP + fee) / BP
-    assert v.reserved_ueur >= total  # le montant réservé est arrondi vers le haut
-    assert total * BP <= pol.max_order_bp * equity, "MAX_ORDER_SIZE violé"
-    assert s.cash_ueur - total >= 0, "cash négatif après frais"
+    assert v.reserved_ueur >= total  # the reserved amount is rounded up
+    assert total * BP <= pol.max_order_bp * equity, "MAX_ORDER_SIZE violated"
+    assert s.cash_ueur - total >= 0, "negative cash after fees"
     held_value = Fraction(0)
     all_value = Fraction(0)
     for psym, p in s.positions.items():
@@ -659,29 +661,29 @@ def check_invariants(
             all_value += val
             if psym == sym:
                 held_value = val
-    assert (held_value + notional) * BP <= pol.max_position_bp * equity, "MAX_POSITION violé"
-    assert (all_value + notional) * BP <= pol.max_exposure_bp * equity, "MAX_EXPOSURE violé"
-    # taille minimale
+    assert (held_value + notional) * BP <= pol.max_position_bp * equity, "MAX_POSITION violated"
+    assert (all_value + notional) * BP <= pol.max_exposure_bp * equity, "MAX_EXPOSURE violated"
+    # minimum size
     assert v.qty >= inst.lot_min_qty
     assert notional >= max(pol.min_order_ueur, inst.cost_min_ueur)
-    # coût aller-retour <= 33 % du mouvement attendu
+    # round-trip cost <= 33% of the expected move
     spread_bp = Fraction((q.ask - q.bid) * 2 * BP, q.ask + q.bid)
     assert (2 * (fee + slip) + spread_bp) * 100 <= pol.max_cost_to_expected_move_pct * intent.expected_move_bp
-    # prix et spread
+    # price and spread
     close = m.last_closes[sym]
     assert close > 0 and abs(Fraction(q.bid + q.ask, 2) - close) * BP <= pol.max_quote_deviation_bp * close
     assert (q.ask - q.bid) <= pol.max_spread_multiple * m.median_spreads_ueur[sym]
-    # gel et arrêt recalculés
+    # freeze and halt recomputed
     if c.equity_24h_ago_ueur > 0:
         assert (c.equity_24h_ago_ueur - equity) * BP < pol.daily_loss_freeze_bp * c.equity_24h_ago_ueur
     if c.equity_peak_ueur > 0:
         assert (c.equity_peak_ueur - equity) * BP < pol.drawdown_halt_bp * c.equity_peak_ueur
 
 
-# --- générateurs ---
-# hypothesis fournit une graine entière par exemple ; les scénarios sont tirés d'un `random.Random(graine)`
-# via un mini-moteur de stratégies (`g`). Un tirage hypothesis par variable coûtait ~10 ms par exemple
-# (100 000 exemples hors budget) ; ici ~0,1 ms. Un échec est rejoué à l'identique avec sa graine.
+# --- generators ---
+# hypothesis supplies one integer seed per example; the scenarios are drawn from a `random.Random(seed)`
+# through a mini strategy engine (`g`). One hypothesis draw per variable cost ~10 ms per example
+# (100,000 examples out of budget); here ~0.1 ms. A failure is replayed identically with its seed.
 
 
 class Draw:
@@ -757,7 +759,7 @@ SYMS = list(INSTR)
 
 @g.composite
 def realistic_case(draw: Draw):
-    """Cas proches du réel (montants et prix plausibles), avec des défauts injectés par endroits."""
+    """Cases close to real ones (plausible amounts and prices), with defects injected here and there."""
 
     def flaw(pct: int) -> bool:
         return draw(g.integers(0, 99)) < pct
@@ -820,7 +822,7 @@ def realistic_case(draw: Draw):
             50,
         )
     else:
-        # la vente vise de préférence un symbole réellement détenu
+        # the sale preferably targets a symbol actually held
         held = [p for p in positions if positions[p].qty > 0]
         sym = draw(g.sampled_from(held)) if held and not flaw(10) else symbol
         intent = Intent(
@@ -838,12 +840,12 @@ def realistic_case(draw: Draw):
 
 @settings(max_examples=45_000, **PROP)
 @given(SEED)
-def test_propriete_realiste_aucun_verdict_approuve_ne_viole_un_plafond(seed: int) -> None:
+def test_property_realistic_no_approved_verdict_violates_a_cap(seed: int) -> None:
     case = case_of(realistic_case(), seed)
     intent, s, m, c, fee, slip, kill = case
     v = evaluate(intent, s, m, POLICY, c, NOW, INSTR, fee, slip, kill)
     check_invariants(intent, s, m, POLICY, c, NOW, INSTR, fee, slip, kill, v)
-    # déterminisme : même entrées, même verdict
+    # determinism: same inputs, same verdict
     if seed % 10 == 0:
         assert evaluate(intent, s, m, POLICY, c, NOW, INSTR, fee, slip, kill) == v
 
@@ -860,7 +862,7 @@ opt_wild = g.one_of(g.none(), wild_int)
 
 @g.composite
 def wild_case(draw: Draw):
-    """Entrées extrêmes : zéros, négatifs, énormes, symboles inconnus, equity nulle, quotes absurdes."""
+    """Extreme inputs: zeros, negatives, huge values, unknown symbols, zero equity, absurd quotes."""
     sym_pool = [*SYMS, "DOGE/EUR", "", "x" * 50]
     syms = draw(g.lists(g.sampled_from(sym_pool), min_size=0, max_size=4, unique=True))
     positions = {
@@ -904,17 +906,17 @@ def wild_case(draw: Draw):
 
 @settings(max_examples=30_000, **PROP)
 @given(SEED)
-def test_propriete_entrees_extremes_jamais_d_exception_ni_d_approbation_absurde(seed: int) -> None:
+def test_property_extreme_inputs_never_raise_nor_give_absurd_approval(seed: int) -> None:
     case = case_of(wild_case(), seed)
     intent, s, m, c, fee, slip, kill, now, insts = case
-    v = evaluate(intent, s, m, POLICY, c, now, insts, fee, slip, kill)  # ne doit JAMAIS lever
+    v = evaluate(intent, s, m, POLICY, c, now, insts, fee, slip, kill)  # must NEVER raise
     check_invariants_wild(intent, s, m, c, now, insts, fee, slip, kill, v)
 
 
 def check_invariants_wild(intent, s, m, c, now, insts, fee, slip, kill, v) -> None:
-    """Pour les entrées extrêmes : mêmes invariants si approuvé ; sinon forme du rejet."""
+    """For extreme inputs: same invariants if approved; otherwise the shape of the rejection."""
     if v.approved and intent.side == Side.BUY:
-        # un achat approuvé exige des marks et quotes sains pour TOUTES les positions détenues
+        # an approved buy requires sound marks and quotes for ALL held positions
         assert not kill and fee >= 0 and slip >= 0
         for p in s.positions.values():
             if p.qty > 0:
@@ -924,7 +926,7 @@ def check_invariants_wild(intent, s, m, c, now, insts, fee, slip, kill, v) -> No
 
 @g.composite
 def policies(draw: Draw) -> Policy:
-    """Politiques cohérentes aléatoires (plus strictes ou plus lâches que la vraie)."""
+    """Random consistent policies (stricter or looser than the real one)."""
     a, b, d = sorted(draw(g.lists(g.integers(1, 10_000), min_size=3, max_size=3)))
     smin = draw(g.integers(1, 5_000))
     return Policy(
@@ -954,11 +956,11 @@ def policies(draw: Draw) -> Policy:
 
 @settings(max_examples=25_000, **PROP)
 @given(SEED)
-def test_propriete_politiques_aleatoires(seed: int) -> None:
+def test_property_random_policies(seed: int) -> None:
     case = case_of(realistic_case(), seed)
     pol = case_of(policies(), seed + 1)
     intent, s, m, c, fee, slip, kill = case
-    # tailles adaptées à la politique tirée, pour exercer aussi les approbations
+    # sizes adapted to the drawn policy, so that approvals are exercised too
     if intent.side == Side.BUY and intent.size_bp is not None and intent.size_bp > 0:
         intent = dataclasses.replace(intent, size_bp=max(1, intent.size_bp % (pol.max_order_bp + 300)))
     v = evaluate(intent, s, m, pol, c, NOW, INSTR, fee, slip, kill)
@@ -967,9 +969,9 @@ def test_propriete_politiques_aleatoires(seed: int) -> None:
 
 @settings(max_examples=5_000, **PROP)
 @given(SEED)
-def test_propriete_ventes_toujours_permises_si_valides(seed: int) -> None:
+def test_property_sells_always_allowed_if_valid(seed: int) -> None:
     case = case_of(realistic_case(), seed)
-    """Une vente valide (liste blanche, position suffisante, cadence, taille) passe même gel/arrêt/kill."""
+    """A valid sale (whitelist, sufficient position, rate, size) goes through even under freeze/halt/kill."""
     intent, s, m, c, fee, slip, _ = case
     if intent.side != Side.SELL:
         return
@@ -980,13 +982,13 @@ def test_propriete_ventes_toujours_permises_si_valides(seed: int) -> None:
         return
     s_bad = dataclasses.replace(s, halted=True, frozen_until_ts=NOW + 10**9)
     v = evaluate(intent, s_bad, m, POLICY, c, NOW, INSTR, fee, slip, True)
-    assert v.approved and v.qty == held.qty  # mise à plat complète toujours possible
+    assert v.approved and v.qty == held.qty  # a complete flatten is always possible
 
 
-def test_zz_bilan_des_exemples_generes() -> None:
-    """Placé en dernier : vérifie que les propriétés ont bien exercé des approbations (pas seulement des rejets)."""
+def test_zz_summary_of_generated_examples() -> None:
+    """Placed last: checks that the properties did exercise approvals (not only rejections)."""
     if TALLY["examples"] == 0:
-        pytest.skip("tests de propriété non exécutés dans cette session")
+        pytest.skip("property tests not run in this environment")
     assert TALLY["examples"] >= 100_000, TALLY
     assert TALLY["approved_buy"] > 1_000, TALLY
     assert TALLY["approved_sell"] > 1_000, TALLY

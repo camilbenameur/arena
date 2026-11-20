@@ -1,0 +1,216 @@
+{
+ "name": "bullish",
+ "sha256": "19f155c64c9a4cb66e7d8a551cfd62caf4a84e59e56f8debbd59b45d0560db0d",
+ "snapshot": {
+  "bar_interval_s": 14400,
+  "context": {
+   "next_scheduled_round_ts": 1700020800,
+   "type": "scheduled_round"
+  },
+  "cycle_ts": 1700006400,
+  "market": {
+   "BTC/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "71280",
+    "last_closes_eur": [
+     "68640",
+     "68880",
+     "69120",
+     "69360",
+     "69600",
+     "69840",
+     "70080",
+     "70320",
+     "70560",
+     "70800",
+     "71040",
+     "71280"
+    ],
+    "range_7d_high_eur": "71636.4",
+    "range_7d_low_eur": "60894",
+    "range_7d_pos_bp": 9668,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": 206,
+    "ret_4h_bp": 34,
+    "ret_7d_bp": 1647,
+    "vol_4h_bp": 1
+   },
+   "ETH/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "2970",
+    "last_closes_eur": [
+     "2860",
+     "2870",
+     "2880",
+     "2890",
+     "2900",
+     "2910",
+     "2920",
+     "2930",
+     "2940",
+     "2950",
+     "2960",
+     "2970"
+    ],
+    "range_7d_high_eur": "2984.85",
+    "range_7d_low_eur": "2537.25",
+    "range_7d_pos_bp": 9668,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": 206,
+    "ret_4h_bp": 34,
+    "ret_7d_bp": 1647,
+    "vol_4h_bp": 1
+   },
+   "LINK/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "14.256",
+    "last_closes_eur": [
+     "13.728",
+     "13.776",
+     "13.824",
+     "13.872",
+     "13.92",
+     "13.968",
+     "14.016",
+     "14.064",
+     "14.112",
+     "14.16",
+     "14.208",
+     "14.256"
+    ],
+    "range_7d_high_eur": "14.32728",
+    "range_7d_low_eur": "12.1788",
+    "range_7d_pos_bp": 9668,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": 206,
+    "ret_4h_bp": 34,
+    "ret_7d_bp": 1647,
+    "vol_4h_bp": 1
+   },
+   "LTC/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "95.04",
+    "last_closes_eur": [
+     "91.52",
+     "91.84",
+     "92.16",
+     "92.48",
+     "92.8",
+     "93.12",
+     "93.44",
+     "93.76",
+     "94.08",
+     "94.4",
+     "94.72",
+     "95.04"
+    ],
+    "range_7d_high_eur": "95.5152",
+    "range_7d_low_eur": "81.192",
+    "range_7d_pos_bp": 9668,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": 206,
+    "ret_4h_bp": 34,
+    "ret_7d_bp": 1647,
+    "vol_4h_bp": 1
+   },
+   "SOL/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "178.2",
+    "last_closes_eur": [
+     "171.6",
+     "172.2",
+     "172.8",
+     "173.4",
+     "174",
+     "174.6",
+     "175.2",
+     "175.8",
+     "176.4",
+     "177",
+     "177.6",
+     "178.2"
+    ],
+    "range_7d_high_eur": "179.091",
+    "range_7d_low_eur": "152.235",
+    "range_7d_pos_bp": 9668,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": 206,
+    "ret_4h_bp": 34,
+    "ret_7d_bp": 1647,
+    "vol_4h_bp": 1
+   },
+   "XRP/EUR": {
+    "bars": 42,
+    "last_bar_ts": 1699992000,
+    "last_close_eur": "0.594",
+    "last_closes_eur": [
+     "0.572",
+     "0.574",
+     "0.576",
+     "0.578",
+     "0.58",
+     "0.582",
+     "0.584",
+     "0.586",
+     "0.588",
+     "0.59",
+     "0.592",
+     "0.594"
+    ],
+    "range_7d_high_eur": "0.59697",
+    "range_7d_low_eur": "0.50745",
+    "range_7d_pos_bp": 9668,
+    "rel_volume_bp": 7455,
+    "ret_24h_bp": 206,
+    "ret_4h_bp": 34,
+    "ret_7d_bp": 1647,
+    "vol_4h_bp": 1
+   }
+  },
+  "portfolio": {
+   "cash_eur": "1000.00",
+   "cash_weight_bp": 10000,
+   "equity_eur": "1000.00",
+   "fees_paid_eur": "0.00",
+   "frozen": false,
+   "halted": false,
+   "portfolio": "llm:claude-sonnet-5-5",
+   "positions": [],
+   "realized_pnl_eur": "0.00"
+  },
+  "recent_decisions": [
+   {
+    "actions": 0,
+    "cycle": 1699934400,
+    "justification": "decision 5, ret_24h_bp=12"
+   },
+   {
+    "actions": 1,
+    "cycle": 1699948800,
+    "justification": "decision 4, ret_24h_bp=12"
+   },
+   {
+    "actions": 0,
+    "cycle": 1699963200,
+    "justification": "decision 3, ret_24h_bp=12"
+   },
+   {
+    "actions": 1,
+    "cycle": 1699977600,
+    "justification": "decision 2, ret_24h_bp=12"
+   },
+   {
+    "actions": 0,
+    "cycle": 1699992000,
+    "justification": "decision 1, ret_24h_bp=12"
+   }
+  ],
+  "rules": "order <= 20% ; position <= 40% ; 2 orders per day ; stop 1-25% ; cost <= 33% of the move.",
+  "schema_version": "2"
+ }
+}

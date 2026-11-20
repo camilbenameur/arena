@@ -1,0 +1,60 @@
+{
+  "name": "08_loss",
+  "explanation": "Buy 400,000 u (0.004 BTC) at 50,000 EUR: notional 400000*50e9/1e8 = 200,000,000, fee 1,000,000, cost 201,000,000. Full sell at 40,000 EUR: proceeds 160,000,000, fee 800,000. Realized P&L = 160,000,000 - 800,000 - 201,000,000 = -41,800,000. Cash = 1e9 - 201,000,000 + 160,000,000 - 800,000 = 958,200,000. Fees 1,800,000. Equity = cash.",
+  "events": [
+    {
+      "type": "portfolio_opened",
+      "ts": 1700000000,
+      "payload": {
+        "portfolio": "llm:test",
+        "kind": "llm",
+        "capital_ueur": 1000000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700014400,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "buy",
+        "qty": 400000,
+        "price_ueur": 50000000000,
+        "fee_ueur": 1000000,
+        "reason": "intent",
+        "ts": 1700014400,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o1"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700028800,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "sell",
+        "qty": 400000,
+        "price_ueur": 40000000000,
+        "fee_ueur": 800000,
+        "reason": "intent",
+        "ts": 1700028800,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o2"
+      }
+    }
+  ],
+  "marks": {},
+  "expected": {
+    "llm:test": {
+      "cash_ueur": 958200000,
+      "fees_paid_ueur": 1800000,
+      "realized_pnl_ueur": -41800000,
+      "positions": {},
+      "equity_ueur": 958200000
+    }
+  }
+}

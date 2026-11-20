@@ -1,6 +1,6 @@
-"""Revue adverse (red team) du MVP : chaque test tente de violer la politique de risque, de fausser le P&L
-ou d'afficher un chiffre faux. Un test qui échoue révèle une faille ; un test qui passe est un test de
-non-régression. Tout vit dans tmp_path : jamais le `var/` du dépôt ni `~/.config/arene`.
+"""Adversarial review (red team) of the MVP: each test tries to violate the risk policy, distort the P&L
+or display a wrong figure. A failing test reveals a flaw; a passing test is a
+regression test. Everything lives in tmp_path: never the repository `var/` nor `~/.config/arena`.
 """
 
 from __future__ import annotations
@@ -12,18 +12,18 @@ from pathlib import Path
 
 import pytest
 
-from arene import cycle as cycle_mod
-from arene.config import load_config
-from arene.deciders.llm import parse_decision
-from arene.journal import Journal, verify
-from arene.ledger import LedgerError, replay, trades_last_24h
-from arene.risk.policy import load_policy
-from arene.risk.riskd import Counters, MarketView, evaluate
-from arene.sim.executor import SimExecutor
-from arene.site import build as build_site
-from arene.site import data as site_data
-from arene.temoins import reference_qty
-from arene.types import (
+from arena import cycle as cycle_mod
+from arena.config import load_config
+from arena.deciders.llm import parse_decision
+from arena.journal import Journal, verify
+from arena.ledger import LedgerError, replay, trades_last_24h
+from arena.risk.policy import load_policy
+from arena.risk.riskd import Counters, MarketView, evaluate
+from arena.sim.executor import SimExecutor
+from arena.site import build as build_site
+from arena.site import data as site_data
+from arena.benchmarks import reference_qty
+from arena.types import (
     MICRO,
     Instrument,
     Intent,
@@ -60,7 +60,7 @@ def env(tmp_path: Path) -> Env:
 
 
 def buy_plan(idx: int, snap: dict) -> list[dict] | None:
-    """Un achat BTC de 10 % au cycle 1, rien d'autre."""
+    """A 10% BTC buy at cycle 1, nothing else."""
     return [action("BTC/EUR", size=10)] if idx == 1 else None
 
 
@@ -101,11 +101,11 @@ def ev(intent: Intent, state: PortfolioState, market: MarketView | None = None, 
     )
 
 
-# ====================================================================== 1. verdict -> exécution
+# ====================================================================== 1. verdict -> execution
 
 
-def test_fill_egale_verdict_et_reste_sous_la_reservation(env: Env):
-    """L'exécuteur exécute verdict.qty (pas de recalcul) et le total payé ne dépasse pas ce que riskd a réservé."""
+def test_fill_equals_verdict_and_stays_under_the_reservation(env: Env):
+    """The executor executes verdict.qty (no recomputation) and the total paid never exceeds what riskd reserved."""
     run_cycles(env, 3, deciders=deciders_for(buy_plan))
     verdicts = {v["intent_id"]: v for v in payloads(env, "risk_verdict")}
     fills = [f for f in payloads(env, "fill", HAIKU) if f["reason"] == "intent"]
@@ -117,8 +117,8 @@ def test_fill_egale_verdict_et_reste_sous_la_reservation(env: Env):
         assert total <= v["reserved_ueur"]
 
 
-def test_executeur_refuse_un_quote_plus_cher_que_celui_du_verdict(tmp_path: Path):
-    """Si le quote d'exécution a bougé contre nous après le verdict, le total ne doit pas dépasser la réservation."""
+def test_executor_refuses_a_quote_pricier_than_the_verdict_one(tmp_path: Path):
+    """If the execution quote moved against us after the verdict, the total must not exceed the reservation."""
     j = Journal(tmp_path / "j.jsonl")
     j.append("portfolio_opened", {"portfolio": "llm:test", "kind": "llm", "capital_ueur": 1_000 * MICRO,
                                   "venue_mode": "paper"}, NOW)  # fmt: skip
@@ -128,16 +128,16 @@ def test_executeur_refuse_un_quote_plus_cher_que_celui_du_verdict(tmp_path: Path
     assert verdict.approved and verdict.reserved_ueur > 0
     ex = SimExecutor(j, INSTR, FEE_BP, SLIP_BP)
     mkt = mk_market()
-    pricier = Quote(BTC, NOW, mkt.quotes[BTC].bid, mkt.quotes[BTC].ask * 3 // 2)  # +50 % sur l'ask
+    pricier = Quote(BTC, NOW, mkt.quotes[BTC].bid, mkt.quotes[BTC].ask * 3 // 2)  # +50% on the ask
     fill = ex.execute(intent, verdict, pricier, NOW)
     if fill is not None:
         total = -(-fill.qty * fill.price_ueur // 100_000_000) + fill.fee_ueur
-        assert total <= verdict.reserved_ueur, f"fill {total} > réservé {verdict.reserved_ueur}"
+        assert total <= verdict.reserved_ueur, f"fill {total} > reserved {verdict.reserved_ueur}"
     s2 = replay(j.iter_events())["llm:test"]
     assert s2.cash_ueur >= 0
 
 
-def test_executeur_n_execute_pas_un_verdict_rejete_ni_d_un_autre_intent(tmp_path: Path):
+def test_executor_does_not_execute_a_rejected_verdict_nor_another_intent(tmp_path: Path):
     j = Journal(tmp_path / "j.jsonl")
     j.append("portfolio_opened", {"portfolio": "llm:test", "kind": "llm", "capital_ueur": 1_000 * MICRO,
                                   "venue_mode": "paper"}, NOW)  # fmt: skip
@@ -146,14 +146,14 @@ def test_executeur_n_execute_pas_un_verdict_rejete_ni_d_un_autre_intent(tmp_path
     q = mk_market().quotes[BTC]
     good = ev(mk_intent(size_bp=1000, idx=1), st)
     other = mk_intent(size_bp=1000, idx=2)
-    assert ex.execute(other, good, q, NOW) is None  # verdict d'un autre intent_id
+    assert ex.execute(other, good, q, NOW) is None  # verdict for another intent_id
     bad = ev(mk_intent(size_bp=2500, idx=3), st)  # MAX_ORDER_SIZE
     assert not bad.approved
     assert ex.execute(mk_intent(size_bp=2500, idx=3), bad, q, NOW) is None
     assert not [e for e in j.iter_events() if e["type"] == "fill"]
 
 
-# ====================================================================== 2. fractionnement
+# ====================================================================== 2. order splitting
 
 
 def two_buys_plan(size: int):
@@ -165,8 +165,8 @@ def two_buys_plan(size: int):
     return plan
 
 
-def test_deux_achats_meme_symbole_meme_cycle_sont_bornes(env: Env):
-    """Deux achats de 20 % sur le même symbole dans le même cycle : le second est refusé (TOO_SOON)."""
+def test_two_buys_same_symbol_same_cycle_are_bounded(env: Env):
+    """Two 20% buys on the same symbol in the same cycle: the second is refused (TOO_SOON)."""
     run_cycles(env, 2, deciders=deciders_for(two_buys_plan(20)))
     ids = [i["intent_id"] for i in payloads(env, "intent", HAIKU)]
     assert len(ids) == 2
@@ -178,8 +178,8 @@ def test_deux_achats_meme_symbole_meme_cycle_sont_bornes(env: Env):
     assert st.positions["BTC/EUR"].cost_ueur * 10_000 <= 4000 * eq
 
 
-def test_fractionnement_sans_garde_temporelle_reste_borne_par_max_position(tmp_path: Path):
-    """Même sans TOO_SOON, la position cumulée (état rejoué après chaque fill) reste <= 40 %."""
+def test_splitting_without_time_guard_stays_bounded_by_max_position(tmp_path: Path):
+    """Even without TOO_SOON, the cumulative position (state replayed after each fill) stays <= 40%."""
     pol = replace(POLICY, min_interval_same_symbol_s=0, max_trades_per_day=10)
     st = PortfolioState("llm:test", 1_000 * MICRO)
     mkt = mk_market()
@@ -192,7 +192,7 @@ def test_fractionnement_sans_garde_temporelle_reste_borne_par_max_position(tmp_p
             break
         n_ok += 1
         q = mkt.quotes[BTC]
-        from arene.sim.fills import market_fill
+        from arena.sim.fills import market_fill
 
         price, fee = market_fill(Side.BUY, v.qty, q, INSTR[BTC], FEE_BP, SLIP_BP)
         ex_price = price
@@ -207,8 +207,8 @@ def test_fractionnement_sans_garde_temporelle_reste_borne_par_max_position(tmp_p
     assert ex_price is not None and n_ok <= 2
 
 
-def test_daily_trades_et_multi_symboles(env: Env):
-    """2 symboles dans le même cycle = 2 trades ; au cycle suivant, tout achat est refusé (DAILY_TRADES)."""
+def test_daily_trades_and_multi_symbol(env: Env):
+    """2 symbols in the same cycle = 2 trades; at the next cycle, every buy is refused (DAILY_TRADES)."""
 
     def plan(idx: int, snap: dict):
         if idx in (1, 2):
@@ -224,8 +224,8 @@ def test_daily_trades_et_multi_symboles(env: Env):
     assert all("DAILY_TRADES" in verdicts[i["intent_id"]]["reasons"] for i in cyc2)
 
 
-def test_compteur_trades_non_remis_a_zero_apres_redemarrage(env: Env):
-    """Les compteurs viennent du journal : un nouveau process (nouveau _Runner) voit les trades déjà faits."""
+def test_trade_counter_not_reset_after_restart(env: Env):
+    """The counters come from the journal: a new process (new _Runner) sees the trades already made."""
 
     def plan(idx: int, snap: dict):
         return [action("BTC/EUR", size=5), action("ETH/EUR", size=5)] if idx == 1 else None
@@ -234,8 +234,8 @@ def test_compteur_trades_non_remis_a_zero_apres_redemarrage(env: Env):
     assert trades_last_24h(env.events(), HAIKU, T0 + 2 * H4) == 2
 
 
-def test_second_achat_ne_desserre_pas_le_stop_des_lots_existants(env: Env):
-    """Achat avec stop 5 % puis, 4 h plus tard, un petit achat avec stop 25 % : le stop de la position ne baisse pas."""
+def test_second_buy_does_not_loosen_the_stop_of_existing_lots(env: Env):
+    """A buy with a 5% stop then, 4 h later, a small buy with a 25% stop: the position's stop does not go down."""
 
     def plan(idx: int, snap: dict):
         if idx == 1:
@@ -251,7 +251,7 @@ def test_second_achat_ne_desserre_pas_le_stop_des_lots_existants(env: Env):
     assert replay(env.events())[HAIKU].positions["BTC/EUR"].stop_ueur >= stops[0]
 
 
-def test_vente_hors_position_et_au_dela_refusees():
+def test_sell_outside_position_and_beyond_refused():
     st = PortfolioState("llm:test", 500 * MICRO, {BTC: Position(BTC, 1_000_000, 100 * MICRO, NOW)})
     assert not ev(mk_intent(Side.SELL, size_bp=10_001), st).approved
     assert not ev(mk_intent(Side.SELL, symbol="ETH/EUR", size_bp=5000), st).approved
@@ -265,31 +265,31 @@ def test_vente_hors_position_et_au_dela_refusees():
 @pytest.mark.parametrize(
     "sym", ["btc/eur", "Btc/Eur", " BTC/EUR", "BTC/EUR ", "BTC/EUR\n", "BTC／EUR", "BTC/EUR\u200b", "DOGE/EUR", "../../etc"]
 )
-def test_symbole_hors_liste_ou_casse_differente_refuse(sym: str):
+def test_symbol_outside_list_or_different_case_refused(sym: str):
     raw = json.dumps({"actions": [{**action("BTC/EUR"), "symbol": sym}], "justification": "x"})
     parsed, err, intents = parse_decision(raw, "llm:test", NOW)
     assert parsed is None and err and not intents
 
 
 @pytest.mark.parametrize("bad", ['"NaN"', '"Infinity"', '"-Infinity"', "1e999", "-1e999", '"1e999999999"'])
-def test_nombres_pathologiques_ne_levent_pas_et_ne_donnent_aucune_intention(bad: str):
+def test_pathological_numbers_do_not_raise_and_give_no_intent(bad: str):
     for field in ("size_pct", "stop_pct", "expected_move_pct", "confidence_pct"):
         a = {**action("BTC/EUR"), field: "__X__"}
         raw = json.dumps({"actions": [a], "justification": "x"}).replace('"__X__"', bad)
-        parsed, err, intents = parse_decision(raw, "llm:test", NOW)  # ne doit JAMAIS lever
+        parsed, err, intents = parse_decision(raw, "llm:test", NOW)  # must NEVER raise
         assert (parsed is None and err and not intents) or all(0 < i.size_bp <= 2000 for i in intents)
 
 
-def test_json_profondement_imbrique_ne_leve_pas():
+def test_deeply_nested_json_does_not_raise():
     parsed, err, intents = parse_decision("[" * 20_000, "llm:test", NOW)
     assert parsed is None and err and not intents
     parsed, err, intents = parse_decision('{"actions":' + "[" * 20_000, "llm:test", NOW)
     assert parsed is None and err and not intents
 
 
-def test_justification_avec_surrogate_isole_reste_journalisable(tmp_path: Path):
-    """Un « \\ud800 » dans le JSON du modèle donne un str non encodable en UTF-8 : le journal ne doit pas casser."""
-    raw = '{"actions": [], "justification": "bonjour \\ud800 monde"}'
+def test_justification_with_isolated_surrogate_stays_journalable(tmp_path: Path):
+    """A "\\ud800" in the model's JSON gives a str that cannot be encoded as UTF-8: the journal must not break."""
+    raw = '{"actions": [], "justification": "hello \\ud800 world"}'
     parsed, err, _ = parse_decision(raw, "llm:test", NOW)
     j = Journal(tmp_path / "j.jsonl")
     j.append("decision_received", {"portfolio": "llm:test", "cycle": NOW, "raw_text": raw, "parsed": parsed,
@@ -306,11 +306,11 @@ HOSTILE = [
 ]
 
 
-@pytest.mark.parametrize("texte", HOSTILE)
-def test_texte_du_modele_journal_verifiable_et_html_echappe(env: Env, texte: str):
+@pytest.mark.parametrize("text", HOSTILE)
+def test_model_text_journal_verifiable_and_html_escaped(env: Env, text: str):
     def plan(idx: int, snap: dict):
         if idx == 0:
-            return json.dumps({"actions": [], "justification": texte})
+            return json.dumps({"actions": [], "justification": text})
         return None
 
     dec = make_deciders(plan)
@@ -324,43 +324,43 @@ def test_texte_du_modele_journal_verifiable_et_html_echappe(env: Env, texte: str
         assert "<script>alert(1)" not in html_text
         assert "<img src=x" not in html_text
         assert "<b>gras</b>" not in html_text
-        # le seul <script> inline autorisé est le bloc JSON de données
+        # the only inline <script> allowed is the JSON data block
         for chunk in html_text.split("<script")[1:]:
             head = chunk.split(">", 1)[0]
             assert "src=" in head or 'type="application/json"' in head, head
-    # le texte hostile n'apparaît jamais dans un nom de fichier
+    # the hostile text never appears in a file name
     assert all("<" not in p.name and "\n" not in p.name for p in out.rglob("*"))
 
 
-def test_justification_publiee_sans_delai_et_bornee(env: Env):
-    """Décision du propriétaire (12/11/2026) : la justification est publiée dès la décision, tronquée à 2 000 caractères."""
+def test_justification_published_without_delay_and_bounded(env: Env):
+    """The justification is published as soon as the decision is made, truncated to 2,000 characters."""
     def plan(idx: int, snap: dict):
-        return json.dumps({"actions": [], "justification": "JUSTIF-IMMEDIATE " + "x" * 5000})
+        return json.dumps({"actions": [], "justification": "JUSTIFICATION-IMMEDIATE " + "x" * 5000})
 
     run_cycles(env, 2, deciders=make_deciders(plan))
     cfg, pol = load_config(env.paths.config), load_policy(env.paths.policy)
     out = env.root / "site"
     build_site(env.paths.journal, out, config=cfg, policy=pol, now_ts=T0 + 2 * H4 + 60)
     pages = "".join(p.read_text(encoding="utf-8") for p in out.rglob("*.html"))
-    assert "JUSTIF-IMMEDIATE" in pages
+    assert "JUSTIFICATION-IMMEDIATE" in pages
     assert "x" * 2_001 not in pages
 
 
-def test_parse_error_ne_fait_pas_fuiter_de_texte_non_borne(env: Env):
-    """Le texte d'erreur d'un symbole invalide est tronqué à 300 caractères (texte borné)."""
+def test_parse_error_does_not_leak_unbounded_text(env: Env):
+    """The error text of an invalid symbol is truncated to 300 characters (bounded text)."""
     raw = json.dumps({"actions": [{**action("BTC/EUR"), "symbol": "X" * 5000}], "justification": "x"})
     _, err, _ = parse_decision(raw, "llm:test", NOW)
     assert err is not None and len(err) <= 300
 
 
-# ====================================================================== 4. crash et reprise
+# ====================================================================== 4. crash and recovery
 
 
 class Boom(RuntimeError):
     pass
 
 
-def test_crash_avant_equity_puis_reprise_sans_double_execution(env: Env, monkeypatch: pytest.MonkeyPatch):
+def test_crash_before_equity_then_resume_without_double_execution(env: Env, monkeypatch: pytest.MonkeyPatch):
     run_cycles(env, 1, deciders=deciders_for(buy_plan))
     orig = cycle_mod._Runner._equities
     state = {"n": 0}
@@ -368,7 +368,7 @@ def test_crash_avant_equity_puis_reprise_sans_double_execution(env: Env, monkeyp
     def boom(self):
         state["n"] += 1
         if state["n"] == 1:
-            raise Boom("crash avant equity")
+            raise Boom("crash before equity")
         return orig(self)
 
     monkeypatch.setattr(cycle_mod._Runner, "_equities", boom)
@@ -380,19 +380,19 @@ def test_crash_avant_equity_puis_reprise_sans_double_execution(env: Env, monkeyp
     assert n_fills > 0 and not [e for e in payloads(env, "equity") if e["cycle"] == T0 + H4]
     r2 = cycle_mod.run_cycle(env.paths, env.clients, env.clock.now, deciders=dec)
     assert r2.status == "completed" and r2.resumed
-    assert len(payloads(env, "fill")) == n_fills  # aucun fill en double
+    assert len(payloads(env, "fill")) == n_fills  # no duplicate fill
     eq = [e for e in payloads(env, "equity") if e["cycle"] == T0 + H4]
-    n_pf = len(load_config(env.paths.config).models) + 4  # LLM + 4 témoins
+    n_pf = len(load_config(env.paths.config).models) + 4  # LLM + 4 benchmarks
     assert len(eq) == n_pf and len({e["portfolio"] for e in eq}) == n_pf
     assert verify(env.paths.journal).ok
-    replay(env.events())  # ne lève pas
+    replay(env.events())  # does not raise
 
 
-def test_crash_entre_fill_et_stop_set_puis_coupe_circuit_ne_brique_pas_le_ledger(
+def test_crash_between_fill_and_stop_set_then_circuit_breaker_does_not_brick_the_ledger(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ):
-    """Fill écrit, crash avant stop_set ; KILL posé ; à la reprise la mise à plat vend la position AVANT que
-    _repair n'écrive son stop_set : un stop sur une position inexistante fait lever replay() pour toujours."""
+    """Fill written, crash before stop_set; KILL set; on recovery the flatten sells the position BEFORE
+    _repair writes its stop_set: a stop on a nonexistent position makes replay() raise forever."""
     run_cycles(env, 1, deciders=deciders_for(buy_plan))
     orig = Journal.append
     flag = {"armed": True}
@@ -400,7 +400,7 @@ def test_crash_entre_fill_et_stop_set_puis_coupe_circuit_ne_brique_pas_le_ledger
     def append(self, type, payload, ts):
         if type == "stop_set" and flag["armed"] and payload.get("portfolio") == HAIKU:
             flag["armed"] = False
-            raise Boom("crash entre fill et stop_set")
+            raise Boom("crash between fill and stop_set")
         return orig(self, type, payload, ts)
 
     monkeypatch.setattr(Journal, "append", append)
@@ -413,17 +413,17 @@ def test_crash_entre_fill_et_stop_set_puis_coupe_circuit_ne_brique_pas_le_ledger
     r2 = cycle_mod.run_cycle(env.paths, env.clients, env.clock.now, deciders=dec)
     try:
         st = replay(env.events())
-    except LedgerError as exc:  # pragma: no cover - c'est la faille
-        pytest.fail(f"ledger brique : {exc}")
+    except LedgerError as exc:  # pragma: no cover - this is the flaw
+        pytest.fail(f"ledger brick: {exc}")
     assert r2.status == "completed", r2.error
-    assert HAIKU in st and not st[HAIKU].positions  # mis à plat par le coupe-circuit
+    assert HAIKU in st and not st[HAIKU].positions  # flattened by the kill switch
     assert verify(env.paths.journal).ok
 
 
-def test_verdict_approuve_avant_crash_n_execute_pas_un_achat_sous_coupe_circuit(
+def test_verdict_approved_before_crash_does_not_execute_a_buy_under_circuit_breaker(
     env: Env, monkeypatch: pytest.MonkeyPatch
 ):
-    """Verdict approuvé écrit, crash avant l'exécution ; l'opérateur pose KILL ; la reprise ne doit PAS acheter."""
+    """Approved verdict written, crash before execution; the operator sets KILL; recovery must NOT buy."""
     run_cycles(env, 1, deciders=deciders_for(buy_plan))
     orig = SimExecutor.execute
     flag = {"armed": True}
@@ -431,7 +431,7 @@ def test_verdict_approuve_avant_crash_n_execute_pas_un_achat_sous_coupe_circuit(
     def execute(self, intent, verdict, quote, now_ts):
         if flag["armed"] and intent.portfolio == HAIKU and intent.side == Side.BUY:
             flag["armed"] = False
-            raise Boom("crash avant exécution")
+            raise Boom("crash before execution")
         return orig(self, intent, verdict, quote, now_ts)
 
     monkeypatch.setattr(SimExecutor, "execute", execute)
@@ -443,17 +443,17 @@ def test_verdict_approuve_avant_crash_n_execute_pas_un_achat_sous_coupe_circuit(
     env.paths.kill.touch()
     cycle_mod.run_cycle(env.paths, env.clients, env.clock.now, deciders=dec)
     buys = [f for f in payloads(env, "fill", HAIKU) if f["side"] == "buy"]
-    assert not buys, "achat exécuté alors que le coupe-circuit était actif"
+    assert not buys, "buy executed while the kill switch was active"
     assert verify(env.paths.journal).ok
 
 
-def test_reference_approuvee_avant_crash_n_achete_pas_sous_coupe_circuit(env: Env, monkeypatch: pytest.MonkeyPatch):
-    """Même scénario pour les témoins de référence (le panier achète au cycle 0)."""
+def test_reference_approved_before_crash_does_not_buy_under_circuit_breaker(env: Env, monkeypatch: pytest.MonkeyPatch):
+    """Same scenario for the reference benchmarks (the basket buys at cycle 0)."""
     orig = SimExecutor.execute
     flag = {"armed": True}
 
     def execute(self, intent, verdict, quote, now_ts):
-        if flag["armed"] and intent.portfolio == "temoin:panier" and intent.side == Side.BUY:
+        if flag["armed"] and intent.portfolio == "benchmark:basket" and intent.side == Side.BUY:
             flag["armed"] = False
             raise Boom("crash")
         return orig(self, intent, verdict, quote, now_ts)
@@ -465,14 +465,14 @@ def test_reference_approuvee_avant_crash_n_achete_pas_sous_coupe_circuit(env: En
     env.paths.kill.parent.mkdir(parents=True, exist_ok=True)
     env.paths.kill.touch()
     cycle_mod.run_cycle(env.paths, env.clients, env.clock.now, deciders=make_deciders())
-    assert not [f for f in payloads(env, "fill", "temoin:panier") if f["side"] == "buy"]
+    assert not [f for f in payloads(env, "fill", "benchmark:basket") if f["side"] == "buy"]
 
 
 # ====================================================================== 5. P&L
 
 
-def test_site_valeur_des_positions_coherente_avec_equity(env: Env):
-    """cash + Σ valeur des positions affichées == equity affichée (même prix de valorisation : le bid)."""
+def test_site_position_value_consistent_with_equity(env: Env):
+    """cash + sum of the displayed position values == displayed equity (same valuation price: the bid)."""
     run_cycles(env, 6, deciders=deciders_for(buy_plan))
     cfg, pol = load_config(env.paths.config), load_policy(env.paths.policy)
     data = site_data.compute(env.paths.journal, cfg, pol, T0 + 6 * H4)
@@ -486,7 +486,7 @@ def test_site_valeur_des_positions_coherente_avec_equity(env: Env):
     assert checked >= 3
 
 
-def test_site_equity_egale_rejeu_du_ledger(env: Env):
+def test_site_equity_equals_ledger_replay(env: Env):
     run_cycles(env, 8, deciders=deciders_for(buy_plan))
     cfg, pol = load_config(env.paths.config), load_policy(env.paths.policy)
     data = site_data.compute(env.paths.journal, cfg, pol, T0 + 8 * H4)
@@ -501,10 +501,10 @@ def test_site_equity_egale_rejeu_du_ledger(env: Env):
         assert s.cash_ueur + sum(x.cost_ueur for x in s.positions.values()) == p["capital_ueur"] + s.realized_pnl_ueur
 
 
-def test_stop_et_sortie_forcee_paient_des_frais_et_le_ledger_reste_coherent(env: Env):
-    """Krach après l'achat : le stop frappe, la sortie porte des frais > 0, l'invariant du ledger tient."""
+def test_stop_and_forced_exit_pay_fees_and_the_ledger_stays_consistent(env: Env):
+    """Crash after the buy: the stop is hit, the exit carries fees > 0, the ledger invariant holds."""
     run_cycles(env, 2, deciders=deciders_for(buy_plan))
-    env.kraken.crash("BTC/EUR", T0 + 2 * H4, 800)  # -20 %, au-delà du stop de 5 %
+    env.kraken.crash("BTC/EUR", T0 + 2 * H4, 800)  # -20%, beyond the 5% stop
     run_cycles(env, 3, start=2, deciders=deciders_for(buy_plan))
     stops = [f for f in payloads(env, "fill", HAIKU) if f["reason"] == "stop"]
     assert stops and all(f["fee_ueur"] > 0 for f in stops)
@@ -516,8 +516,8 @@ def test_stop_et_sortie_forcee_paient_des_frais_et_le_ledger_reste_coherent(env:
     assert st.fees_paid_ueur == fees
 
 
-def test_arrondis_jamais_favorables_a_la_vente(tmp_path: Path):
-    """Une vente partielle retire un coût arrondi vers le haut ; solder retire exactement le reste."""
+def test_roundings_never_favor_the_sell(tmp_path: Path):
+    """A partial sale removes a cost rounded up; closing out removes exactly the rest."""
     j = Journal(tmp_path / "j.jsonl")
     j.append("portfolio_opened", {"portfolio": "p", "kind": "llm", "capital_ueur": 1_000 * MICRO, "venue_mode": "paper"}, 1)
     j.append("fill", {"order_id": "a", "portfolio": "p", "symbol": BTC, "side": "buy", "qty": 3, "price_ueur": 33_333_333_333,
@@ -528,17 +528,17 @@ def test_arrondis_jamais_favorables_a_la_vente(tmp_path: Path):
                       "fee_ueur": 5, "ts": 3, "venue_mode": "paper", "fill_model_version": "x", "reason": "intent"}, 3)  # fmt: skip
     s = replay(j.iter_events())["p"]
     removed = cost0 - s.positions[BTC].cost_ueur
-    assert removed * 3 >= cost0  # >= 1/3 du coût (arrondi vers le haut)
+    assert removed * 3 >= cost0  # >= 1/3 of the cost (rounded up)
     j.append("fill", {"order_id": "c", "portfolio": "p", "symbol": BTC, "side": "sell", "qty": 2, "price_ueur": 33_333_333_333,
                       "fee_ueur": 5, "ts": 4, "venue_mode": "paper", "fill_model_version": "x", "reason": "intent"}, 4)  # fmt: skip
     s = replay(j.iter_events())["p"]
     assert not s.positions and s.cash_ueur == 1_000 * MICRO + s.realized_pnl_ueur
 
 
-# ====================================================================== 6. témoins de référence
+# ====================================================================== 6. reference benchmarks
 
 
-def test_reference_qty_jamais_plus_que_le_cash():
+def test_reference_qty_never_more_than_cash():
     rng = random.Random(7)
     for _ in range(3000):
         sym = rng.choice(list(INSTR))
@@ -547,15 +547,15 @@ def test_reference_qty_jamais_plus_que_le_cash():
         q = Quote(sym, NOW, mid - mid // 2000, mid + mid // 2000)
         cash = rng.randint(0, 2_000) * MICRO + rng.randint(0, MICRO)
         held = rng.randint(0, 5_000_000)
-        st = PortfolioState("temoin:panier", cash)
+        st = PortfolioState("benchmark:basket", cash)
         if held:
             st.positions[sym] = Position(sym, held, rng.randint(1, 500) * MICRO, NOW)
         marks = {s: mid for s in INSTR}
         size = rng.choice([1, 100, 1666, 6000, 9999, 10_000, 20_000, 50_000])
-        intent = Intent("x", "temoin:panier", NOW, sym, Side.BUY, size)
+        intent = Intent("x", "benchmark:basket", NOW, sym, Side.BUY, size)
         qty = reference_qty(intent, st, marks, q, INSTR[sym], FEE_BP, SLIP_BP)
         if qty > 0:
-            from arene.sim.fills import market_fill
+            from arena.sim.fills import market_fill
 
             price, fee = market_fill(Side.BUY, qty, q, INSTR[sym], FEE_BP, SLIP_BP)
             total = -(-qty * price // 100_000_000) + fee
@@ -563,14 +563,14 @@ def test_reference_qty_jamais_plus_que_le_cash():
             assert qty >= INSTR[sym].lot_min_qty
 
 
-def test_temoins_sur_30_cycles_jamais_de_cash_negatif(env: Env):
+def test_benchmarks_over_30_cycles_never_negative_cash(env: Env):
     run_cycles(env, 30, deciders=make_deciders())
     for e in payloads(env, "equity"):
         assert e["cash_ueur"] >= 0
     replay(env.events())
 
 
-# ====================================================================== 7. coupe-circuit, gel, arrêt, dormance
+# ====================================================================== 7. kill switch, freeze, halt, dormancy
 
 
 def has_buy(env: Env, portfolio: str, cycle: int | None = None) -> bool:
@@ -579,25 +579,25 @@ def has_buy(env: Env, portfolio: str, cycle: int | None = None) -> bool:
     )
 
 
-def test_coupe_circuit_aucun_achat_meme_pour_les_temoins(env: Env):
+def test_circuit_breaker_no_buy_even_for_benchmarks(env: Env):
     env.paths.kill.parent.mkdir(parents=True, exist_ok=True)
     env.paths.kill.touch()
     run_cycles(env, 4, deciders=deciders_for(lambda i, s: [action("BTC/EUR", size=10)]))
-    assert not payloads(env, "fill")  # ni LLM, ni aléatoire, ni références
+    assert not payloads(env, "fill")  # neither LLM, nor random, nor references
 
 
-def test_coupe_circuit_utilisateur_hors_depot(env: Env):
+def test_user_circuit_breaker_outside_repo(env: Env):
     env.paths.user_kill.touch()
     run_cycles(env, 2, deciders=deciders_for(lambda i, s: [action("BTC/EUR", size=10)]))
     assert not [f for f in payloads(env, "fill") if f["side"] == "buy"]
 
 
-def test_dormance_7_jours_plus_d_achat_et_9_jours_mise_a_plat(env: Env):
-    from arene.ops import dormance
+def test_dormancy_7_days_no_more_buys_and_9_days_flattened(env: Env):
+    from arena.ops import dormancy
 
     run_cycles(env, 3, deciders=deciders_for(lambda i, s: [action("BTC/EUR", size=10)] if i == 1 else None))
     assert has_buy(env, HAIKU)
-    dormance.write_ack(env.paths, T0)  # dernier ack très ancien
+    dormancy.write_ack(env.paths, T0)  # last ack very old
     i8 = (8 * 86_400) // H4
     run_cycles(env, 1, start=i8, deciders=deciders_for(lambda i, s: [action("ETH/EUR", size=10)]))
     assert not has_buy(env, HAIKU, T0 + i8 * H4)
@@ -607,29 +607,29 @@ def test_dormance_7_jours_plus_d_achat_et_9_jours_mise_a_plat(env: Env):
     assert not st[HAIKU].positions
 
 
-def test_gel_et_arret_bloquent_les_achats_riskd():
+def test_freeze_and_stop_block_riskd_buys():
     st = PortfolioState("llm:test", 1_000 * MICRO)
     assert "FROZEN" in ev(mk_intent(), replace(st, frozen_until_ts=NOW + 10)).reasons
     assert "HALTED" in ev(mk_intent(), replace(st, halted=True)).reasons
     assert "KILL_SWITCH" in ev(mk_intent(), st, kill=True).reasons
-    # perte 24 h >= 5 % détectée même si le drapeau d'état manque
+    # 24 h loss >= 5% detected even if the state flag is missing
     c = mk_counters(equity_24h_ago_ueur=1_100 * MICRO)
     assert "FROZEN" in ev(mk_intent(), st, counters=c).reasons
-    # drawdown >= 20 % depuis le plus haut
+    # drawdown >= 20% from the peak
     c = mk_counters(equity_peak_ueur=1_300 * MICRO, equity_24h_ago_ueur=1_000 * MICRO)
     assert "HALTED" in ev(mk_intent(), st, counters=c).reasons
 
 
-def test_vente_permise_sous_gel_arret_et_coupe_circuit():
+def test_sell_allowed_under_freeze_stop_and_circuit_breaker():
     st = PortfolioState("llm:test", 500 * MICRO, {BTC: Position(BTC, 1_000_000, 100 * MICRO, NOW)}, halted=True,
                         frozen_until_ts=NOW + 99)  # fmt: skip
     assert ev(mk_intent(Side.SELL, size_bp=10_000), st, kill=True).approved
 
 
-def test_portefeuille_gele_llm_ne_decide_pas_et_n_achete_pas(env: Env):
-    """Krach de 30 % juste après un achat de 20 % : perte >= 5 % sur 24 h, gel, décision sautée, aucun achat."""
+def test_frozen_portfolio_llm_does_not_decide_nor_buy(env: Env):
+    """30% crash right after a 20% buy: loss >= 5% over 24 h, freeze, decision skipped, no buy."""
     run_cycles(env, 2, deciders=deciders_for(lambda i, s: [action("BTC/EUR", size=20)] if i == 1 else None))
-    env.kraken.crash("*", T0 + H4, 700)  # la barre du cycle 1 clôt à -30 %
+    env.kraken.crash("*", T0 + H4, 700)  # the cycle 1 bar closes at -30%
     dec = deciders_for(lambda i, s: [action("ETH/EUR", size=10)])
     run_cycles(env, 2, start=2, deciders=dec)
     assert payloads(env, "portfolio_frozen", HAIKU) or payloads(env, "portfolio_halted", HAIKU)

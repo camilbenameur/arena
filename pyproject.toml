@@ -1,7 +1,7 @@
 [project]
-name = "arene"
+name = "arena"
 version = "0.1.0"
-description = "Arène de trading : des modèles d'IA décident, du code valide, tout est journalisé et mesuré honnêtement."
+description = "Trading arena: AI models decide, code validates, everything is journaled and measured honestly."
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-arene = "arene.cli:main"
+arena = "arena.cli:main"
 
 [dependency-groups]
 dev = [
@@ -18,7 +18,7 @@ dev = [
     "hypothesis>=6.100",
     "ruff>=0.6",
 ]
-recherche = [
+research = [
     "numpy==2.5.4",
     "pandas==3.1.1",
     "pyyaml==6.0.3",
@@ -26,7 +26,7 @@ recherche = [
 ]
 
 [tool.uv]
-default-groups = ["dev", "recherche"]
+default-groups = ["dev", "research"]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,8 +36,8 @@ build-backend = "hatchling.build"
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
-    "reseau: test qui appelle une API publique (exclu par défaut avec -m 'not reseau')",
-    "donnees_reelles: test qui lit var/recherche/donnees (se saute si le dossier est absent)",
+    "network: test that calls a public API (deselect with -m 'not network')",
+    "real_data: test that reads var/research/data (skipped when the folder is missing)",
 ]
 
 [tool.ruff]

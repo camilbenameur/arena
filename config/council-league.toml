@@ -1,0 +1,11 @@
+# The league of the councils (docs/SPEC-COUNCILS.md): a league of its own for the councils. Councils of ten Haiku advisers and a President, each with its own portfolio, its own daily budget and
+# the aggressive policy (config/policy-perp-council.toml). They share the engine, journal, market data and watcher
+# of the perp league, and its triggers and round quota (config/perp-llm.toml); the site shows them apart.
+# Hashed (sha256 of the bytes) and journaled with each council round.
+enabled = true  # the Haiku and Opus councils are retired (their journal is kept as data); the trend council plays
+# `claude` member processes at the same time across all the councils of a round (each council also keeps its own
+# `members_parallel`): about 300 MB each, and the host has about 3 GB free. With the 4 LLM portfolios, at most
+# 3 + 4 processes, as with the one council before.
+max_member_processes = 4
+# Files of config/. A council whose file is invalid is left out (alert perp_council_config_invalid), the others play.
+councils = ["perp-council-trend.toml"]

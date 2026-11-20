@@ -14,8 +14,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from arene.journal import Journal
-from arene.perp.ledger import (
+from arena.journal import Journal
+from arena.perp.ledger import (
     PerpLedgerError,
     cost_eur,
     funding_amount_ueur,
@@ -25,7 +25,7 @@ from arene.perp.ledger import (
     replay,
     to_eur,
 )
-from arene.perp.sim import MinuteCandles, PerpSimulator, SimParams, buy_price, sell_price
+from arena.perp.sim import MinuteCandles, PerpSimulator, SimParams, buy_price, sell_price
 from tests.perp_golden_runner import GOLDEN, load_scenarios, run_scenario
 
 SPEC = load_scenarios()
@@ -76,7 +76,7 @@ def test_qty_seconds():
     assert qty_seconds([], 0, 3600) == 0
 
 
-def test_incoherent_fx_refused():
+def test_inconsistent_fx_refused():
     with pytest.raises(PerpLedgerError):
         cost_eur(1, 1_100_100, 1_100_000)
 
@@ -362,7 +362,7 @@ def test_retired_portfolio_replays_flat_and_never_opens_again(tmp_path):
 
 
 def test_the_stop_of_the_hunters_portfolios_ignores_the_minute_of_the_entry_the_others_keep_it(tmp_path):
-    from arene.perp.margin import HUNTER_NAMES
+    from arena.perp.margin import HUNTER_NAMES
 
     hunter = min(HUNTER_NAMES)
     s = sim_at(tmp_path, portfolios=("P", hunter, "benchmark-perp:random"))

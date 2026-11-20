@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from arene.perp.agent import AgentDecider
-from arene.perp.ledger import replay
-from arene.perp.llm_league import LlmConfigError, load_llm_league
+from arena.perp.agent import AgentDecider
+from arena.perp.ledger import replay
+from arena.perp.llm_league import LlmConfigError, load_llm_league
 from tests.test_perp_agent import fake_runner
 from tests.test_perp_watcher import PRICES, T0, World
 
@@ -110,8 +110,8 @@ def play(w: World, round_id: int, kind: str, trigger, now: int) -> None:
 
 
 def _view(w: World, ts: int):
-    from arene.perp.market import market_view
-    from arene.perp.watcher import TickReport
+    from arena.perp.market import market_view
+    from arena.perp.watcher import TickReport
 
     return market_view(w.store, w.w.symbols, ts), TickReport(ts)
 
@@ -132,7 +132,7 @@ def test_budget_and_halt_skip_the_call(tmp_path):
 def test_a_failing_finish_still_journals_every_cost(tmp_path, monkeypatch):
     calls: list[str] = []
     w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
-    import arene.perp.llm_league as L
+    import arena.perp.llm_league as L
 
     real = L.finish_agent_round
     state = {"n": 0}
@@ -155,7 +155,7 @@ def test_a_failing_finish_still_journals_every_cost(tmp_path, monkeypatch):
 def test_a_failing_prepare_skips_that_model_only(tmp_path, monkeypatch):
     calls: list[str] = []
     w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
-    import arene.perp.llm_league as L
+    import arena.perp.llm_league as L
 
     real = L.prepare_agent_round
 
@@ -174,7 +174,7 @@ def test_a_failing_prepare_skips_that_model_only(tmp_path, monkeypatch):
 def test_a_cut_between_prepare_and_call_never_calls(tmp_path, monkeypatch):
     calls: list[str] = []
     w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
-    import arene.perp.llm_league as L
+    import arena.perp.llm_league as L
 
     class Cut:
         def __init__(self, *a, **k):
@@ -193,8 +193,8 @@ def test_a_cut_between_prepare_and_call_never_calls(tmp_path, monkeypatch):
 
 
 def test_timeouts_count_against_the_budget():
-    from arene.perp.agent import TIMEOUT_RC, AgentResult
-    from arene.perp.llm_league import call_cost_uusd, charge_ceiling
+    from arena.perp.agent import TIMEOUT_RC, AgentResult
+    from arena.perp.llm_league import call_cost_uusd, charge_ceiling
 
     assert call_cost_uusd({"cost_uusd": 0, "charge_ceiling": True, "budget_ceiling_uusd": 100_000}) == 100_000
     assert call_cost_uusd({"cost_uusd": 5, "charge_ceiling": False, "budget_ceiling_uusd": 100_000}) == 5
@@ -205,7 +205,7 @@ def test_timeouts_count_against_the_budget():
 
 
 def test_a_network_failure_costs_no_budget(tmp_path):
-    from arene.perp.llm_league import spent_today_uusd
+    from arena.perp.llm_league import spent_today_uusd
 
     def down(cmd, stdin, env, cwd, timeout):
         return 1, [], "network down"
@@ -224,7 +224,7 @@ def test_a_network_failure_costs_no_budget(tmp_path):
 def test_refresh_errors_and_stale_views_never_lose_a_call_nor_execute_late(tmp_path, monkeypatch):
     calls: list[str] = []
     w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     real = W.market_view
     n = {"k": 0}
@@ -247,7 +247,7 @@ def test_refresh_errors_and_stale_views_never_lose_a_call_nor_execute_late(tmp_p
 def test_the_rendezvous_is_two_hours_away_from_the_spot_cycle(tmp_path):
     calls: list[str] = []
     w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls), offset=2 * 3600)
-    rep = w.w.tick(T0 + 120)  # 16:02 UTC: a spot cycle hour, no perp rendez-vous
+    rep = w.w.tick(T0 + 120)  # 16:02 UTC: a spot cycle hour, no perp scheduled round
     assert rep.rounds == [] and calls == []
     w.advance(T0 + 2 * 3600 + 120)
     rep = w.w.tick(T0 + 2 * 3600 + 120)  # 18:02 UTC
@@ -333,13 +333,13 @@ def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
     # the owner's snapshot carries the crossing; the rivals' next round carries nothing about it
     import json
 
-    from arene.perp.agent_round import snapshot
+    from arena.perp.agent_round import snapshot
 
     mine = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
     comp = snapshot(mine, "alert", own)
-    assert comp["appel"]["type"] == "alert"
-    assert comp["compte"]["depuis_ta_derniere_ronde"]["alertes_declenchees"][0]["niveau_usd"] == str(LEVEL)
-    assert comp["compte"]["alertes_en_attente"] == []  # consumed: an alert serves once
+    assert comp["call"]["type"] == "alert"
+    assert comp["account"]["since_your_last_round"]["alerts_triggered"][0]["level_usd"] == str(LEVEL)
+    assert comp["account"]["pending_alerts"] == []  # consumed: an alert serves once
     # the next rendezvous: nobody else ever saw it, and the alert is not served twice
     w.advance(T0 + 14400 + 120, mark_prices(BTC_DOWN))
     w.w.tick(T0 + 14400 + 120)
@@ -351,7 +351,7 @@ def test_a_crossed_alert_wakes_its_owner_alone(tmp_path):
 
 
 def test_alert_round_limits(tmp_path, monkeypatch):
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     # no delay after the owner's last round: the alert is served by the next tick
     w, calls, _ = orders_world(tmp_path / "a", alerts=[alert()])
@@ -369,7 +369,7 @@ def test_alert_round_limits(tmp_path, monkeypatch):
     w2.advance(T0 + 4500)
     w2.w.tick(T0 + 4500)
     assert not alert_rounds(w2) and len(calls2) == 4
-    # no round left today outside the rendez-vous: the alert waits for the next one
+    # no round left today outside the scheduled rounds: the alert waits for the next one
     w3, calls3, _ = orders_world(tmp_path / "c", alerts=[alert()])
     for i in range(LEAGUE.rounds_per_day):
         w3.w.sim.append_event("round_data", {"portfolio": HAIKU, "round": -1 - i}, T0 + 200)
@@ -440,7 +440,7 @@ def test_alert_rounds_do_not_use_the_wakeup_cooldown_nor_the_alert_budget_gate(t
 
 def test_an_interrupted_alert_round_is_resumed_for_its_owner_only(tmp_path, monkeypatch):
     w, calls, _ = orders_world(tmp_path, alerts=[alert()])
-    import arene.perp.llm_league as L
+    import arena.perp.llm_league as L
 
     class Cut:
         def __init__(self, *a, **k):
@@ -465,7 +465,7 @@ def test_run_llm_round_only_filters_the_models(tmp_path):
     w = World(tmp_path, llm=LEAGUE, factory=factory(tmp_path, calls))
     w.w.tick(T0 + 120)
     view, _ = _view(w, T0 + 120)
-    from arene.perp.llm_league import run_llm_round
+    from arena.perp.llm_league import run_llm_round
 
     n = len(calls)
     run_llm_round(
@@ -522,7 +522,7 @@ def test_a_crossed_entry_order_goes_through_riskd_and_is_filled_with_a_stop(tmp_
 def test_a_refused_entry_is_journaled_and_shown_next_round(tmp_path):
     import json
 
-    from arene.perp.agent_round import snapshot
+    from arena.perp.agent_round import snapshot
 
     w, _calls, _extra = orders_world(tmp_path, entries=[entry(size_pct=100)])  # over the 50 % order cap
     w.advance(T0 + 600, mark_prices(BTC_UP))
@@ -534,18 +534,18 @@ def test_a_refused_entry_is_journaled_and_shown_next_round(tmp_path):
     w.advance(T0 + 4 * 3600 + 120, mark_prices(BTC_UP))
     w.w.tick(T0 + 4 * 3600 + 120)
     rd = [e["payload"] for e in w.events("round_data") if e["payload"]["portfolio"] == HAIKU][-1]
-    comp = snapshot(json.loads((w.var / rd["path"] / "round.json").read_text()), "rendezvous", None)["compte"]
-    [o] = comp["depuis_ta_derniere_ronde"]["ordres_declenches"]
+    comp = snapshot(json.loads((w.var / rd["path"] / "round.json").read_text()), "rendezvous", None)["account"]
+    [o] = comp["since_your_last_round"]["orders_triggered"]
     assert (
-        o["garde_fou"] == "refuse"
-        and "MAX_ORDER_SIZE" in o["raisons_de_refus"]
-        and o["niveau_usd"] == str(UP_LEVEL)
+        o["guardrail"] == "refused"
+        and "MAX_ORDER_SIZE" in o["refusal_reasons"]
+        and o["level_usd"] == str(UP_LEVEL)
     )
-    assert o["prix_de_remplissage_usd"] is None
+    assert o["fill_price_usd"] is None
 
 
 def test_a_stale_trigger_is_never_executed(tmp_path):
-    from arene.perp.watcher import ENTRY_MAX_LAG_S
+    from arena.perp.watcher import ENTRY_MAX_LAG_S
 
     assert ENTRY_MAX_LAG_S == 900
     w, _calls, _ = orders_world(tmp_path, entries=[entry()])
@@ -559,7 +559,7 @@ def test_a_stale_trigger_is_never_executed(tmp_path):
 
 
 def test_a_cut_between_trigger_and_verdict_is_resumed_once(tmp_path, monkeypatch):
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     w, _calls, _ = orders_world(tmp_path, entries=[entry()])
     w.advance(T0 + 600, mark_prices(BTC_UP))
@@ -636,7 +636,7 @@ def test_expiry_halt_and_failures_of_the_orders_step(tmp_path, monkeypatch):
     assert not w2.events("agent_entry_triggered") and not replay(w2.events())[HAIKU].positions
     # a failure of the step is reported in the tick, never raised, and the tick completes
     w3, _c, _ = orders_world(tmp_path / "c", alerts=[alert()])
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     monkeypatch.setattr(W.AO, "pending_state", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
     w3.advance(T0 + 600)
@@ -703,7 +703,7 @@ def test_a_cut_between_the_fill_and_the_stop_is_never_left_unprotected(tmp_path,
     assert len([e for e in w.events("perp_fill") if e["payload"]["order_id"] == oid]) == 1
 
 
-# ---- free wake-ups (docs/SPEC-PERP-REVEILS-LIBRES.md)
+# ---- free wake-ups (docs/SPEC-PERP-FREE-WAKEUPS.md)
 
 
 def private_rounds(w):
@@ -727,8 +727,8 @@ def asked_world(tmp_path, minutes: dict[str, int | None], league=LEAGUE):
 def test_a_model_is_woken_up_when_it_asked(tmp_path):
     import json
 
-    from arene.perp.agent_orders import pending_wakeup
-    from arene.perp.agent_round import snapshot
+    from arena.perp.agent_orders import pending_wakeup
+    from arena.perp.agent_round import snapshot
 
     w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 30})
     [asked] = w.events("agent_wakeup_set")
@@ -748,15 +748,15 @@ def test_a_model_is_woken_up_when_it_asked(tmp_path):
     assert [r["kind"] for r in rd] == ["scheduled"]
     data = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
     snap = snapshot(data, "scheduled", rnd["triggers"][HAIKU])
-    assert snap["appel"]["type"] == "scheduled"
-    rounds = snap["compte"]["rondes"]
-    assert rounds["rondes_par_jour"] == 48 and rounds["rondes_jouees_aujourd_hui"] == 1
-    from arene.perp.round_quota import rendezvous_left
+    assert snap["call"]["type"] == "scheduled"
+    rounds = snap["account"]["rounds"]
+    assert rounds["rounds_per_day"] == 48 and rounds["rounds_played_today"] == 1
+    from arena.perp.round_quota import rendezvous_left
 
     left = rendezvous_left(T0 + 1800, 0)
-    assert rounds["rendez_vous_restants_aujourd_hui"] == left
-    assert rounds["rondes_hors_rendez_vous_restantes"] == 48 - 1 - left - 1
-    assert rounds["reveil_demande_utc"] is not None  # still pending when the round was built
+    assert rounds["scheduled_rounds_left_today"] == left
+    assert rounds["unscheduled_rounds_left"] == 48 - 1 - left - 1
+    assert rounds["wakeup_requested_utc"] is not None  # still pending when the round was built
     assert pending_wakeup(w.events(), HAIKU) is None  # served
     w.advance(T0 + 2100)
     w.w.tick(T0 + 2100)
@@ -764,7 +764,7 @@ def test_a_model_is_woken_up_when_it_asked(tmp_path):
 
 
 def test_each_decision_replaces_the_asked_wakeup(tmp_path):
-    from arene.perp.agent_orders import pending_wakeup
+    from arena.perp.agent_orders import pending_wakeup
 
     w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 45})
     assert pending_wakeup(w.events(), HAIKU) is not None
@@ -791,7 +791,7 @@ def play_at(w: World, round_id: int, kind: str, trigger, now: int) -> None:
 
 
 def test_an_invalid_asked_time_keeps_the_pending_wakeup(tmp_path):
-    from arene.perp.agent_orders import pending_wakeup
+    from arena.perp.agent_orders import pending_wakeup
 
     w, _calls, extra = asked_world(tmp_path, {HAIKU_MODEL: 45})
     due = pending_wakeup(w.events(), HAIKU)["due_ts"]
@@ -817,10 +817,10 @@ def test_an_invalid_asked_time_is_rejected_alone(tmp_path):
     assert not w.events("agent_wakeup_set")
     [d] = [e["payload"] for e in w.events("agent_decision") if e["payload"]["portfolio"] == HAIKU]
     assert d["parse_error"] is None and d["parsed"]["next_wakeup_min"] is None
-    rej = [
+    rejected = [
         e["payload"]["rejected"] for e in w.events("agent_orders_set") if e["payload"]["portfolio"] == HAIKU
     ]
-    assert rej == [
+    assert rejected == [
         [{"kind": "wakeup", "k": 0, "error": "next_wakeup_min: an integer from 5 to 60 is expected"}]
     ]
 
@@ -852,7 +852,7 @@ def test_two_models_due_at_the_same_tick_share_one_private_round(tmp_path):
 
 
 def test_a_rendezvous_within_the_tick_serves_the_asked_wakeup(tmp_path):
-    from arene.perp.agent_orders import pending_wakeup
+    from arena.perp.agent_orders import pending_wakeup
 
     w, calls, extra = asked_world(tmp_path, {})
     extra[HAIKU_MODEL] = {"next_wakeup_min": 57}  # asked at about 03:00, due at about 03:58
@@ -873,7 +873,7 @@ def test_a_rendezvous_within_the_tick_serves_the_asked_wakeup(tmp_path):
 
 
 def test_an_asked_wakeup_lapses_after_an_hour(tmp_path, monkeypatch):
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     w, calls, _ = asked_world(tmp_path, {HAIKU_MODEL: 30})
     monkeypatch.setattr(W, "spot_busy", lambda lock: True)
@@ -887,7 +887,7 @@ def test_an_asked_wakeup_lapses_after_an_hour(tmp_path, monkeypatch):
 
 
 def test_the_rounds_per_day_quota(tmp_path):
-    from arene.perp.round_quota import quota, rendezvous_left
+    from arena.perp.round_quota import quota, rendezvous_left
 
     day = 1_794_441_600
     assert [rendezvous_left(day + h * 3600, 7200) for h in (0, 2, 3, 21, 22, 23)] == [6, 5, 5, 1, 0, 0]
@@ -916,7 +916,7 @@ def test_the_rounds_per_day_quota(tmp_path):
 
 
 def test_market_wakeups_are_15_min_apart_without_a_daily_cap(tmp_path):
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     assert W.WAKE_MOVE_BP == 200 and W.WAKE_COOLDOWN_S == 900 and not hasattr(W, "WAKE_MAX_PER_DAY")
     w, _calls, _ = asked_world(tmp_path, {})
@@ -933,7 +933,7 @@ def test_market_wakeups_are_15_min_apart_without_a_daily_cap(tmp_path):
 
 
 def test_a_market_crossing_during_the_spot_guard_is_served_after(tmp_path, monkeypatch):
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     w, calls, _ = asked_world(tmp_path, {})
     w.advance(T0 + 3600 + 300)
@@ -950,7 +950,7 @@ def test_a_market_crossing_during_the_spot_guard_is_served_after(tmp_path, monke
 
 
 def test_a_rendezvous_starts_even_while_a_private_round_waits_for_the_spot_league(tmp_path, monkeypatch):
-    import arene.perp.watcher as W
+    import arena.perp.watcher as W
 
     w, _calls, _ = asked_world(tmp_path, {})
     rid = T0 + 4 * 3600 - 600
@@ -978,7 +978,7 @@ def test_a_move_seen_at_a_rendezvous_is_not_played_again_as_a_wakeup(tmp_path):
     assert len(calls) == 8
 
 
-# --- default cadence (the owner, 13/11 ~18:00 UTC, docs/SPEC-PERP-CADENCE.md) ---
+# --- default cadence (docs/SPEC-PERP-CADENCE.md) ---
 
 
 def cadenced_world(tmp_path, minutes: dict[str, int | None], league=CADENCED):
@@ -988,7 +988,7 @@ def cadenced_world(tmp_path, minutes: dict[str, int | None], league=CADENCED):
 def test_the_default_cadence_calls_every_model_again(tmp_path):
     import json
 
-    from arene.perp.agent_round import snapshot
+    from arena.perp.agent_round import snapshot
 
     w, calls, _ = cadenced_world(tmp_path, {})
     assert len(calls) == 4
@@ -1005,7 +1005,7 @@ def test_the_default_cadence_calls_every_model_again(tmp_path):
     rd = [e["payload"] for e in w.events("round_data") if e["payload"]["round"] == T0 + 900]
     assert {r["kind"] for r in rd} == {"cadence"}
     data = json.loads((w.var / rd[0]["path"] / "round.json").read_text())
-    assert snapshot(data, "cadence", rnd["triggers"][rd[0]["portfolio"]])["appel"]["type"] == "cadence"
+    assert snapshot(data, "cadence", rnd["triggers"][rd[0]["portfolio"]])["call"]["type"] == "cadence"
     for t in (T0 + 1200, T0 + 1500):
         w.advance(t)
         w.w.tick(t)
@@ -1016,9 +1016,9 @@ def test_the_default_cadence_calls_every_model_again(tmp_path):
 
 
 def test_an_asked_wakeup_only_brings_the_cadence_forward(tmp_path):
-    from arene.perp.agent_orders import pending_wakeup
+    from arena.perp.agent_orders import pending_wakeup
 
-    # Haiku asks 45 min, more than the cadence: it is called at the cadence all the same (the owner, 14/11)
+    # Haiku asks 45 min, more than the cadence: it is called at the cadence all the same
     w, calls, extra = cadenced_world(tmp_path, {HAIKU_MODEL: 45})
     w.advance(T0 + 900)
     w.w.tick(T0 + 900)
@@ -1048,7 +1048,7 @@ def test_the_cadence_respects_the_quota_and_can_be_off(tmp_path):
     w, calls, _ = cadenced_world(tmp_path, {}, league=dataclasses.replace(CADENCED, rounds_per_day=2))
     w.advance(T0 + 900)
     w.w.tick(T0 + 900)
-    assert not private_rounds(w) and len(calls) == 4  # no round left outside the rendez-vous
+    assert not private_rounds(w) and len(calls) == 4  # no round left outside the scheduled rounds
     off = tmp_path / "off"
     off.mkdir()
     w, calls, _ = cadenced_world(off, {}, league=dataclasses.replace(CADENCED, cadence_min=0))
@@ -1078,17 +1078,17 @@ def test_a_failed_round_counts_for_the_cadence(tmp_path):
 
 
 def test_the_prompt_states_the_cadence_and_the_wakeup_bounds():
-    from arene.perp.agent import PROMPT_PATH, WAKEUP_MAX_MIN, WAKEUP_MIN_MIN
+    from arena.perp.agent import PROMPT_PATH, WAKEUP_MAX_MIN, WAKEUP_MIN_MIN
 
     text = PROMPT_PATH.read_text(encoding="utf-8")
     assert PROMPT_PATH.name == "v8.md"
-    assert f"toutes les {CONFIG.cadence_min} minutes" in text
-    assert f"de {WAKEUP_MIN_MIN} à {WAKEUP_MAX_MIN}" in text and WAKEUP_MAX_MIN == 60
-    assert "souvent la meilleure" not in text  # the bias against trading is gone (the owner, 13/11)
+    assert f"every {CONFIG.cadence_min} minutes" in text
+    assert f"from {WAKEUP_MIN_MIN} to {WAKEUP_MAX_MIN}" in text and WAKEUP_MAX_MIN == 60
+    assert "often the best" not in text  # the bias against trading is gone
 
 
 def test_last_played_counts_a_skipped_round():
-    from arene.perp.round_quota import last_played
+    from arena.perp.round_quota import last_played
 
     ev = [
         {"type": "round_data", "ts": 100, "payload": {"portfolio": HAIKU, "round": 1}},

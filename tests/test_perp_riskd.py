@@ -1,6 +1,6 @@
 """Perp league, step 3: riskd (evaluate_perp) and its policy. No network.
 
-The property test runs 3 000 generated worlds by default; set ARENE_PERP_RISKD_EXAMPLES=100000 for the full
+The property test runs 3 000 generated worlds by default; set ARENA_PERP_RISKD_EXAMPLES=100000 for the full
 acceptance run of the step (docs/ETUDE-AGENTS-TRADERS.md §11, step 3). Its oracle is written here in plain
 integers, independently of riskd's helpers.
 """
@@ -16,14 +16,14 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from arene.data import RateLimitedHttp
-from arene.journal import Journal
-from arene.perp import riskd as R
-from arene.perp.kraken_futures import KrakenFuturesClient
-from arene.perp.ledger import MarginAccount, PerpPosition, apply_fill, replay
-from arene.perp.policy import PerpPolicyError, load_perp_policy
-from arene.perp.riskd import InstrumentMarket, PerpCounters, PerpIntent, PerpMarketView, evaluate_perp
-from arene.perp.sim import MinuteCandles, PerpSimulator, SimParams
+from arena.data import RateLimitedHttp
+from arena.journal import Journal
+from arena.perp import riskd as R
+from arena.perp.kraken_futures import KrakenFuturesClient
+from arena.perp.ledger import MarginAccount, PerpPosition, apply_fill, replay
+from arena.perp.policy import PerpPolicyError, load_perp_policy
+from arena.perp.riskd import InstrumentMarket, PerpCounters, PerpIntent, PerpMarketView, evaluate_perp
+from arena.perp.sim import MinuteCandles, PerpSimulator, SimParams
 
 FIX = Path(__file__).parent / "fixtures" / "perp"
 POLICY_PATH = Path(__file__).resolve().parent.parent / "config" / "policy-perp.toml"
@@ -326,7 +326,7 @@ def test_internal_error_fails_closed_and_names_the_error():
 # ---------------------------------------------------------------------- properties (independent oracle)
 
 
-EXAMPLES = int(os.environ.get("ARENE_PERP_RISKD_EXAMPLES", "3000"))
+EXAMPLES = int(os.environ.get("ARENA_PERP_RISKD_EXAMPLES", "3000"))
 
 
 def oracle_cost(uusd: int) -> int:

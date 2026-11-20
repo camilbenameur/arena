@@ -1,0 +1,304 @@
+# US macro calendar, collected on 15/11/2026 from the official calendars
+# (docs/SPEC-PERP-NEWS.md §3). Times in UTC: 8:30 ET = 13:30Z until 14/03/2027, 12:30Z after that;
+# FOMC statement at 2 pm ET = 19:00Z, then 18:00Z.
+# - FOMC: Fed page re-read on 15/11 (2027 meetings are provisional until the previous meeting).
+# - BEA (GDP, PCE): official .ics file, cross-checked on 15/11.
+# - BLS (CPI, jobs, PPI): official pages read with a web tool (the BLS refuses curl), cross-checked between each
+#   release's page, the 2027 calendar and the BLS .ics.
+# Not yet published by the Fed, hence absent: the dates of the minutes and of the press conferences.
+# This file ends on 30/06/2027: the watcher alerts (perp_news_calendar_ending) 30 days before.
+# Extending it needs no code: add [[event]] entries, never rewriting a past date.
+
+[[event]]
+id = "gdp-2026-11"
+kind = "gdp"
+label = "GDP Q3 2026, second estimate (BEA)"
+ts_utc = "2026-11-25T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2026-11"
+kind = "pce"
+label = "PCE for October 2026 (BEA)"
+ts_utc = "2026-11-25T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2026-12"
+kind = "nfp"
+label = "Jobs report (NFP) for November 2026 (BLS)"
+ts_utc = "2026-12-04T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "fomc-2026-12-09"
+kind = "fomc"
+label = "FOMC decision (Fed)"
+ts_utc = "2026-12-09T19:00:00Z"
+source = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+[[event]]
+id = "cpi-2026-12"
+kind = "cpi"
+label = "CPI for November 2026 (BLS)"
+ts_utc = "2026-12-10T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2026-12"
+kind = "ppi"
+label = "PPI for November 2026 (BLS)"
+ts_utc = "2026-12-15T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "gdp-2026-12"
+kind = "gdp"
+label = "GDP Q3 2026, third estimate (BEA)"
+ts_utc = "2026-12-23T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2026-12"
+kind = "pce"
+label = "PCE for November 2026 (BEA)"
+ts_utc = "2026-12-23T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2027-01"
+kind = "nfp"
+label = "Jobs report (NFP) for December 2026 (BLS)"
+ts_utc = "2027-01-08T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "cpi-2027-01"
+kind = "cpi"
+label = "CPI for December 2026 (BLS)"
+ts_utc = "2027-01-13T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2027-01"
+kind = "ppi"
+label = "PPI for December 2026 (BLS)"
+ts_utc = "2027-01-14T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "fomc-2027-01-27"
+kind = "fomc"
+label = "FOMC decision (Fed)"
+ts_utc = "2027-01-27T19:00:00Z"
+source = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+[[event]]
+id = "gdp-2027-01"
+kind = "gdp"
+label = "GDP Q4 2026, advance estimate (BEA)"
+ts_utc = "2027-01-28T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2027-01"
+kind = "pce"
+label = "PCE for December 2026 (BEA)"
+ts_utc = "2027-01-28T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2027-02"
+kind = "nfp"
+label = "Jobs report (NFP) for January 2027 (BLS)"
+ts_utc = "2027-02-05T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "cpi-2027-02"
+kind = "cpi"
+label = "CPI for January 2027 (BLS)"
+ts_utc = "2027-02-11T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2027-02"
+kind = "ppi"
+label = "PPI for January 2027 (BLS)"
+ts_utc = "2027-02-12T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "gdp-2027-02"
+kind = "gdp"
+label = "GDP Q4 2026, second estimate (BEA)"
+ts_utc = "2027-02-25T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2027-02"
+kind = "pce"
+label = "PCE for January 2027 (BEA)"
+ts_utc = "2027-02-25T13:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2027-03"
+kind = "nfp"
+label = "Jobs report (NFP) for February 2027 (BLS)"
+ts_utc = "2027-03-05T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "cpi-2027-03"
+kind = "cpi"
+label = "CPI for February 2027 (BLS)"
+ts_utc = "2027-03-10T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2027-03"
+kind = "ppi"
+label = "PPI for February 2027 (BLS)"
+ts_utc = "2027-03-12T13:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "fomc-2027-03-17"
+kind = "fomc"
+label = "FOMC decision (Fed)"
+ts_utc = "2027-03-17T18:00:00Z"
+source = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+[[event]]
+id = "gdp-2027-03"
+kind = "gdp"
+label = "GDP Q4 2026, third estimate (BEA)"
+ts_utc = "2027-03-31T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2027-03"
+kind = "pce"
+label = "PCE for February 2027 (BEA)"
+ts_utc = "2027-03-31T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2027-04"
+kind = "nfp"
+label = "Jobs report (NFP) for March 2027 (BLS)"
+ts_utc = "2027-04-02T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "cpi-2027-04"
+kind = "cpi"
+label = "CPI for March 2027 (BLS)"
+ts_utc = "2027-04-13T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2027-04"
+kind = "ppi"
+label = "PPI for March 2027 (BLS)"
+ts_utc = "2027-04-14T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "fomc-2027-04-28"
+kind = "fomc"
+label = "FOMC decision (Fed)"
+ts_utc = "2027-04-28T18:00:00Z"
+source = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+[[event]]
+id = "gdp-2027-04"
+kind = "gdp"
+label = "GDP Q1 2027, advance estimate (BEA)"
+ts_utc = "2027-04-29T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2027-04"
+kind = "pce"
+label = "PCE for March 2027 (BEA)"
+ts_utc = "2027-04-29T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2027-05"
+kind = "nfp"
+label = "Jobs report (NFP) for April 2027 (BLS)"
+ts_utc = "2027-05-07T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "cpi-2027-05"
+kind = "cpi"
+label = "CPI for April 2027 (BLS)"
+ts_utc = "2027-05-12T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2027-05"
+kind = "ppi"
+label = "PPI for April 2027 (BLS)"
+ts_utc = "2027-05-13T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "gdp-2027-05"
+kind = "gdp"
+label = "GDP Q1 2027, second estimate (BEA)"
+ts_utc = "2027-05-27T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2027-05"
+kind = "pce"
+label = "PCE for April 2027 (BEA)"
+ts_utc = "2027-05-27T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "nfp-2027-06"
+kind = "nfp"
+label = "Jobs report (NFP) for May 2027 (BLS)"
+ts_utc = "2027-06-04T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+[[event]]
+id = "fomc-2027-06-09"
+kind = "fomc"
+label = "FOMC decision (Fed)"
+ts_utc = "2027-06-09T18:00:00Z"
+source = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+[[event]]
+id = "cpi-2027-06"
+kind = "cpi"
+label = "CPI for May 2027 (BLS)"
+ts_utc = "2027-06-10T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+[[event]]
+id = "ppi-2027-06"
+kind = "ppi"
+label = "PPI for May 2027 (BLS)"
+ts_utc = "2027-06-11T12:30:00Z"
+source = "https://www.bls.gov/schedule/news_release/ppi.htm"
+
+[[event]]
+id = "gdp-2027-06"
+kind = "gdp"
+label = "GDP Q1 2027, third estimate (BEA)"
+ts_utc = "2027-06-25T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"
+
+[[event]]
+id = "pce-2027-06"
+kind = "pce"
+label = "PCE for May 2027 (BEA)"
+ts_utc = "2027-06-25T12:30:00Z"
+source = "https://www.bea.gov/news/schedule/ics/online-calendar-subscription.ics"

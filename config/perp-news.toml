@@ -1,0 +1,23 @@
+# The news of the derivatives league (docs/SPEC-PERP-NEWS.md): Kraken's official announcements and the macro
+# calendar. No free text from the web reaches the models. Hashed: its digest is in every round dossier.
+# `enabled = false` removes them from the snapshot and from the wake-ups (the collector stops fetching them).
+enabled = true
+
+# The macro calendar (dates published in advance), in this directory.
+calendar = "macro-calendar.toml"
+# The releases that wake the models, `calendar_wake_after_min` after their time (the 1-minute candles of the
+# reaction are then closed). The others (PPI, GDP) are only shown.
+calendar_wake_kinds = ["fomc", "cpi", "nfp", "pce"]
+calendar_wake_after_min = 3
+# What the snapshot shows of the calendar: the next 72 h and the past 6 h.
+calendar_ahead_h = 72
+calendar_past_h = 6
+
+# Kraken's announcements (fetched by the collector every 5 min).
+status_api = "https://status.kraken.com/api/v2/"
+# The "Kraken Derivatives" group of the status page ("US Derivatives" is excluded).
+derivatives_group_id = "77r52jbmww8v"
+instruments_status_url = "https://futures.kraken.com/derivatives/api/v3/instruments/status"
+# A finished announcement stays in the snapshot for 24 h; an ongoing one stays as long as it lasts.
+announcements_window_h = 24
+max_items = 8

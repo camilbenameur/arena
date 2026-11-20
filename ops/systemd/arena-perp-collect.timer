@@ -1,0 +1,12 @@
+[Unit]
+Description=Arena perp league: market data collection every 5 minutes
+
+[Timer]
+# Offset by 2 min from the spot watch (HH:00:30, HH:05:30...) and the 4 h cycle (HH:05).
+OnCalendar=*-*-* *:02/5:00 UTC
+Persistent=true
+AccuracySec=5s
+Unit=arena-perp-collect.service
+
+[Install]
+WantedBy=timers.target

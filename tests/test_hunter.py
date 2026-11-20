@@ -1,4 +1,4 @@
-"""The « Chasseur de mèches » (docs/SPEC-CHASSEUR.md §8): the frozen rule, its execution on the league's journal, the
+"""The "Wick Hunter" (docs/SPEC-HUNTER.md §8): the frozen rule, its execution on the league's journal, the
 witness at the pace of 5 minutes, the watcher's part and the safeguards. A fake Kraken client, synthetic prices, no
 network."""
 
@@ -14,20 +14,20 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from arene.perp import benchmarks as B
-from arene.perp import hunter as H
-from arene.perp import trend_council as TC
-from arene.perp.ledger import replay
-from arene.perp.margin import leveraged
-from arene.perp.types import Candle, FxQuote, PerpTicker
-from arene.perp.watcher import PerpWatcher
+from arena.perp import benchmarks as B
+from arena.perp import hunter as H
+from arena.perp import trend_council as TC
+from arena.perp.ledger import replay
+from arena.perp.margin import leveraged
+from arena.perp.types import Candle, FxQuote, PerpTicker
+from arena.perp.watcher import PerpWatcher
 from tests.test_perp_watcher import CFG, FX, POLICY, PRICES, SPECS, SYMBOLS, T0, World
 
 CONFIG = H.load_hunter_config()
 ME, WITNESS = CONFIG.portfolio, CONFIG.benchmark
 BTC = "PF_XBTUSD"
 START = T0 + 1200  # a multiple of 300; the witness decides at START + 210 + 300 k
-FROZEN = Path(__file__).resolve().parent.parent / "docs" / "recherche-v5" / "finalistes" / "chocs_fade-mecheS.py"
+FROZEN = Path(__file__).resolve().parent.parent / "docs" / "research-v5" / "finalists" / "shocks_fade-wickS.py"
 
 PriceFn = Callable[[str, int], int]
 
@@ -251,7 +251,7 @@ def test_the_order_id_is_a_function_of_the_portfolio_the_contract_and_the_time_o
             "actions": [{"instrument": BTC, "action": "open_long", "size_pct": 200, "stop_pct": 5, "horizon_h": 1, "expected_move_pct": 1.13}],
             "justification": "x",
         }
-        from arene.perp.agent import parse_decision
+        from arena.perp.agent import parse_decision
 
         ids.append(parse_decision(decision, ME, shock.ts, START + 3, max_size_pct=200, max_actions=1)[2][0].intent_id)
     other = parse_decision(decision, WITNESS, shock.ts, START + 3, max_size_pct=200, max_actions=1)[2][0].intent_id
@@ -262,7 +262,7 @@ def test_the_order_id_is_a_function_of_the_portfolio_the_contract_and_the_time_o
 # ---------------------------------------------------------------------- the witness
 
 
-def test_the_witness_decides_once_per_slice_on_the_prices_known_then(tmp_path):
+def test_the_benchmark_decides_once_per_slice_on_the_prices_known_then(tmp_path):
     # the wick starts at START + 330 (inside the slice that began at START + 210)
     w, client, h = make(tmp_path, drop(START + 330, 0.95))
     drive(h, client, START, START + 4400, every=30)
@@ -372,7 +372,7 @@ def test_the_kill_switch_blocks_the_entries(tmp_path):
     assert verdicts and not any(v["approved"] for v in verdicts)
 
 
-def test_dormance_blocks_the_entries(tmp_path):
+def test_dormancy_blocks_the_entries(tmp_path):
     w, client, h = make(tmp_path, drop(START + 120, 0.95))
     h._opened_ts = START - 8 * 86_400  # no ack for 8 days
     drive(h, client, START, START + 300)
@@ -455,10 +455,10 @@ def Decimal_eq(text: str, number: float) -> bool:
 
 
 def test_a_bad_config_is_refused(tmp_path):
-    text = (Path("config") / "perp-chasseur.toml").read_text()
-    bad = tmp_path / "perp-chasseur.toml"
-    (tmp_path / "policy-perp-chasseur.toml").write_text((Path("config") / "policy-perp-chasseur.toml").read_text())
-    bad.write_text(text.replace('portfolio = "robot-perp:chasseur"', 'portfolio = "chasseur"'))
+    text = (Path("config") / "perp-hunter.toml").read_text()
+    bad = tmp_path / "perp-hunter.toml"
+    (tmp_path / "policy-perp-hunter.toml").write_text((Path("config") / "policy-perp-hunter.toml").read_text())
+    bad.write_text(text.replace('portfolio = "robot-perp:hunter"', 'portfolio = "hunter"'))
     with pytest.raises(H.HunterConfigError):
         H.load_hunter_config(bad)
     bad.write_text(text.replace("shock_bp = 450", "shock_bp = 450\nextra = 1"))
@@ -472,7 +472,7 @@ def test_a_bad_config_is_refused(tmp_path):
 
 
 def _frozen():
-    spec = importlib.util.spec_from_file_location("chocs_fade_meche_s", FROZEN)
+    spec = importlib.util.spec_from_file_location("shocks_fade_wick_s", FROZEN)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -600,7 +600,7 @@ def test_a_refused_entry_is_retried_smaller_twice_at_most(tmp_path):
 def test_run_intents_keeps_eight_tries_for_the_other_callers():
     import inspect
 
-    from arene.perp.agent_round import SHRINK_TRIES, run_intents
+    from arena.perp.agent_round import SHRINK_TRIES, run_intents
 
     assert inspect.signature(run_intents).parameters["max_shrink_tries"].default == SHRINK_TRIES == 8
     assert H.SHRINK_TRIES_HUNTER == 2
@@ -789,18 +789,18 @@ def test_only_one_hunter_process_may_run(tmp_path):
 
 
 def test_a_disabled_hunter_exits_0_without_the_lock(tmp_path, capsys):
-    cfg = tmp_path / "perp-chasseur.toml"
+    cfg = tmp_path / "perp-hunter.toml"
     text = H.DEFAULT_CONFIG.read_text(encoding="utf-8").replace("enabled = true", "enabled = false")
     cfg.write_text(text, encoding="utf-8")
-    (tmp_path / "policy-perp-chasseur.toml").write_text(
-        (H.DEFAULT_CONFIG.parent / "policy-perp-chasseur.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    (tmp_path / "policy-perp-hunter.toml").write_text(
+        (H.DEFAULT_CONFIG.parent / "policy-perp-hunter.toml").read_text(encoding="utf-8"), encoding="utf-8"
     )
     assert H.main(["run", "--var", str(tmp_path / "var-perp"), "--config", str(cfg)]) == 0
     assert not (tmp_path / "var-perp" / "hunter.lock").exists()
 
 
 def test_the_unit_restarts_on_failure_but_not_on_exit_2_and_restarts_daily():
-    unit = (Path(__file__).resolve().parent.parent / "ops" / "systemd" / "arene-perp-hunter.service").read_text()
+    unit = (Path(__file__).resolve().parent.parent / "ops" / "systemd" / "arena-perp-hunter.service").read_text()
     for line in (
         "Restart=on-failure", "RestartPreventExitStatus=2", "StartLimitIntervalSec=600", "StartLimitBurst=10",
         "RuntimeMaxSec=86400", "MemoryMax=1G", "Nice=0", "After=network-online.target",

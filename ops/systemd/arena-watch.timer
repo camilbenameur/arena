@@ -1,0 +1,12 @@
+[Unit]
+Description=Arena paper-trading league: trigger a watch tick every 5 min (at HH:MM:30 UTC)
+
+[Timer]
+# 30 s offset: do not land exactly on HH:05:00, the instant of the 4 h cycle.
+OnCalendar=*-*-* *:00/5:30 UTC
+Persistent=false
+AccuracySec=1s
+Unit=arena-watch.service
+
+[Install]
+WantedBy=timers.target

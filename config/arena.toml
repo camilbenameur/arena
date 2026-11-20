@@ -1,0 +1,83 @@
+# Arena configuration (paper MVP). Hashed into the journal on every load.
+venue_mode = "paper"
+# Deciders: "subscription" = claude -p on a Claude subscription; "api" = Console API key.
+decider_backend = "subscription"
+capital_eur = 1000
+interval_s = 14400          # 4 h cycle
+cycle_delay_s = 300         # decision at HH:05 UTC
+fill_model_version = "pessimistic-v1"
+taker_fee_bp = 50           # Kraken Pro base 0.40%, plus a 25% markup
+slippage_bp = 5
+
+# Continuous watch and event-driven wake-ups (docs/WATCH.md): an LLM-free tick every 5 min.
+[watch]
+tick_s = 300
+move_threshold_bp = 300      # 3%
+move_window_s = 3600    # over 1 h
+cooldown_s = 3600             # minimum delay since the last LLM round (cycle or wake-up)
+max_wakeups_per_day = 6          # per UTC day
+pre_cycle_guard_s = 1800    # no wake-up within 30 min of the next scheduled cycle
+
+[season]
+# Season 1: 8 frozen weeks (config outside this table, risk policy, system prompt),
+# ranked from the start cycle; the earlier shakedown period is excluded. This table and its comments are outside the frozen hash.
+number = 1
+name = "Season 1"
+start_ts = 1794528300       # 2026-11-13 00:05 UTC: execution of the 00:00 cycle
+duration_days = 56
+
+[[instruments]]
+symbol = "BTC/EUR"
+kraken_pair = "XBTEUR"
+binance_symbol = "BTCUSDT"
+[[instruments]]
+symbol = "ETH/EUR"
+kraken_pair = "ETHEUR"
+binance_symbol = "ETHUSDT"
+[[instruments]]
+symbol = "SOL/EUR"
+kraken_pair = "SOLEUR"
+binance_symbol = "SOLUSDT"
+[[instruments]]
+symbol = "XRP/EUR"
+kraken_pair = "XRPEUR"
+binance_symbol = "XRPUSDT"
+[[instruments]]
+symbol = "LINK/EUR"
+kraken_pair = "LINKEUR"
+binance_symbol = "LINKUSDT"
+[[instruments]]
+symbol = "LTC/EUR"
+kraken_pair = "LTCEUR"
+binance_symbol = "LTCUSDT"
+
+[[models]]
+portfolio = "llm:claude-haiku-5-5"
+model = "claude-haiku-5-5"
+daily_budget_usd = 0.10
+price_in_usd_per_mtok = 0.10
+price_out_usd_per_mtok = 0.50
+[[models]]
+portfolio = "llm:claude-sonnet-5-5"
+model = "claude-sonnet-5-5"
+daily_budget_usd = 0.50
+price_in_usd_per_mtok = 2.0
+price_out_usd_per_mtok = 10.0
+[[models]]
+portfolio = "llm:claude-opus-5-5"
+model = "claude-opus-5-5"
+daily_budget_usd = 0.90
+price_in_usd_per_mtok = 4.0
+price_out_usd_per_mtok = 20.0
+[[models]]
+# Added on 2026-11-12; the portfolio opens at the first cycle that follows.
+portfolio = "llm:claude-fable-5-2"
+model = "claude-fable-5-2"
+daily_budget_usd = 1.80
+price_in_usd_per_mtok = 8.0
+price_out_usd_per_mtok = 40.0
+
+[benchmarks]
+portfolios = ["benchmark:basket", "benchmark:6040", "benchmark:e0065", "benchmark:random"]
+e0065 = { L = 20, k = 3, H = 10 }
+random_paths = 1000

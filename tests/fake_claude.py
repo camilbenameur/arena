@@ -19,17 +19,19 @@ args = sys.argv[1:]
 mode = os.environ.get("FAKE_CLAUDE_MODE", "normal")
 from pathlib import Path
 
-cfg = json.loads(Path(args[args.index("--mcp-config") + 1]).read_text())["mcpServers"]["arene"]
+cfg = json.loads(Path(args[args.index("--mcp-config") + 1]).read_text())["mcpServers"]["arena"]
 model = args[args.index("--model") + 1]
 stdin_text = sys.stdin.read()
 system = args[args.index("--system-prompt") + 1] if "--system-prompt" in args else ""
+ROLES_DIR = Path(__file__).resolve().parent.parent / "arena" / "perp" / "prompt" / "council" / "v3" / "roles"
 ROLES = {
-    "le Cartographe": "cartographe", "le Suiveur": "suiveur", "le Chasseur de cassures": "chasseur",
-    "le Contrarien": "contrarien", "le Lecteur de carnet": "carnet", "le Trésorier du levier": "tresorier",
-    "l'Avocat du diable": "avocat", "le Gardien du risque": "gardien", "le Mémorialiste": "memorialiste",
-    "l'Arbitragiste de paires": "arbitragiste", "le Président": "president",
+    "01-mapper.md": "mapper", "02-follower.md": "follower", "03-hunter.md": "hunter",
+    "04-contrarian.md": "contrarian", "05-order-book.md": "order_book", "06-treasurer.md": "treasurer",
+    "07-advocate.md": "advocate", "08-guardian.md": "guardian", "09-historian.md": "historian",
+    "10-arbitrageur.md": "arbitrageur", "11-president.md": "president",
 }  # fmt: skip
-member = next((k for name, k in ROLES.items() if f"## Ton rôle : {name}\n" in system), None)
+# the member is the one whose role file is part of the system prompt (whatever the prompt's language)
+member = next((k for f, k in ROLES.items() if (ROLES_DIR / f).read_text(encoding="utf-8").strip() in system), None)
 council = json.loads(os.environ.get("FAKE_CLAUDE_COUNCIL") or "{}")
 if member is not None:
     round_dir = Path(args[args.index("--mcp-config") + 1]).parent
@@ -41,7 +43,7 @@ def out(obj):
 
 
 if mode == "mcp_failed":
-    out({"type": "system", "subtype": "init", "mcp_servers": [{"name": "arene", "status": "failed"}]})
+    out({"type": "system", "subtype": "init", "mcp_servers": [{"name": "arena", "status": "failed"}]})
     out(
         {
             "type": "result",
@@ -74,14 +76,14 @@ out(
         "type": "system",
         "subtype": "init",
         "model": model,
-        "mcp_servers": [{"name": "arene", "status": "connected"}],
-        "tools": [f"mcp__arene__{t}" for t in tools],
+        "mcp_servers": [{"name": "arena", "status": "connected"}],
+        "tools": [f"mcp__arena__{t}" for t in tools],
     }
 )
 calls = [
-    ("derives", {"instrument": "PF_XBTUSD"}),
+    ("derivatives", {"instrument": "PF_XBTUSD"}),
     (
-        "simuler_ordre",
+        "simulate_order",
         {
             "instrument": "PF_XBTUSD",
             "action": "open_long",
@@ -95,9 +97,9 @@ calls = [
 ]
 if mode == "five_tools":
     calls += [
-        ("bougies", {"instrument": "PF_ETHUSD", "intervalle": "1h", "n": 5}),
-        ("historique", {}),
-        ("indicateurs", {"instrument": "PF_XBTUSD", "intervalle": "4h"}),
+        ("candles", {"instrument": "PF_ETHUSD", "interval": "1h", "n": 5}),
+        ("history", {}),
+        ("indicators", {"instrument": "PF_XBTUSD", "interval": "4h"}),
     ]
 approved = False
 for k, (name, a) in enumerate(calls):
@@ -106,14 +108,14 @@ for k, (name, a) in enumerate(calls):
         {
             "type": "assistant",
             "message": {
-                "content": [{"type": "tool_use", "id": tid, "name": f"mcp__arene__{name}", "input": a}]
+                "content": [{"type": "tool_use", "id": tid, "name": f"mcp__arena__{name}", "input": a}]
             },
         }
     )
     r = rpc("tools/call", {"name": name, "arguments": a})["result"]
     text = r["content"][0]["text"]
-    if name == "simuler_ordre":
-        approved = json.loads(text).get("approuve", False)
+    if name == "simulate_order":
+        approved = json.loads(text).get("approved", False)
     out(
         {
             "type": "user",
@@ -133,7 +135,7 @@ srv.stdin.close()
 srv.wait()
 if member in council.get("fail", []):
     sys.exit(1)  # no result event: a failed member
-decision = {"actions": [], "justification": "rien de convaincant"}
+decision = {"actions": [], "justification": "nothing convincing"}
 if approved:
     decision = {
         "actions": [
@@ -146,10 +148,10 @@ if approved:
                 "horizon_h": 48,
                 "expected_move_pct": 6,
                 "confidence_pct": 55,
-                "invalidation": "clôture 4 h sous 68000",
+                "invalidation": "4 h close below 68000",
             }
         ],
-        "justification": "funding faible et simulation approuvée",
+        "justification": "low funding and simulation approved",
     }
 extra = json.loads(os.environ.get("FAKE_CLAUDE_EXTRA") or "{}")
 decision.update(extra.get("*", {}))
@@ -158,17 +160,17 @@ if member == "president":
     decision.update(council.get("president", {}))
 elif member is not None:
     decision = {
-        "avis": [
+        "opinions": [
             {
                 "instrument": "PF_XBTUSD",
                 "position": "long",
                 "conviction": 60,
-                "taille_pct": 300,
+                "size_pct": 300,
                 "stop_pct": 1.2,
             }
         ],
-        "cible": {"instrument": "PF_XBTUSD", "sens": "long"} if member == "avocat" else None,
-        "argument": f"{member}: funding faible",
+        "target": {"instrument": "PF_XBTUSD", "side": "long"} if member == "advocate" else None,
+        "argument": f"{member}: low funding",
         **council.get("opinion", {}),
     }
 out(

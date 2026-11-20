@@ -1,45 +1,45 @@
-# Politique de risque PAPER de l'arène (docs/SPEC-MVP.md §7).
-# Fichier haché (sha256 de ses octets) : le hash est journalisé et recopié dans chaque verdict de riskd.
-# Entiers uniquement. La politique réelle (argent réel) sera plus stricte : ne pas réutiliser ces valeurs.
-# bp = point de base = 1/10 000. Les pourcentages d'equity sont exprimés en bp de l'equity du portefeuille.
+# PAPER risk policy of the arena (docs/SPEC-MVP.md §7).
+# Hashed file (sha256 of its bytes): the hash is journaled and copied into every riskd verdict.
+# Integers only. A real-money policy would be stricter: do not reuse these values.
+# bp = basis point = 1/10,000. Equity percentages are expressed in bp of the portfolio equity.
 
-# Liste blanche : toute autre paire est refusée (NOT_WHITELISTED), à l'achat comme à la vente.
+# Whitelist: any other pair is refused (NOT_WHITELISTED), for buys and sells alike.
 symbols = ["BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "LINK/EUR", "LTC/EUR"]
 
-# --- Plafonds de taille (achats) ---
-max_order_bp    = 2000    # un achat vaut au plus 20 % de l'equity (MAX_ORDER_SIZE)
-max_position_bp = 4000    # position sur un symbole <= 40 % de l'equity après l'ordre (MAX_POSITION)
-max_exposure_bp = 10000   # exposition totale <= 100 % de l'equity, cash >= 0 après frais (MAX_EXPOSURE, INSUFFICIENT_CASH)
+# --- Size caps (buys) ---
+max_order_bp    = 2000    # a buy is worth at most 20% of equity (MAX_ORDER_SIZE)
+max_position_bp = 4000    # position on one symbol <= 40% of equity after the order (MAX_POSITION)
+max_exposure_bp = 10000   # total exposure <= 100% of equity, cash >= 0 after fees (MAX_EXPOSURE, INSUFFICIENT_CASH)
 
-# --- Fréquence ---
-max_trades_per_day         = 2       # par portefeuille, fenêtre glissante 24 h, ventes comprises (DAILY_TRADES)
-max_orders_per_minute      = 20      # tous portefeuilles ; 7 × 2 ordres possibles au même cycle en paper ; 5 par plateforme en réel (ORDER_RATE)
-min_interval_same_symbol_s = 14400   # anti-oscillation : 4 h entre deux intentions d'achat sur un symbole (TOO_SOON)
+# --- Frequency ---
+max_trades_per_day         = 2       # per portfolio, sliding 24 h window, sells included (DAILY_TRADES)
+max_orders_per_minute      = 20      # all portfolios; 7 x 2 orders possible in the same cycle in paper; 5 per venue in live (ORDER_RATE)
+min_interval_same_symbol_s = 14400   # anti-oscillation: 4 h between two buy intents on a symbol (TOO_SOON)
 
-# --- Stop obligatoire à l'achat, distance sous le prix d'entrée ---
-stop_bp_min = 100    # 1 %  (STOP_REQUIRED si absent, STOP_RANGE hors bornes)
-stop_bp_max = 2500   # 25 %
+# --- Mandatory stop on buys, distance below the entry price ---
+stop_bp_min = 100    # 1%  (STOP_REQUIRED if absent, STOP_RANGE if out of bounds)
+stop_bp_max = 2500   # 25%
 
-# --- Rapport coût / gain ---
-# Coût aller-retour estimé = 2 x (frais + glissement) + spread courant, en bp.
-# Il doit valoir au plus ce pourcentage du mouvement attendu déclaré (EDGE_TOO_SMALL ; mouvement absent = rejet).
+# --- Cost / gain ratio ---
+# Estimated round-trip cost = 2 x (fees + slippage) + current spread, in bp.
+# It must be at most this percentage of the declared expected move (EDGE_TOO_SMALL; missing move = rejection).
 max_cost_to_expected_move_pct = 33
 
-# --- Durée de détention (appliquée par le simulateur, pas par riskd) ---
-max_holding_s = 604800   # 7 jours : sortie forcée
+# --- Holding period (enforced by the simulator, not by riskd) ---
+max_holding_s = 604800   # 7 days: forced exit
 
-# --- Gel et arrêt du portefeuille ---
-daily_loss_freeze_bp = 500    # perte >= 5 % de l'equity sur 24 h : gel (FROZEN)
-freeze_duration_s    = 86400  # durée du gel : 24 h
-drawdown_halt_bp     = 2000   # drawdown >= 20 % depuis le plus haut : mise à plat et arrêt (HALTED) jusqu'à `arene resume`
+# --- Portfolio freeze and halt ---
+daily_loss_freeze_bp = 500    # loss >= 5% of equity over 24 h: freeze (FROZEN)
+freeze_duration_s    = 86400  # freeze duration: 24 h
+drawdown_halt_bp     = 2000   # drawdown >= 20% from the peak: flatten and halt (HALTED) until `arena resume`
 
-# --- Budget de frais ---
-monthly_fee_budget_bp = 100   # frais du mois civil >= 1 % de l'equity de début de mois : plus d'achat (FEE_BUDGET)
+# --- Fee budget ---
+monthly_fee_budget_bp = 100   # calendar-month fees >= 1% of start-of-month equity: no more buys (FEE_BUDGET)
 
-# --- Garde-fous de marché (aucune entrée si déclenchés) ---
-max_quote_deviation_bp = 300  # mid du quote à plus de 3 % de la dernière clôture (PRICE_SANITY)
-max_spread_multiple    = 3    # spread > 3 x médiane des 20 derniers quotes (SPREAD_ANOMALY)
+# --- Market guards (no entry if triggered) ---
+max_quote_deviation_bp = 300  # quote mid more than 3% away from the last close (PRICE_SANITY)
+max_spread_multiple    = 3    # spread > 3 x median of the last 20 quotes (SPREAD_ANOMALY)
 
-# --- Taille minimale d'ordre ---
-# Plancher en µEUR (5 EUR) ; riskd applique max(ce plancher, coût minimal Kraken de l'instrument) (ORDER_TOO_SMALL).
+# --- Minimum order size ---
+# Floor in µEUR (5 EUR); riskd applies max(this floor, the instrument's Kraken minimum cost) (ORDER_TOO_SMALL).
 min_order_ueur = 5000000

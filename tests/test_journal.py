@@ -1,4 +1,4 @@
-"""Tests du journal chaîné (docs/SPEC-MVP.md §4)."""
+"""Hash-chained journal tests (docs/SPEC-MVP.md §4)."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from arene.journal import (
+from arena.journal import (
     GENESIS_HASH,
     FloatInPayloadError,
     Journal,
@@ -25,7 +25,7 @@ from arene.journal import (
     verdict_from_payload,
     verify,
 )
-from arene.types import Bar, Fill, Intent, Quote, Side, Verdict
+from arena.types import Bar, Fill, Intent, Quote, Side, Verdict
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,7 +37,7 @@ def jr(tmp_path):
 
 def fill_journal(jr: Journal, n: int = 5) -> None:
     for i in range(n):
-        jr.append("alert", {"level": "info", "code": f"c{i}", "message": "é"}, 1_700_000_000 + i)
+        jr.append("alert", {"level": "info", "code": f"c{i}", "message": "ü"}, 1_700_000_000 + i)
 
 
 def rewrite_line(path: Path, idx: int, fn) -> None:
@@ -47,10 +47,10 @@ def rewrite_line(path: Path, idx: int, fn) -> None:
 
 
 def test_canonical_est_stable():
-    assert canonical({"b": 1, "a": [True, None, "é"]}) == '{"a":[true,null,"é"],"b":1}'.encode()
+    assert canonical({"b": 1, "a": [True, None, "ü"]}) == '{"a":[true,null,"ü"],"b":1}'.encode()
 
 
-def test_append_chaine_et_lecture(jr):
+def test_append_chain_and_read(jr):
     r0 = jr.append("config_loaded", {"policy_sha256": "x"}, 10)
     r1 = jr.append("cycle_started", {"cycle": 1}, 11)
     assert (r0["seq"], r0["prev_hash"]) == (0, GENESIS_HASH)
@@ -63,14 +63,14 @@ def test_append_chaine_et_lecture(jr):
     assert rep.ok and rep.n_records == 2 and rep.head_hash == r1["hash"] and rep.head_seq == 1
 
 
-def test_journal_vide(jr):
+def test_journal_empty(jr):
     assert jr.last() is None
     assert list(jr.iter_events()) == []
     rep = jr.verify()
     assert rep.ok and rep.n_records == 0 and rep.head_hash == GENESIS_HASH
 
 
-def test_reouverture_continue_la_chaine(jr):
+def test_reopening_continues_the_chain(jr):
     fill_journal(jr, 3)
     r = Journal(jr.path).append("alert", {"level": "info"}, 99)
     assert r["seq"] == 3
@@ -81,25 +81,25 @@ def test_reouverture_continue_la_chaine(jr):
     "payload",
     [{"x": 1.5}, {"x": {"y": [1, 2.0]}}, {"x": 1e3}, {"a": [{"b": float("nan")}]}],
 )
-def test_float_refuse(jr, payload):
+def test_float_refused(jr, payload):
     with pytest.raises(FloatInPayloadError):
         jr.append("alert", payload, 1)
     assert not jr.path.exists() or jr.path.read_bytes() == b""
 
 
-def test_ts_float_refuse(jr):
+def test_ts_float_refused(jr):
     with pytest.raises(FloatInPayloadError):
         jr.append("alert", {}, 1.5)  # type: ignore[arg-type]
     with pytest.raises(JournalError):
         jr.append("alert", {}, True)  # type: ignore[arg-type]
 
 
-def test_bool_none_et_gros_entiers_acceptes(jr):
+def test_bool_none_and_big_integers_accepted(jr):
     r = jr.append("alert", {"a": True, "b": None, "c": 10**18, "d": [1, "x"]}, 1)
     assert jr.last() == r
 
 
-def test_verify_hash_modifie_a_la_bonne_seq(jr):
+def test_verify_hash_modified_at_the_right_seq(jr):
     fill_journal(jr, 5)
     rewrite_line(jr.path, 2, lambda b: b.replace(b'"c2"', b'"cX"'))
     rep = verify(jr.path)
@@ -107,7 +107,7 @@ def test_verify_hash_modifie_a_la_bonne_seq(jr):
     assert [(e.code, e.seq, e.line) for e in rep.errors] == [("hash_mismatch", 2, 3)]
 
 
-def test_verify_ligne_modifiee_puis_rehachee_casse_la_suivante(jr):
+def test_verify_modified_line_then_rehashed_breaks_the_next(jr):
     fill_journal(jr, 5)
 
     def forge(b: bytes) -> bytes:
@@ -121,10 +121,10 @@ def test_verify_ligne_modifiee_puis_rehachee_casse_la_suivante(jr):
     assert [(e.code, e.seq) for e in rep.errors] == [("prev_hash_mismatch", 2)]
 
 
-def test_verify_seq_manquant(jr):
+def test_verify_seq_missing(jr):
     fill_journal(jr, 5)
     lines = jr.path.read_bytes().split(b"\n")
-    del lines[2]  # supprime seq 2
+    del lines[2]  # remove seq 2
     jr.path.write_bytes(b"\n".join(lines))
     rep = verify(jr.path)
     codes = {e.code for e in rep.errors}
@@ -133,9 +133,9 @@ def test_verify_seq_manquant(jr):
     assert gap.seq == 3 and gap.line == 3
 
 
-def test_verify_float_present_dans_le_fichier(jr):
+def test_verify_float_present_in_the_file(jr):
     fill_journal(jr, 2)
-    # ligne forgée avec un hash correct mais un float dans le payload
+    # forged line with a correct hash but a float in the payload
     last = jr.last()
     rec = {"seq": 2, "ts": 5, "type": "alert", "payload": {"x": 1.5}, "prev_hash": last["hash"]}
     rec["hash"] = record_hash(rec)
@@ -145,7 +145,7 @@ def test_verify_float_present_dans_le_fichier(jr):
     assert [(e.code, e.seq) for e in rep.errors] == [("float_present", 2)]
 
 
-def test_verify_float_entier_ecrit_1_0(jr):
+def test_verify_float_integer_written_1_0(jr):
     fill_journal(jr, 1)
     last = jr.last()
     rec = {"seq": 1, "ts": 5, "type": "alert", "payload": {"x": 1}, "prev_hash": last["hash"]}
@@ -156,7 +156,7 @@ def test_verify_float_entier_ecrit_1_0(jr):
     assert "float_present" in verify(jr.path).codes()
 
 
-def test_verify_ligne_tronquee_en_fin(jr):
+def test_verify_truncated_line_at_end(jr):
     fill_journal(jr, 3)
     data = jr.path.read_bytes()
     jr.path.write_bytes(data[:-20])
@@ -166,20 +166,20 @@ def test_verify_ligne_tronquee_en_fin(jr):
     assert rep.errors[0].line == 3 and rep.errors[0].seq == 2
 
 
-def test_ligne_tronquee_sans_json_invalide_apres_accolade(jr):
-    # coupure juste avant le "\n" : le JSON est complet mais la fin de ligne manque
+def test_truncated_line_without_invalid_json_after_brace(jr):
+    # cut just before the "\n": the JSON is complete but the line ending is missing
     fill_journal(jr, 2)
     jr.path.write_bytes(jr.path.read_bytes()[:-1])
     assert verify(jr.path).codes() == ["truncated_tail"]
 
 
-def test_append_refuse_sur_ligne_tronquee_et_ne_repare_pas(jr):
+def test_append_refused_on_truncated_line_and_does_not_repair(jr):
     fill_journal(jr, 3)
     data = jr.path.read_bytes()[:-20]
     jr.path.write_bytes(data)
     with pytest.raises(JournalCorruptError):
         jr.append("alert", {"level": "info"}, 9)
-    assert jr.path.read_bytes() == data  # jamais réparé en silence
+    assert jr.path.read_bytes() == data  # never silently repaired
     with pytest.raises(JournalCorruptError):
         jr.last()
     with pytest.raises(JournalCorruptError):
@@ -187,22 +187,22 @@ def test_append_refuse_sur_ligne_tronquee_et_ne_repare_pas(jr):
     assert len(list(jr.iter_events(strict=False))) == 2
 
 
-def test_append_refuse_sur_derniere_ligne_au_hash_invalide(jr):
+def test_append_refused_on_last_line_with_invalid_hash(jr):
     fill_journal(jr, 2)
     rewrite_line(jr.path, 1, lambda b: b.replace(b'"c1"', b'"zz"'))
     with pytest.raises(JournalCorruptError):
         jr.append("alert", {}, 9)
 
 
-def test_verify_json_illisible_et_ligne_vide(jr):
+def test_verify_unreadable_json_and_empty_line(jr):
     fill_journal(jr, 3)
-    rewrite_line(jr.path, 1, lambda b: b"{pas du json")
+    rewrite_line(jr.path, 1, lambda b: b"{not json")
     rep = verify(jr.path)
     assert rep.errors[0].code == "bad_json" and rep.errors[0].line == 2
     assert "seq_gap" in rep.codes()
 
 
-def test_lecture_du_dernier_avec_grosse_ligne(jr):
+def test_read_last_with_large_line(jr):
     jr.append("alert", {"m": "a"}, 1)
     jr.append("decision_received", {"raw_text": "x" * 300_000}, 2)
     assert jr.last()["seq"] == 1
@@ -210,11 +210,11 @@ def test_lecture_du_dernier_avec_grosse_ligne(jr):
     assert jr.verify().ok
 
 
-def test_serialisation_des_contrats(jr):
+def test_contracts_serialization(jr):
     intent = Intent("i1", "llm:a", 100, "BTC/EUR", Side.BUY, 1500, 300, 24, 400, 70)
     verdict = Verdict("i1", False, ("MAX_ORDER_SIZE", "TOO_SOON"), 0, 0, "ab")
     fill = Fill(
-        "i1", "llm:a", "BTC/EUR", Side.SELL, 5, 50_000_000_000, 7, 123, "paper", "pessimiste-v1", "stop"
+        "i1", "llm:a", "BTC/EUR", Side.SELL, 5, 50_000_000_000, 7, 123, "paper", "pessimistic-v1", "stop"
     )
     bar = Bar("BTC/EUR", 14400, 0, 1, 2, 1, 2, 10)
     quote = Quote("BTC/EUR", 5, 99, 101)
@@ -225,7 +225,7 @@ def test_serialisation_des_contrats(jr):
         ("bar", bar, bar_from_payload),
         ("quote", quote, quote_from_payload),
     ]:
-        rec = jr.append(typ, obj, 1)  # dataclasse acceptée directement
+        rec = jr.append(typ, obj, 1)  # dataclass accepted directly
         assert back(rec["payload"]) == obj
     assert jr.events()[0]["payload"]["side"] == "buy"
     assert type(jr.events()[0]["payload"]["side"]) is str
@@ -233,21 +233,21 @@ def test_serialisation_des_contrats(jr):
     assert to_payload(fill)["side"] == "sell"
 
 
-def test_champs_ajoutes_au_payload_sont_ignores_en_relecture():
+def test_fields_added_to_payload_are_ignored_on_reread():
     p = {**to_payload(Quote("BTC/EUR", 5, 99, 101)), "extra": 1}
     assert quote_from_payload(p) == Quote("BTC/EUR", 5, 99, 101)
 
 
 WORKER = """
 import sys
-from arene.journal import Journal
+from arena.journal import Journal
 j = Journal(sys.argv[1])
 for i in range(int(sys.argv[3])):
     j.append("alert", {"worker": sys.argv[2], "i": i}, 1_700_000_000 + i)
 """
 
 
-def test_concurrence_deux_processus(tmp_path):
+def test_concurrency_two_processes(tmp_path):
     path = tmp_path / "events.jsonl"
     n = 60
     procs = [

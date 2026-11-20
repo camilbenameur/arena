@@ -1,0 +1,27 @@
+[
+ {
+  "name": "Persistent funding carry with entry and exit hysteresis",
+  "mechanism": "Long spot and short perp of equal notional on each pair whose average funding over the last L days (annualized rate, sum of the actual settlements) exceeds an entry threshold. The position is kept until this smoothed funding falls below entry_threshold x exit_ratio (hysteresis: the exit threshold is clearly lower than the entry one). Equal weights on the selected pairs, capped per pair, sum of spot weights <= 1, the rest in cash. The aim is to capture positive funding, which is autocorrelated over time, while paying the round trip (~1.4%) as rarely as possible: a position must on average last long enough to amortize that cost. No direction is taken: the perp leg neutralizes the spot.\n",
+  "verdict": "discarded"
+ },
+ {
+  "name": "Cross-sectional selection of the pairs with the highest funding, with a rank buffer",
+  "mechanism": "Each day the eligible pairs (spot and perp) are ranked by average funding smoothed over a fixed window. The top k are held hedged (long spot, short perp of equal notional), at equal weights, sum of spot weights <= 1, ONLY if their smoothed funding exceeds a positive floor (otherwise cash). To limit turnover, a pair already held is sold only when its rank exceeds k + buffer (rank hysteresis); a pair not held enters only if its rank is <= k. The mechanism is cross-sectional: the dispersion of funding across pairs is larger than that of its average level, and the carry trader picks the pair where leverage is most in demand, rather than holding all pairs.\n",
+  "verdict": "discarded"
+ },
+ {
+  "name": "Carry filtered by basis regime and extreme funding",
+  "mechanism": "Persistent funding carry (entry if the 30-day average funding > threshold, capped equal weights, sum of spot weights <= 1) with a regime filter that exits or forbids entry when the tail risk of the carry is high. Two regime signals, computed from the 1h bars and the funding: (i) extreme funding, i.e. smoothed funding above a ceiling (very concentrated long leverage, hence a risk of abrupt deleveraging, margin calls and basis gaps); (ii) smoothed perp/spot basis (average of the 24 relative perp-spot gaps over the day, then over 5 days) below a negative threshold (the perp trades below the spot, a sign of stress and of funding turning negative). Both filters are exits, not entries in the opposite direction: no directional position is ever taken. The goal is to remove the episodes that cause the drawdown while keeping most of the periods of paying carry.\n",
+  "verdict": "discarded"
+ },
+ {
+  "name": "Signed asymmetry of intraday variance (good versus bad volatility), per-pair filter with hysteresis",
+  "mechanism": "Each day, for each listed pair, over the last L days we compute the returns of the 1h bars (close to close of consecutive bars, including across the day boundary; a missing bar is filled with the previous close, zero return), then the upside semivariance RS+ (sum of squares of positive returns) and the downside semivariance RS- (sum of squares of negative returns). The relative signed jump is SJ = (RS+ - RS-) / (RS+ + RS-), between -1 and 1; it is unitless, hence invariant to rescaling of prices and volumes. Rule: buy the pair (weight 1/n_eligible, the rest in USDT) when SJ exceeds +s, and sell it only when SJ falls back below -s. The band of width 2s is the hysteresis that limits turnover. The semivariances separate \"bad\" volatility (carried by declines), which is more persistent and linked to forced selling and leverage, from \"good\" volatility. A pair whose recent variance is dominated by declines is in a phase of forced selling or disengagement, and we stay away from it; a pair whose variance is dominated by rises sees demand settling in. We do not forecast variance; we use it as an indicator of the state of order flow, which the daily bar alone (a single return) does not reveal. Mechanism distinct from F1: no volume or taker data, only the shape of the distribution of 1h returns.\n",
+  "verdict": "discarded"
+ },
+ {
+  "name": "Exit from the spot basket when perpetual funding signals a leveraged crowd",
+  "mechanism": "The perpetual funding rate is the price of bullish leverage. When the average funding across pairs is high relative to its own history (percentile within the history known at the date, never in the future), long leveraged positions are overcrowded; the crypto carry literature links high carry to an increased probability of crashes, with margin calls and cascading liquidations during declines. The rule holds the equal-weighted basket of listed spot pairs, and moves to a reduced exposure (25% of the basket) when the average funding smoothed over L days exceeds the percentile q of its history at the date, returning to the full basket when it falls back below q - 0.2. A minimum holding period of 14 days bounds turnover. The signal is perp but the execution is spot: no perp leg. As long as the funding history is too short (fewer than 365 days) or the perpetual does not exist, the full basket is held. Difference from V1: the signal is a price of leverage, not realized volatility; difference from A/B/T1: no spot price information.\n",
+  "verdict": "discarded"
+ }
+]

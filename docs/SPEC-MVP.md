@@ -1,199 +1,198 @@
-# Spécification du MVP (paper, crypto spot)
+# MVP specification (paper, spot crypto)
 
-Référence : `conception/01-plan-conception.md` (décisions validées par the owner le 11/11/2026 : 1 à 6 du §10).
-Ce document est le contrat entre les modules. Un module qui a besoin d'un écart le signale au lieu de l'inventer.
+This document is the contract between modules. A module that needs a deviation reports it instead of inventing one.
 
-## 0. Règles pour quiconque écrit du code ici (agents compris)
+## 0. Rules for anyone writing code here
 
-- **Aucun ordre réel, aucune clé de plateforme** dans le MVP. Tout est `venue_mode = "paper"`.
-- **Ne jamais lire, afficher, copier ni créer** quoi que ce soit dans `~/.config/arene/secrets/` : c'est the owner qui y dépose les secrets. Le code lit ces fichiers à l'exécution ; les tests utilisent des faux.
-- Ne rien écrire hors de ce dépôt. Ne pas toucher à `~/dev/labo-trading` (lecture seule permise) ni à `~/dev/_labo-trading-scelle` (ni lecture ni écriture).
-- Pas de dépendance nouvelle sans la déclarer dans le compte rendu (le `pyproject.toml` est tenu par l'orchestrateur ; ne pas lancer `uv add`).
-- Python 3.12, `uv run pytest`. Tests sans réseau par défaut ; un test réseau porte le marqueur `reseau`.
-- Commentaires et docstrings en français, noms de code en anglais ou français cohérents avec `arene/types.py`.
+- **No real orders, no venue keys** in the MVP. Everything is `venue_mode = "paper"`.
+- **Never read, print, copy or create** anything in `~/.config/arena/secrets/`: secrets are placed there by the operator. The code reads these files at run time; tests use fakes.
+- Write nothing outside this repository. Do not touch the separate lab repository (not public); the sealed lab holdout (not public) is neither read nor written.
+- No new dependency without declaring it in the report (`pyproject.toml` is maintained centrally; do not run `uv add`).
+- Python 3.12, `uv run pytest`. Tests run without network by default; a network test carries the `network` marker.
+- Comments and docstrings in English; code names in English, consistent with `arena/types.py`.
 
-## 1. Périmètre et promesse
+## 1. Scope and promise
 
-Une arène de 3 modèles Claude (Haiku 5.5, Sonnet 5.5, Opus 5.5) et de témoins, qui décide toutes les 4 h sur la crypto spot EUR de Kraken, en paper avec des frais pessimistes. Chaque décision, chaque fill simulé et chaque chiffre est journalisé, rejouable et affiché sur un dashboard privé étiqueté SIMULÉ. Des alertes fonctionnent même si the host tombe. Pas de promesse de P&L, pas de classement.
+An arena of 3 Claude models (Haiku 5.5, Sonnet 5.5, Opus 5.5) and benchmarks, which decides every 4 h on Kraken's spot EUR crypto, in paper trading with pessimistic fees. Every decision, every simulated fill and every figure is journaled, replayable and displayed on a private dashboard labelled SIMULATED. Alerts work even if the host goes down. No P&L promise, no ranking.
 
-Univers (6 paires, toutes cotées en EUR chez Kraken et en USDT chez Binance) :
+Universe (6 pairs, all listed in EUR on Kraken and in USDT on Binance):
 
-| Symbole | Kraken (altname) | Binance (signal E0065 seulement) | tick | ordre min | coût min |
+| Symbol | Kraken (altname) | Binance (E0065 signal only) | tick | min order | min cost |
 |---|---|---|---|---|---|
-| BTC/EUR | XBTEUR | BTCUSDT | 0,1 € | 0,00006 | 0,45 € |
-| ETH/EUR | ETHEUR | ETHUSDT | 0,01 € | 0,002 | 0,45 € |
-| SOL/EUR | SOLEUR | SOLUSDT | 0,01 € | 0,05 | 0,45 € |
-| XRP/EUR | XRPEUR | XRPUSDT | 0,00001 € | 4 | 0,45 € |
-| LINK/EUR | LINKEUR | LINKUSDT | 0,00001 € | 0,35 | 0,45 € |
-| LTC/EUR | LTCEUR | LTCUSDT | 0,01 € | 0,08 | 0,45 € |
+| BTC/EUR | XBTEUR | BTCUSDT | €0.1 | 0.00006 | €0.45 |
+| ETH/EUR | ETHEUR | ETHUSDT | €0.01 | 0.002 | €0.45 |
+| SOL/EUR | SOLEUR | SOLUSDT | €0.01 | 0.05 | €0.45 |
+| XRP/EUR | XRPEUR | XRPUSDT | €0.00001 | 4 | €0.45 |
+| LINK/EUR | LINKEUR | LINKUSDT | €0.00001 | 0.35 | €0.45 |
+| LTC/EUR | LTCEUR | LTCUSDT | €0.01 | 0.08 | €0.45 |
 
-(Valeurs relevées sur `https://api.kraken.com/0/public/AssetPairs` le 11/11/2026 ; à recharger au démarrage.)
+(Values read from `https://api.kraken.com/0/public/AssetPairs` on 2026-11-11; to be reloaded at startup.)
 
-## 2. Unités
+## 2. Units
 
-Voir `arene/types.py` : µEUR entiers, quantités en 1e-8, timestamps en secondes UTC, arrondis défavorables. Aucun float dans le chemin de l'argent.
+See `arena/types.py`: integer µEUR, quantities in 1e-8, timestamps in UTC seconds, unfavorable rounding. No float anywhere in the money path.
 
-## 3. Arborescence
+## 3. Layout
 
 ```
-arene/
-  types.py          contrats (orchestrateur)
-  journal.py        journal JSONL chaîné, lecture, vérification, rejeu          [vague 1, A]
-  ledger.py         état des portefeuilles dérivé du journal, P&L, SQLite dérivé [vague 1, A]
-  data/kraken.py    bougies 4 h, ticker, AssetPairs (API publique)              [vague 1, B]
-  data/binance.py   bougies 1 j publiques (taker_buy_base) pour E0065           [vague 1, B]
-  data/store.py     cache local des bougies, détection des trous                 [vague 1, B]
-  risk/policy.py    chargement et cohérence de config/policy.toml               [vague 1, C]
-  risk/riskd.py     evaluate(intent, état, marché, politique, compteurs)        [vague 1, C]
-  deciders/llm.py   harnais des décideurs LLM (instantané, prompt, schéma)      [vague 1, E]
-  deciders/prompt/  prompt système versionné
-  sim/fills.py      simulateur de fills pessimiste, stops, détention max        [vague 2, D]
-  sim/executor.py   machine à états d'ordre, exécution simulée                  [vague 2, D]
-  temoins/          panier, 60/40, E0065 adapté, aléatoire (vivant + 1 000 traj.) [vague 2, F]
-  stats.py          rendements, drawdown, Sharpe et intervalle bootstrap par blocs [vague 3]
-  cycle.py          un cycle de 4 h de bout en bout, idempotent                  [vague 3]
-  ops/              heartbeat, ntfy, coupe-circuit, dormance                    [vague 3]
-  site/             générateur du dashboard statique                            [vague 3]
-  cli.py            `arene <commande>`                                          [vague 3]
-config/policy.toml  politique de risque paper (hachée dans le journal à chaque chargement)
-config/arene.toml   univers, capital, cadence, modèles, budgets
-var/                état d'exécution, ignoré par git (journal, cache, site construit)
-tests/              un fichier de test par module, scénarios d'or dans tests/golden/
+arena/
+  types.py          contracts
+  journal.py        hash-chained JSONL journal, reading, verification, replay
+  ledger.py         portfolio state derived from the journal, P&L, derived SQLite
+  data/kraken.py    4h candles, ticker, AssetPairs (public API)
+  data/binance.py   public 1d candles (taker_buy_base) for E0065
+  data/store.py     local candle cache, gap detection
+  risk/policy.py    loading and consistency of config/policy.toml
+  risk/riskd.py     evaluate(intent, state, market, policy, counters)
+  deciders/llm.py   LLM decider harness (snapshot, prompt, schema)
+  deciders/prompt/  versioned system prompt
+  sim/fills.py      pessimistic fill simulator, stops, maximum holding
+  sim/executor.py   order state machine, simulated execution
+  benchmarks/       basket, 60/40, adapted E0065, random (live + 1,000 paths)
+  stats.py          returns, drawdown, Sharpe and block-bootstrap interval
+  cycle.py          one 4h cycle end to end, idempotent
+  ops/              heartbeat, ntfy, circuit breaker, dormancy
+  site/             static dashboard generator
+  cli.py            `arena <command>`
+config/policy.toml  paper risk policy (hashed into the journal at each load)
+config/arena.toml   universe, capital, cadence, models, budgets
+var/                runtime state, ignored by git (journal, cache, built site)
+tests/              one test file per module, golden scenarios in tests/golden/
 ```
 
-## 4. Journal (source de vérité)
+## 4. Journal (source of truth)
 
-- Fichier `var/journal/events.jsonl`, une ligne par événement, append-only.
-- Champs : `seq` (entier, depuis 0, sans trou), `ts` (s UTC), `type`, `payload` (objet), `prev_hash` (hex, `"0"*64` pour seq 0), `hash`.
-- `hash = sha256(canonical(record sans "hash"))`, `canonical` = `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` encodé en UTF-8. Aucun float dans un événement (entiers, chaînes, booléens, null, listes, objets).
-- Écriture : verrou `fcntl.flock` exclusif sur un fichier `.lock`, relecture de la dernière ligne pour `seq`/`prev_hash`, écriture, `flush` + `os.fsync`. Une ligne tronquée en fin de fichier (crash) est détectée par `verify()` et signalée, jamais réparée en silence.
-- `verify(path) -> VerifyReport` : chaîne intacte, seq continus, aucun float.
-- Types d'événements (payload minimal ; un module peut ajouter des champs, jamais en retirer) :
+- File `var/journal/events.jsonl`, one line per event, append-only.
+- Fields: `seq` (integer, from 0, no gaps), `ts` (UTC s), `type`, `payload` (object), `prev_hash` (hex, `"0"*64` for seq 0), `hash`.
+- `hash = sha256(canonical(record without "hash"))`, `canonical` = `json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` encoded as UTF-8. No float in an event (integers, strings, booleans, null, lists, objects).
+- Writing: exclusive `fcntl.flock` lock on a `.lock` file, re-read of the last line for `seq`/`prev_hash`, write, `flush` + `os.fsync`. A truncated line at the end of the file (crash) is detected by `verify()` and reported, never silently repaired.
+- `verify(path) -> VerifyReport`: chain intact, seq continuous, no float.
+- Event types (minimal payload; a module may add fields, never remove any):
 
 | type | payload |
 |---|---|
 | `config_loaded` | `policy_sha256`, `config_sha256`, `prompt_sha256`, `git_head` |
 | `cycle_started` / `cycle_completed` | `cycle` |
-| `bar` | champs de `Bar` (seulement les barres utilisées par un cycle) |
-| `quote` | champs de `Quote` |
-| `portfolio_opened` | `portfolio`, `kind` (`llm`/`temoin`), `capital_ueur`, `venue_mode` |
+| `bar` | fields of `Bar` (only the bars used by a cycle) |
+| `quote` | fields of `Quote` |
+| `portfolio_opened` | `portfolio`, `kind` (`llm`/`benchmark`), `capital_ueur`, `venue_mode` |
 | `decision_requested` | `portfolio`, `cycle`, `model`, `snapshot_sha256` |
-| `decision_received` | `portfolio`, `cycle`, `model_requested`, `model_returned`, `raw_text`, `parsed` (ou null), `parse_error`, `input_tokens`, `output_tokens`, `cost_uusd` (micro-dollars) , `latency_ms` |
+| `decision_received` | `portfolio`, `cycle`, `model_requested`, `model_returned`, `raw_text`, `parsed` (or null), `parse_error`, `input_tokens`, `output_tokens`, `cost_uusd` (micro-dollars), `latency_ms` |
 | `decision_skipped` | `portfolio`, `cycle`, `reason` (`no_key`, `budget`, `frozen`, `halted`, `kill_switch`, `api_error`) |
-| `intent` | champs de `Intent` |
-| `risk_verdict` | champs de `Verdict` |
+| `intent` | fields of `Intent` |
+| `risk_verdict` | fields of `Verdict` |
 | `order_state` | `order_id`, `state`, `detail` |
-| `fill` | champs de `Fill` |
+| `fill` | fields of `Fill` |
 | `stop_set` | `portfolio`, `symbol`, `stop_ueur` |
 | `equity` | `portfolio`, `cycle`, `cash_ueur`, `positions_value_ueur`, `equity_ueur` |
 | `portfolio_frozen` / `portfolio_halted` / `portfolio_resumed` | `portfolio`, `reason`, `until_ts` |
 | `kill_switch` | `active`, `source` |
-| `alert` | `level` (`info`/`action`/`panique`), `code`, `message` |
+| `alert` | `level` (`info`/`action`/`panic`), `code`, `message` |
 
-- `ledger.replay(events) -> dict[str, PortfolioState]` reconstruit tout l'état uniquement à partir du journal. Le SQLite `var/ledger.sqlite` est une vue dérivée, reconstructible à tout moment (`arene rebuild-ledger`), jamais une source.
+- `ledger.replay(events) -> dict[str, PortfolioState]` rebuilds the entire state from the journal alone. The SQLite file `var/ledger.sqlite` is a derived view, rebuildable at any time (`arena rebuild-ledger`), never a source.
 
-## 5. Données
+## 5. Data
 
-- Kraken `GET /0/public/OHLC?pair=<altname>&interval=240&since=<ts>` : la dernière barre renvoyée est **en cours**, l'exclure. Conversion des prix texte en µEUR **sans passer par float** (`Decimal`). Volume en unités 1e-8.
-- Kraken `GET /0/public/Ticker?pair=...` : `a[0]` ask, `b[0]` bid → `Quote`.
-- Kraken `GET /0/public/AssetPairs` : tick, ordermin, costmin.
-- Binance `GET /api/v3/klines?symbol=...&interval=1d` : seulement pour le signal du témoin E0065 (colonne 9 = taker_buy_base, colonne 5 = volume). Données publiques, aucun compte.
-- Cache `var/data/<source>/<symbol>_<interval>.jsonl`, dédupliqué par `ts`. `gaps()` liste les barres manquantes. Respect des limites : 1 requête/s, 3 tentatives, backoff exponentiel, délai max 10 s.
-- Le snapshot donné aux modèles ne contient **que** des barres closes avant le cycle : test d'absence de fuite du futur.
+- Kraken `GET /0/public/OHLC?pair=<altname>&interval=240&since=<ts>`: the last bar returned is **still forming**; exclude it. Conversion of text prices to µEUR **without going through float** (`Decimal`). Volume in 1e-8 units.
+- Kraken `GET /0/public/Ticker?pair=...`: `a[0]` ask, `b[0]` bid -> `Quote`.
+- Kraken `GET /0/public/AssetPairs`: tick, ordermin, costmin.
+- Binance `GET /api/v3/klines?symbol=...&interval=1d`: only for the E0065 benchmark signal (column 9 = taker_buy_base, column 5 = volume). Public data, no account.
+- Cache `var/data/<source>/<symbol>_<interval>.jsonl`, deduplicated by `ts`. `gaps()` lists the missing bars. Limits respected: 1 request/s, 3 attempts, exponential backoff, max delay 10 s.
+- The snapshot given to the models contains **only** bars closed before the cycle: a test checks there is no future leakage.
 
-## 6. Portefeuilles
+## 6. Portfolios
 
-- Capital paper : **1 000 € par portefeuille** (proche du réel futur, pour que les frais pèsent comme en vrai).
-- Portefeuilles : `llm:claude-haiku-5-5`, `llm:claude-sonnet-5-5`, `llm:claude-opus-5-5`, `temoin:panier`, `temoin:6040`, `temoin:e0065`, `temoin:aleatoire`.
-- Long seulement, pas de levier, cash en EUR (pas d'intérêt).
+- Paper capital: **€1,000 per portfolio** (close to the future real amount, so that fees weigh as they would in reality).
+- Portfolios: `llm:claude-haiku-5-5`, `llm:claude-sonnet-5-5`, `llm:claude-opus-5-5`, `benchmark:basket`, `benchmark:sixty-forty`, `benchmark:e0065`, `benchmark:random`.
+- Long only, no leverage, cash in EUR (no interest).
 
-## 7. Risque (`riskd`) : politique paper
+## 7. Risk (`riskd`): paper policy
 
-`config/policy.toml` (valeurs paper ; la politique réelle sera plus stricte, voir le plan §4). Les témoins `panier`, `6040`, `e0065` sont des références et ne passent pas par les plafonds de taille ; `temoin:aleatoire` passe par **exactement** les mêmes règles que les LLM.
+`config/policy.toml` (paper values; the real policy will be stricter). The `basket`, `sixty-forty` and `e0065` benchmarks are references and do not go through the size caps; `benchmark:random` goes through **exactly** the same rules as the LLMs.
 
-| clé | valeur | règle |
+| key | value | rule |
 |---|---|---|
-| `symbols` | les 6 | liste blanche (code `NOT_WHITELISTED`) |
-| `max_order_bp` | 2000 | achat ≤ 20 % de l'equity (`MAX_ORDER_SIZE`) |
-| `max_position_bp` | 4000 | position par symbole ≤ 40 % de l'equity après l'ordre (`MAX_POSITION`) |
-| `max_exposure_bp` | 10000 | exposition totale ≤ 100 %, cash ≥ 0 après frais (`MAX_EXPOSURE`, `INSUFFICIENT_CASH`) |
-| `max_trades_per_day` | 2 | par portefeuille, fenêtre glissante 24 h, ventes comprises (`DAILY_TRADES`) |
-| `max_orders_per_minute` | 20 | tous portefeuilles ; 7 portefeuilles × 2 actions décident au même instant en paper ; à ramener à 5 par plateforme en réel (`ORDER_RATE`) |
+| `symbols` | the 6 | whitelist (code `NOT_WHITELISTED`) |
+| `max_order_bp` | 2000 | buy <= 20% of equity (`MAX_ORDER_SIZE`) |
+| `max_position_bp` | 4000 | position per symbol <= 40% of equity after the order (`MAX_POSITION`) |
+| `max_exposure_bp` | 10000 | total exposure <= 100%, cash >= 0 after fees (`MAX_EXPOSURE`, `INSUFFICIENT_CASH`) |
+| `max_trades_per_day` | 2 | per portfolio, sliding 24 h window, sells included (`DAILY_TRADES`) |
+| `max_orders_per_minute` | 20 | all portfolios; 7 portfolios x 2 actions decide at the same instant in paper; to be brought down to 5 per venue in live trading (`ORDER_RATE`) |
 | `min_interval_same_symbol_s` | 14400 | anti-oscillation (`TOO_SOON`) |
-| `stop_bp_min` / `stop_bp_max` | 100 / 2500 | achat sans stop ou hors bornes → rejet (`STOP_REQUIRED`, `STOP_RANGE`) |
-| `max_cost_to_expected_move_pct` | 33 | coût aller-retour estimé ≤ 33 % du mouvement attendu déclaré (`EDGE_TOO_SMALL`) ; mouvement absent → rejet |
-| `max_holding_s` | 604800 | 7 jours, sortie forcée par le simulateur |
-| `daily_loss_freeze_bp` | 500 | perte ≥ 5 % de l'equity sur 24 h → gel 24 h (`FROZEN`) |
-| `drawdown_halt_bp` | 2000 | drawdown ≥ 20 % depuis le plus haut → mise à plat et arrêt jusqu'à `arene resume` (`HALTED`) |
-| `monthly_fee_budget_bp` | 100 | frais du mois civil ≥ 1 % de l'equity de début de mois → gel jusqu'au mois suivant (`FEE_BUDGET`) |
-| `max_quote_deviation_bp` | 300 | mid du quote à plus de 3 % de la dernière clôture → aucune entrée (`PRICE_SANITY`) |
-| `max_spread_multiple` | 3 | spread > 3 × médiane des 20 derniers quotes → aucune entrée (`SPREAD_ANOMALY`) |
-| `min_order_ueur` | max(costmin Kraken, 5 €) | (`ORDER_TOO_SMALL`) |
+| `stop_bp_min` / `stop_bp_max` | 100 / 2500 | buy without a stop or outside the bounds -> rejection (`STOP_REQUIRED`, `STOP_RANGE`) |
+| `max_cost_to_expected_move_pct` | 33 | estimated round-trip cost <= 33% of the declared expected move (`EDGE_TOO_SMALL`); missing move -> rejection |
+| `max_holding_s` | 604800 | 7 days, exit forced by the simulator |
+| `daily_loss_freeze_bp` | 500 | loss >= 5% of equity over 24 h -> 24 h freeze (`FROZEN`) |
+| `drawdown_halt_bp` | 2000 | drawdown >= 20% from the peak -> flatten and halt until `arena resume` (`HALTED`) |
+| `monthly_fee_budget_bp` | 100 | calendar-month fees >= 1% of start-of-month equity -> freeze until the next month (`FEE_BUDGET`) |
+| `max_quote_deviation_bp` | 300 | quote mid more than 3% from the last close -> no entry (`PRICE_SANITY`) |
+| `max_spread_multiple` | 3 | spread > 3 x the median of the last 20 quotes -> no entry (`SPREAD_ANOMALY`) |
+| `min_order_ueur` | max(Kraken costmin, €5) | (`ORDER_TOO_SMALL`) |
 
-- `evaluate()` est une **fonction pure** : mêmes entrées → même verdict. Les compteurs (trades sur 24 h, ordres par minute, frais du mois) sont calculés **à partir du journal** et passés en argument.
-- Une vente ne peut jamais dépasser la position détenue (pas de vente à découvert : `NO_SHORT`). Les ventes ne sont pas soumises à `EDGE_TOO_SMALL` ni aux plafonds de taille.
-- Coupe-circuit (fichier `var/KILL` ou `~/.config/arene/KILL`) : aucune entrée, les portefeuilles LLM et aléatoire sont mis à plat au cycle suivant.
-- `policy.py` vérifie la cohérence au chargement (bornes, `stop_bp_min < stop_bp_max`, budgets positifs, symboles connus) et refuse de démarrer sinon. Hash de la politique dans chaque verdict.
+- `evaluate()` is a **pure function**: same inputs -> same verdict. The counters (trades over 24 h, orders per minute, monthly fees) are computed **from the journal** and passed as an argument.
+- A sell can never exceed the position held (no short selling: `NO_SHORT`). Sells are not subject to `EDGE_TOO_SMALL` nor to the size caps.
+- Circuit breaker (file `var/KILL` or `~/.config/arena/KILL`): no entries; the LLM and random portfolios are flattened at the next cycle.
+- `policy.py` checks consistency at load time (bounds, `stop_bp_min < stop_bp_max`, positive budgets, known symbols) and refuses to start otherwise. Policy hash in every verdict.
 
-## 8. Exécution simulée (`fill_model_version = "pessimiste-v1"`)
+## 8. Simulated execution (`fill_model_version = "pessimiste-v1"`)
 
-- Ordres au marché uniquement (taker). Achat au `ask × (1 + 5 bp)`, vente au `bid × (1 − 5 bp)`, arrondi au tick défavorablement.
-- Frais : `0,50 %` du notional (Kraken Pro taker de base 0,40 % majoré de 25 %), arrondis vers le haut.
-- Quantité arrondie vers le bas à 1e-8 ; rejet si sous `lot_min_qty` ou `cost_min`.
-- Stops : posés à l'entrée (`stop_ueur = prix d'entrée × (1 − stop_bp/10000)`). À chaque cycle, pour chaque barre 4 h close depuis le dernier cycle : si `low ≤ stop`, sortie au `min(stop, open)` (gap) moins 5 bp, frais compris (`reason = "stop"`).
-- Détention maximale : sortie forcée au bid du cycle (`reason = "max_holding"`).
-- Machine à états : `INTENT → RISK_APPROVED | RISK_REJECTED → SUBMITTING → ACKED → FILLED`, chaque transition journalisée. En paper `UNKNOWN` est simulable pour les tests (injection de faute) : on n'émet jamais de second ordre pour la même intention, on interroge l'état ; un ordre `UNKNOWN` plus de 2 cycles gèle le portefeuille.
-- Idempotence : un `intent_id` déjà vu dans le journal n'est jamais réexécuté.
+- Market orders only (taker). Buy at `ask x (1 + 5 bp)`, sell at `bid x (1 - 5 bp)`, rounded to the tick unfavorably.
+- Fees: `0.50%` of the notional (Kraken Pro base taker 0.40% plus 25%), rounded up.
+- Quantity rounded down to 1e-8; rejected if below `lot_min_qty` or `cost_min`.
+- Stops: set at entry (`stop_ueur = entry price x (1 - stop_bp/10000)`). At each cycle, for each closed 4h bar since the last cycle: if `low <= stop`, exit at `min(stop, open)` (gap) minus 5 bp, fees included (`reason = "stop"`).
+- Maximum holding: forced exit at the cycle's bid (`reason = "max_holding"`).
+- State machine: `INTENT -> RISK_APPROVED | RISK_REJECTED -> SUBMITTING -> ACKED -> FILLED`, each transition journaled. In paper mode `UNKNOWN` can be simulated for tests (fault injection): a second order is never issued for the same intent, the state is queried instead; an `UNKNOWN` order lasting more than 2 cycles freezes the portfolio.
+- Idempotency: an `intent_id` already seen in the journal is never re-executed.
 
-## 9. Décideurs LLM
+## 9. LLM deciders
 
-- SDK `anthropic` (Python). Modèles : `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`. L'identifiant renvoyé par l'API est journalisé ; alerte s'il diffère du demandé.
-- Clé lue à l'exécution dans `$CREDENTIALS_DIRECTORY/anthropic_api_key`, sinon `~/.config/arene/secrets/anthropic_api_key`. **Pas de clé → `decision_skipped` avec `no_key`**, le reste de l'arène tourne.
-- Instantané (même pour les 3 modèles) : horodatage du cycle, pour chaque symbole les 42 dernières barres 4 h (7 jours) résumées en features calculées par le code (rendements 4 h / 24 h / 7 j, volatilité réalisée, position du prix dans la fourchette 7 j, volume relatif) + les 12 dernières clôtures ; positions, cash, equity, stops, P&L latent ; règles de risque en clair ; 5 dernières décisions du portefeuille (résumé court). Aucun texte web.
-- Sortie demandée en JSON (outil ou sortie structurée du SDK) :
-  `{"actions": [{"symbol", "side": "buy"|"sell", "size_pct": 0-20 (achat, % de l'equity) ou 0-100 (vente, % de la position), "stop_pct": 1-25, "horizon_h", "expected_move_pct", "confidence_pct"}], "justification": "≤ 1 200 caractères"}` ; 0 à 2 actions ; `actions: []` = ne rien faire.
-- Conversion en `Intent` par le code (pourcentages → points de base, entiers). JSON invalide → `parse_error`, aucune intention, pas de nouvelle tentative au-delà de 1.
-- Budget par modèle et par jour (USD) dans `config/arene.toml` : Haiku 0,10 ; Sonnet 0,50 ; Opus 0,90 (≈ 45 $/mois au total, sous la limite de 50 $ de la clé). Budget dépassé → `decision_skipped budget`. Coût calculé depuis les tokens et une table de tarifs dans la config (Opus 4/20, Sonnet 2/10, Haiku 0,10/0,50 $ par million de tokens, entrée/sortie).
-- `max_tokens` borné, `temperature` par défaut, délai max 120 s, 2 tentatives sur erreur réseau ou 5xx/529, jamais sur 4xx.
-- Prompt système versionné dans `arene/deciders/prompt/v1.md`, hash journalisé.
-- Tests avec un client factice (aucun appel réseau) : JSON valide, invalide, hors liste, tailles négatives ou énormes, injection dans la justification, dépassement de budget, modèle renvoyé différent. 20 instantanés figés dans `tests/golden/snapshots/` vérifiés sur des invariants (pas de réponse exacte).
+- `anthropic` SDK (Python). Models: `claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`. The identifier returned by the API is journaled; alert if it differs from the one requested.
+- Key read at run time from `$CREDENTIALS_DIRECTORY/anthropic_api_key`, otherwise `~/.config/arena/secrets/anthropic_api_key`. **No key -> `decision_skipped` with `no_key`**; the rest of the arena keeps running.
+- Snapshot (same for the 3 models): cycle timestamp, for each symbol the last 42 4h bars (7 days) summarized as features computed by the code (4 h / 24 h / 7 d returns, realized volatility, price position within the 7-day range, relative volume) + the last 12 closes; positions, cash, equity, stops, unrealized P&L; risk rules in plain language; the portfolio's last 5 decisions (short summary). No web text.
+- Requested output as JSON (tool or SDK structured output):
+  `{"actions": [{"symbol", "side": "buy"|"sell", "size_pct": 0-20 (buy, % of equity) or 0-100 (sell, % of the position), "stop_pct": 1-25, "horizon_h", "expected_move_pct", "confidence_pct"}], "justification": "<= 1,200 characters"}`; 0 to 2 actions; `actions: []` = do nothing.
+- Conversion to `Intent` by the code (percentages -> basis points, integers). Invalid JSON -> `parse_error`, no intent, no further retry beyond 1.
+- Per-model daily budget (USD) in `config/arena.toml`: Haiku 0.10; Sonnet 0.50; Opus 0.90 (about $45/month in total, under the key's $50 limit). Budget exceeded -> `decision_skipped budget`. Cost computed from the tokens and a price table in the config (Opus 4/20, Sonnet 2/10, Haiku 0.10/0.50 $ per million tokens, input/output).
+- `max_tokens` bounded, default `temperature`, max timeout 120 s, 2 attempts on network error or 5xx/529, never on 4xx.
+- System prompt versioned in `arena/deciders/prompt/v1.md`, hash journaled.
+- Tests with a fake client (no network call): valid JSON, invalid, off-list, negative or huge sizes, injection in the justification, budget overrun, different returned model. 20 frozen snapshots in `tests/golden/snapshots/` checked against invariants (not exact responses).
 
-## 10. Témoins
+## 10. Benchmarks
 
-- `temoin:panier` : au premier cycle, 1/6 de l'equity sur chaque symbole (frais compris), puis conservé (buy-and-hold).
-- `temoin:6040` : 60 % BTC / 40 % cash, rééquilibré le premier cycle de chaque mois civil.
-- `temoin:e0065` : règle F1 du labo (`~/dev/labo-trading/hypotheses/F1-pression-taker.md`), paramètres L = 20, k = 3, H = 10, **adaptée** : univers des 6 paires, ratio taker calculé sur les bougies 1 j Binance USDT, exécution au prix Kraken EUR ; reconstitution tous les H jours de données au premier cycle après 00:00 UTC. Mentionné « adapté » partout.
-- `temoin:aleatoire` : à chaque cycle, avec une graine dérivée du cycle, tire 0 à 2 actions dans la même distribution d'espace d'actions que les LLM (symbole uniforme, côté uniforme parmi les possibles, taille uniforme 1-20 %, stop 2-10 %, mouvement attendu 5-15 %), passe par `riskd`. Hors ligne (au moment de construire le site), 1 000 trajectoires rejouées sur les mêmes cycles et les mêmes quotes donnent la distribution du rendement ; on affiche le rang de chaque LLM.
+- `benchmark:basket`: at the first cycle, 1/6 of equity on each symbol (fees included), then held (buy-and-hold).
+- `benchmark:sixty-forty`: 60% BTC / 40% cash, rebalanced at the first cycle of each calendar month.
+- `benchmark:e0065`: rule F1 of the separate lab repository (not public; "persistent taker buying pressure"), parameters L = 20, k = 3, H = 10, **adapted**: universe of the 6 pairs, taker ratio computed on Binance USDT 1d candles, execution at the Kraken EUR price; reconstituted every H days of data at the first cycle after 00:00 UTC. Labelled "adapted" everywhere.
+- `benchmark:random`: at each cycle, with a seed derived from the cycle, draws 0 to 2 actions from the same action-space distribution as the LLMs (uniform symbol, uniform side among the possible ones, uniform size 1-20%, stop 2-10%, expected move 5-15%), goes through `riskd`. Offline (when building the site), 1,000 paths replayed over the same cycles and the same quotes give the return distribution; the rank of each LLM is displayed.
 
 ## 11. Cycle
 
-`arene cycle` (lancé par un timer systemd utilisateur à HH:05 UTC pour HH ∈ {0,4,8,12,16,20}) :
-1. Charger config et politique (hash), vérifier le journal (`verify`), refuser de tourner si la chaîne est cassée.
-2. Cycle = début de la dernière barre 4 h close + 4 h. Si `cycle_completed` existe déjà pour ce cycle : sortir (idempotence). Si `cycle_started` sans `completed` : reprendre sans réexécuter les intentions déjà vues.
-3. Données (barres, quotes), journaliser celles utilisées.
-4. Stops et détention maximale.
-5. Gel / arrêt / coupe-circuit / dormance.
-6. Témoins, puis décideurs LLM en parallèle (délai max), puis `riskd`, puis exécution simulée.
-7. Equity de chaque portefeuille, `cycle_completed`.
-8. Construction du site, heartbeat externe, alertes.
+`arena cycle` (launched by a systemd user timer at HH:05 UTC for HH in {0,4,8,12,16,20}):
+1. Load config and policy (hash), verify the journal (`verify`), refuse to run if the chain is broken.
+2. Cycle = start of the last closed 4h bar + 4 h. If `cycle_completed` already exists for this cycle: exit (idempotency). If `cycle_started` without `completed`: resume without re-executing the intents already seen.
+3. Data (bars, quotes), journal those used.
+4. Stops and maximum holding.
+5. Freeze / halt / circuit breaker / dormancy.
+6. Benchmarks, then LLM deciders in parallel (max timeout), then `riskd`, then simulated execution.
+7. Equity of each portfolio, `cycle_completed`.
+8. Site build, external heartbeat, alerts.
 
-## 12. Exploitation
+## 12. Operations
 
-- Unités systemd **utilisateur** (`~/.config/systemd/user/`, linger actif) : `arene-cycle.service` + `.timer`, `arene-site.service` (sert `var/site/` sur `127.0.0.1:8787`). Fichiers modèles dans `ops/systemd/`, installation par `scripts/install-user-units.sh` (pas de sudo).
-- Heartbeat externe : URL lue dans `~/.config/arene/secrets/healthcheck_url` (Healthchecks.io ou équivalent, compte créé par the owner), pingée à chaque fin de cycle ; `/fail` si le cycle échoue. Le service externe alerte si aucun ping en 4 h 30.
-- Alertes : ntfy, URL dans `~/.config/arene/secrets/ntfy_url` (+ `ntfy_token` facultatif). 3 niveaux ; seul `panique` est prioritaire. Absence de secret → alerte écrite dans le journal seulement.
-- Coupe-circuit : `arene kill` / `arene unkill` (fichier sentinelle), effet au plus tard au cycle suivant ; `arene kill --now` lance un cycle de mise à plat immédiat.
-- Dormance : si `var/ack` (écrit par `arene ack`) a plus de 7 jours, plus aucune entrée ; à 9 jours, mise à plat.
-- `docs/RUNBOOK.md` : une page.
+- systemd **user** units (`~/.config/systemd/user/`, linger enabled): `arena-cycle.service` + `.timer`, `arena-site.service` (serves `var/site/` on `127.0.0.1:8787`). Template files in `ops/systemd/`, installation by `scripts/install-user-units.sh` (no sudo).
+- External heartbeat: URL read from `~/.config/arena/secrets/healthcheck_url` (Healthchecks.io or equivalent, account created by the operator), pinged at the end of each cycle; `/fail` if the cycle fails. The external service alerts if no ping arrives within 4 h 30.
+- Alerts: ntfy, URL in `~/.config/arena/secrets/ntfy_url` (+ optional `ntfy_token`). 3 levels; only `panic` is high priority. Without a secret, the alert is written to the journal only.
+- Circuit breaker: `arena kill` / `arena unkill` (sentinel file), effective at the next cycle at the latest; `arena kill --now` launches an immediate flattening cycle.
+- Dormancy: if `var/ack` (written by `arena ack`) is more than 7 days old, no more entries; at 9 days, flatten.
+- `docs/RUNBOOK.md`: one page.
 
-## 13. Dashboard (privé)
+## 13. Dashboard (private)
 
-- Généré par `arene build-site` dans `var/site/` : `index.html`, `modele/<id>.html`, `methode.html`, `data/*.json`. HTML/CSS/JS sans chaîne de build ; graphiques uPlot copié dans `site/vendor/` avec son hash.
-- Bandeau permanent **SIMULÉ (paper)**. Champ `venue_mode` obligatoire dans chaque JSON publié, validé par un test.
-- Vue d'ensemble : equity des 7 portefeuilles en base 100, rendement net, drawdown max, frais, nombre de trades, coût d'API par modèle, rang dans la distribution aléatoire, mention « non distinguable du hasard » tant que l'écart n'est pas significatif.
-- Page modèle : courbe, positions, journal des décisions (justification publiée dès la décision, décision du propriétaire du 12/11/2026 ; elle était affichée 24 h après dans la première version), rejets de `riskd` par code.
-- Page méthode : règles, frais, politique, hash du journal (tête de chaîne), limites honnêtes.
+- Generated by `arena build-site` into `var/site/`: `index.html`, `model/<id>.html`, `method.html`, `data/*.json`. HTML/CSS/JS with no build chain; uPlot charts copied into `site/vendor/` with their hash.
+- Permanent **SIMULATED (paper)** banner. The `venue_mode` field is mandatory in every published JSON, validated by a test.
+- Overview: equity of the 7 portfolios on a base of 100, net return, max drawdown, fees, number of trades, API cost per model, rank in the random distribution, with the note "indistinguishable from chance" as long as the gap is not significant.
+- Model page: curve, positions, decision log (justification published as soon as the decision is made; in the first version it was displayed 24 h later), `riskd` rejections by code.
+- Method page: rules, fees, policy, journal hash (chain head), honest limitations.
 
-## 14. Critères de passage du MVP
+## 14. MVP acceptance criteria
 
-Tests verts ; `verify()` OK ; rejeu = ledger = site au µEUR près ; `riskd` n'accepte aucune violation sur 100 000 intentions générées (hypothesis) ; coupe-circuit effectif en < 1 min avec `--now` ; coupure simulée → alerte externe ; coût réel par décision mesuré.
+Tests green; `verify()` OK; replay = ledger = site to the µEUR; `riskd` accepts no violation over 100,000 generated intents (hypothesis); circuit breaker effective in < 1 min with `--now`; simulated outage -> external alert; real cost per decision measured.

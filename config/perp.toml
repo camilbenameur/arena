@@ -1,5 +1,5 @@
 # Perpetual futures league (paper): market data collection, step 1.
-# See docs/ETUDE-AGENTS-TRADERS.md and docs/DECISION-OWNER-agents-traders.md. English keys, integers only.
+# English keys, integers only.
 # Public Kraken Futures API only: no account, no key, no order.
 venue_mode = "paper"
 data_source = "kraken_futures"
@@ -41,7 +41,7 @@ spot_symbol = "LTC/EUR"
 
 # Simulated execution (docs/SPEC-PERP-LEDGER.md §2): fill model pessimiste-perp-v1.
 [simulation]
-fill_model_version = "pessimiste-perp-v1"
+fill_model_version = "pessimistic-perp-v1"
 capital_eur = 1000
 taker_fee_bp = 7               # Kraken taker 0.05 % + 25 %, rounded up
 slippage_bp = 5

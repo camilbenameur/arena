@@ -1,0 +1,140 @@
+{
+  "name": "07_several_symbols_and_portfolios",
+  "explanation": "Portfolio llm:test (1000 EUR): BTC 100,000 u at 50,000 EUR = 50,000,000, fee 250,000, cost 50,250,000. ETH 20,000,000 u (0.2) at 2,000 EUR = 400,000,000, fee 2,000,000, cost 402,000,000. SOL 100,000,000 u (1) at 80 EUR = 80,000,000, fee 400,000, cost 80,400,000. Cash = 1e9 - 50,250,000 - 402,000,000 - 80,400,000 = 467,350,000. Sell 10,000,000 u ETH at 2,100 EUR: proceeds 210,000,000, fee 1,050,000, cost removed 402,000,000/2 = 201,000,000, realized P&L 210,000,000 - 1,050,000 - 201,000,000 = 7,950,000. Cash = 467,350,000 + 210,000,000 - 1,050,000 = 676,300,000. Fees = 250,000 + 2,000,000 + 400,000 + 1,050,000 = 3,700,000. Bids: BTC 51,000 EUR -> 51,000,000; ETH 2,100 EUR, 0.1 ETH -> 210,000,000; SOL 90 EUR -> 90,000,000. Equity = 676,300,000 + 51,000,000 + 210,000,000 + 90,000,000 = 1,027,300,000. The benchmark:basket portfolio (500 EUR) has no movement: cash 500,000,000.",
+  "events": [
+    {
+      "type": "portfolio_opened",
+      "ts": 1700000000,
+      "payload": {
+        "portfolio": "llm:test",
+        "kind": "llm",
+        "capital_ueur": 1000000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "portfolio_opened",
+      "ts": 1700014400,
+      "payload": {
+        "portfolio": "benchmark:basket",
+        "kind": "llm",
+        "capital_ueur": 500000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700028800,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "buy",
+        "qty": 100000,
+        "price_ueur": 50000000000,
+        "fee_ueur": 250000,
+        "reason": "intent",
+        "ts": 1700028800,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o2"
+      }
+    },
+    {
+      "type": "stop_set",
+      "ts": 1700043200,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "stop_ueur": 45000000000
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700057600,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "ETH/EUR",
+        "side": "buy",
+        "qty": 20000000,
+        "price_ueur": 2000000000,
+        "fee_ueur": 2000000,
+        "reason": "intent",
+        "ts": 1700057600,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o4"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700072000,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "SOL/EUR",
+        "side": "buy",
+        "qty": 100000000,
+        "price_ueur": 80000000,
+        "fee_ueur": 400000,
+        "reason": "intent",
+        "ts": 1700072000,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o5"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700086400,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "ETH/EUR",
+        "side": "sell",
+        "qty": 10000000,
+        "price_ueur": 2100000000,
+        "fee_ueur": 1050000,
+        "reason": "intent",
+        "ts": 1700086400,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o6"
+      }
+    }
+  ],
+  "marks": {
+    "BTC/EUR": 51000000000,
+    "ETH/EUR": 2100000000,
+    "SOL/EUR": 90000000
+  },
+  "expected": {
+    "llm:test": {
+      "cash_ueur": 676300000,
+      "fees_paid_ueur": 3700000,
+      "realized_pnl_ueur": 7950000,
+      "positions": {
+        "BTC/EUR": {
+          "qty": 100000,
+          "cost_ueur": 50250000,
+          "stop_ueur": 45000000000
+        },
+        "ETH/EUR": {
+          "qty": 10000000,
+          "cost_ueur": 201000000,
+          "stop_ueur": null
+        },
+        "SOL/EUR": {
+          "qty": 100000000,
+          "cost_ueur": 80400000,
+          "stop_ueur": null
+        }
+      },
+      "equity_ueur": 1027300000
+    },
+    "benchmark:basket": {
+      "cash_ueur": 500000000,
+      "fees_paid_ueur": 0,
+      "realized_pnl_ueur": 0,
+      "positions": {},
+      "equity_ueur": 500000000
+    }
+  }
+}

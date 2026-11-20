@@ -1,5 +1,4 @@
-# Risk policy of the PERP league, paper (docs/ETUDE-AGENTS-TRADERS.md §4, decisions D2, D11a-c of
-# docs/DECISION-OWNER-agents-traders.md). Hashed (sha256 of the bytes), journaled, copied into every verdict.
+# Risk policy of the PERP league, paper (decisions D2, D11a-c). Hashed (sha256 of the bytes), journaled, copied into every verdict.
 # Integers only; bp = 1/10 000 of the portfolio equity unless stated.
 
 instruments = ["PF_XBTUSD", "PF_ETHUSD", "PF_SOLUSD", "PF_XRPUSD", "PF_LINKUSD", "PF_LTCUSD"]

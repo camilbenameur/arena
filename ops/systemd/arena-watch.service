@@ -1,0 +1,14 @@
+[Unit]
+Description=Arena paper-trading league: one watch tick (live stops, possible wake-up)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/arena
+# Same venv and same secrets as the cycle. The tick takes the cycle lock without waiting: if a cycle or a
+# wake-up is running, it exits without writing anything (code 0). A wake-up calls the models (up to 150 s); after a
+# finished wake-up it requests arena-site-build.service (systemctl --user start --no-block).
+ExecStart=%h/arena/.venv/bin/arena watch
+TimeoutStartSec=600
+Nice=5

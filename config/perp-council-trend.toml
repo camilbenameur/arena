@@ -1,0 +1,34 @@
+# The council v4, the "Trend Council", of the league of the councils (docs/SPEC-TREND-COUNCIL.md): a council that
+# aims at net income on the order of 10% a day. The engine (arena/perp/lab/trend.py, frozen, scale 2x) decides the
+# target of each contract at every 4-hour bar close; three Haiku members and an Opus President may only brake it
+# (a coefficient of 1, 0.5 or 0 per contract); the code executes. Its shadow `benchmark-perp:trend-engine` plays
+# the same target without the LLMs.
+# Hashed (sha256 of the bytes) and journaled with each round.
+kind = "trend-v4"
+enabled = true
+portfolio = "council-perp:trend"
+name = "Trend Council"
+model = "claude-haiku-5-5"            # the three members
+president_model = "claude-opus-5-5"
+# A round is three Haiku calls and one Opus call (about 0.06 to 0.10 $); 6 to 10 rounds a day: under 1 $ a day.
+# A ceiling against a runaway, not a target.
+daily_budget_usd = "5.00"
+members_parallel = 3
+member_timeout_s = 90
+president_timeout_s = 150
+member_max_tool_calls = 2   # read-only checks of a fact (the Data Controller); no tool places an order
+# Its own risk policy, profile "aggressive" (a file of config/), shared with its shadow
+policy = "policy-perp-council-trend.toml"
+
+# --- the engine's execution ---
+benchmark = "benchmark-perp:trend-engine"
+rebalance_band_bp = 500     # an order only when the final target is farther than 5% of the equity from the position
+stop_pct = "5"              # the protective stop the code puts on every position (bench: no effect on the result)
+# riskd's edge rule (cost <= 33% of the expected move) judges a move that an LLM declares. The engine does not
+# declare one: it is MEASURED offline and given with every order. expected_move_bp is the engine's mean gross move
+# per trade (side x (exit - entry) / entry, before fees, slippage and funding) on the TRAIN period of the bench,
+# 20 closed trades at scale 2x with the 5% stop. horizon_h is the mean holding time of those trades (184 h),
+# capped at riskd's 168 h.
+expected_move_bp = 247
+expected_move_source = "arena.perp.lab.backtest on var-perp/data/kraken_futures, trend.FROZEN scale 2.0, stop 5%, the first 64 days (2026-08-14 to 2026-10-17, TRAIN only, the holdout not read): 20 trades, mean gross +2.47% per trade, mean holding 184 h"
+horizon_h = 168

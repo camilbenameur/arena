@@ -1,4 +1,4 @@
-"""Réglages communs : fsync désactivé (le disque de the host le rend ~50x plus lent) ; le journal reste correct."""
+"""Shared settings: fsync disabled (it makes the tests much slower on some disks); the journal stays correct."""
 
 from __future__ import annotations
 
@@ -13,6 +13,6 @@ def _no_fsync(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _jamais_claude_reel(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Aucun test ne doit appeler la vraie CLI `claude` (abonnement du propriétaire) : binaire introuvable."""
-    monkeypatch.setattr("arene.deciders.llm._claude_bin", lambda: "/nonexistent/claude-interdit-en-test")
+def _never_real_claude(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test may call the real `claude` CLI (subscription): the binary is made unfindable."""
+    monkeypatch.setattr("arena.deciders.llm._claude_bin", lambda: "/nonexistent/claude-forbidden-in-tests")

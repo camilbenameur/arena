@@ -1,0 +1,60 @@
+{
+  "name": "01_simple_buy",
+  "explanation": "Capital 1000 EUR = 1,000,000,000 uEUR. Buy 200,000 units (0.002 BTC) at 50,000 EUR = 50,000,000,000 uEUR. Notional = 200000*50e9/1e8 = 100,000,000 (100 EUR). Fee 0.5% = 500,000. Cost = 100,500,000. Cash = 1,000,000,000 - 100,500,000 = 899,500,000. Stop 2%: 49,000 EUR. Valuation at bid 51,000 EUR: 200000*51e9/1e8 = 102,000,000; equity = 899,500,000 + 102,000,000 = 1,001,500,000.",
+  "events": [
+    {
+      "type": "portfolio_opened",
+      "ts": 1700000000,
+      "payload": {
+        "portfolio": "llm:test",
+        "kind": "llm",
+        "capital_ueur": 1000000000,
+        "venue_mode": "paper"
+      }
+    },
+    {
+      "type": "fill",
+      "ts": 1700014400,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "side": "buy",
+        "qty": 200000,
+        "price_ueur": 50000000000,
+        "fee_ueur": 500000,
+        "reason": "intent",
+        "ts": 1700014400,
+        "venue_mode": "paper",
+        "fill_model_version": "pessimistic-v1",
+        "order_id": "o1"
+      }
+    },
+    {
+      "type": "stop_set",
+      "ts": 1700028800,
+      "payload": {
+        "portfolio": "llm:test",
+        "symbol": "BTC/EUR",
+        "stop_ueur": 49000000000
+      }
+    }
+  ],
+  "marks": {
+    "BTC/EUR": 51000000000
+  },
+  "expected": {
+    "llm:test": {
+      "cash_ueur": 899500000,
+      "fees_paid_ueur": 500000,
+      "realized_pnl_ueur": 0,
+      "positions": {
+        "BTC/EUR": {
+          "qty": 200000,
+          "cost_ueur": 100500000,
+          "stop_ueur": 49000000000
+        }
+      },
+      "equity_ueur": 1001500000
+    }
+  }
+}

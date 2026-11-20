@@ -1,0 +1,13 @@
+[Unit]
+Description=Arena paper-trading league: publish the public dashboard (GitHub Pages, outbound only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/arena
+# Builds the public version, refuses to publish if it contains anything private,
+# then pushes an orphan commit to gh-pages. No port is opened; authentication goes through `gh`.
+ExecStart=%h/arena/.venv/bin/python ops/publish.py --repo OWNER/arena --root-path /arena/
+TimeoutStartSec=300
+Nice=10

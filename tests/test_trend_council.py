@@ -1,4 +1,4 @@
-"""The council v4 « Conseil Tendance » (docs/SPEC-CONSEIL-V4.md): the engine decides, the LLMs may only brake, the code
+"""The council v4, the "Trend Council" (docs/SPEC-TREND-COUNCIL.md): the engine decides, the LLMs may only brake, the code
 executes. A stub `claude` (no model, no network), the real watcher, synthetic 1-minute candles."""
 
 from __future__ import annotations
@@ -12,12 +12,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from arene.perp import benchmarks as B
-from arene.perp import trend_council as TC
-from arene.perp.agent import INSTRUMENTS
-from arene.perp.agent_round import run_intents
-from arene.perp.collect import data_root
-from arene.perp.council import (
+from arena.perp import benchmarks as B
+from arena.perp import trend_council as TC
+from arena.perp.agent import INSTRUMENTS
+from arena.perp.agent_round import run_intents
+from arena.perp.collect import data_root
+from arena.perp.council import (
     TREND_KIND,
     CouncilConfigError,
     CouncilsLeague,
@@ -25,27 +25,27 @@ from arene.perp.council import (
     load_council,
     load_councils_league,
 )
-from arene.perp.lab import backtest as bt
-from arene.perp.lab import trend as trend_lab
-from arene.perp.ledger import replay
-from arene.perp.llm_league import load_llm_league
-from arene.perp.margin import leveraged
-from arene.perp.market import market_view
-from arene.perp.policy import AGGRESSIVE, load_perp_policy
-from arene.perp.riskd import PerpIntent
-from arene.perp.types import Candle
+from arena.perp.lab import backtest as bt
+from arena.perp.lab import trend as trend_lab
+from arena.perp.ledger import replay
+from arena.perp.llm_league import load_llm_league
+from arena.perp.margin import leveraged
+from arena.perp.market import market_view
+from arena.perp.policy import AGGRESSIVE, load_perp_policy
+from arena.perp.riskd import PerpIntent
+from arena.perp.types import Candle
 from tests.test_perp_watcher import PRICES, SPECS, SYMBOLS, T0, World
 
-CONFIG = Path("config/perp-conseil-tendance.toml")
+CONFIG = Path("config/perp-council-trend.toml")
 COUNCIL = load_council(CONFIG)
 NAME = COUNCIL.portfolio
 BENCH = COUNCIL.trend.benchmark
 DAY = 86_400
 ROLES = {
-    "le Veilleur d'actualités": "veilleur",
-    "le Contrôleur de données": "controleur",
-    "l'Avocat du risque": "avocat_risque",
-    "le Président": "president",
+    "the News Watcher": "news_watcher",
+    "the Data Controller": "controller",
+    "the Risk Advocate": "risk_advocate",
+    "the President": "president",
 }
 BASE = dataclasses.replace(load_llm_league(), cadence_min=0, rounds_per_day=48, models=())
 LEAGUE = dataclasses.replace(BASE, councils=CouncilsLeague(True, 4, (COUNCIL,), (), "league-sha"))
@@ -91,17 +91,17 @@ def stub_runner(proposals=None, president=None, fail=(), calls=None):
 
     def run(cmd, stdin, env, cwd, timeout):
         system = cmd[cmd.index("--system-prompt") + 1]
-        role = next(k for name, k in ROLES.items() if f"## Ton rôle : {name}\n" in system)
+        role = next(k for name, k in ROLES.items() if f"## Your role: {name}\n" in system)
         with lock:
             if calls is not None:
                 calls.append(role)
         if role in fail:
             return 1, [], "boom"
         if role == "president":
-            out = president if president is not None else {"coefficients": [], "validite_h": 4, "justification": "rien d'anormal"}
+            out = president if president is not None else {"coefficients": [], "validity_h": 4, "justification": "nothing abnormal"}
         else:
-            props = [{"instrument": i, "coefficient": c, "raison": r} for i, c, r in (proposals or {}).get(role, [])]
-            out = {"propositions": props, "resume": "rien d'anormal" if not props else "freinage proposé"}
+            props = [{"instrument": i, "coefficient": c, "reason": r} for i, c, r in (proposals or {}).get(role, [])]
+            out = {"proposals": props, "resume": "nothing abnormal" if not props else "brake proposed"}
         ev = {"type": "result", "subtype": "success", "is_error": False, "structured_output": out,
               "total_cost_usd": 0.004, "num_turns": 1, "usage": {"input_tokens": 10, "output_tokens": 5}}  # fmt: skip
         return 0, [json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}}), json.dumps(ev)], ""
@@ -109,9 +109,9 @@ def stub_runner(proposals=None, president=None, fail=(), calls=None):
     return run
 
 
-def pres(*items, validite=4):
-    return {"coefficients": [{"instrument": i, "coefficient": c, "raison": r} for i, c, r in items],
-            "validite_h": validite, "justification": "décision du président"}  # fmt: skip
+def pres(*items, validity=4):
+    return {"coefficients": [{"instrument": i, "coefficient": c, "reason": r} for i, c, r in items],
+            "validity_h": validity, "justification": "president's decision"}  # fmt: skip
 
 
 def bar0(w):
@@ -154,7 +154,7 @@ def test_live_engine_equals_the_bench_targets_on_the_same_bars(tmp_path):
 
 
 def test_a_contract_with_too_many_missing_minutes_keeps_its_position(tmp_path):
-    gap = {"PF_XRPUSD": {t for t in range(T0 - 7200 - 5 * 3600, T0 - 7200 - 3600 - 60, 60)}}  # 4 h = 17 % of 24 h
+    gap = {"PF_XRPUSD": {t for t in range(T0 - 7200 - 5 * 3600, T0 - 7200 - 3600 - 60, 60)}}  # 4 h = 17% of 24 h
     w = world(tmp_path, drop=gap)
     t = TC.engine_target(w.store, T0 + 120)
     assert set(t.held) == {"PF_XRPUSD"} and t.missing_pct["PF_XRPUSD"] > 5
@@ -195,24 +195,24 @@ def test_a_coefficient_can_only_lower_an_exposure_never_raise_or_invert_it():
 
 def test_the_president_cannot_send_a_coefficient_above_1_nor_a_negative_one_nor_one_without_a_reason():
     for bad in (1.5, 2, -1, -0.5, 0.3, "0.5", True, None):
-        d, err = TC.parse_president(pres(("PF_XBTUSD", bad, "raison")))
+        d, err = TC.parse_president(pres(("PF_XBTUSD", bad, "reason")))
         assert err is None and d["halves"] == {}  # the item is dropped: the contract keeps 1
-    d, _ = TC.parse_president(pres(("PF_XBTUSD", 0.5, ""), ("PF_ETHUSD", 0, "maintenance annoncée")))
-    assert d["halves"] == {"PF_ETHUSD": (0, "maintenance annoncée")}
+    d, _ = TC.parse_president(pres(("PF_XBTUSD", 0.5, ""), ("PF_ETHUSD", 0, "maintenance announced")))
+    assert d["halves"] == {"PF_ETHUSD": (0, "maintenance announced")}
     d, _ = TC.parse_president(pres(("PF_XBTUSD", 1, "")))
     assert d["halves"] == {"PF_XBTUSD": (2, "")}
-    assert TC.parse_president({"coefficients": [], "validite_h": 9, "justification": ""})[0] is None
-    assert TC.parse_president("pas du JSON")[0] is None
-    assert TC.parse_president({"coefficients": [], "validite_h": 4, "justification": "", "x": 1})[0] is None
+    assert TC.parse_president({"coefficients": [], "validity_h": 9, "justification": ""})[0] is None
+    assert TC.parse_president("not JSON")[0] is None
+    assert TC.parse_president({"coefficients": [], "validity_h": 4, "justification": "", "x": 1})[0] is None
     # a member can only propose a brake (0 or 0.5), never 1
-    p, _ = TC.parse_proposals({"propositions": [{"instrument": "PF_XBTUSD", "coefficient": 1, "raison": "x"}], "resume": "r"})
-    assert p["propositions"] == []
+    p, _ = TC.parse_proposals({"proposals": [{"instrument": "PF_XBTUSD", "coefficient": 1, "reason": "x"}], "resume": "r"})
+    assert p["proposals"] == []
 
 
 def test_rebalance_band_is_five_percent_of_the_equity():
     s = SETTINGS
     assert s.rebalance_band_bp == 500
-    assert TC.plan_actions({"PF_XBTUSD": 10_000}, {"PF_XBTUSD": 9_500}, {}, s) == []  # exactly 5 %: no order
+    assert TC.plan_actions({"PF_XBTUSD": 10_000}, {"PF_XBTUSD": 9_500}, {}, s) == []  # exactly 5%: no order
     a = TC.plan_actions({"PF_XBTUSD": 10_000}, {"PF_XBTUSD": 9_499}, {}, s)
     assert [(x["action"], x["size_pct"]) for x in a] == [("open_long", Decimal("5.01"))]  # the missing 501 bp
     # in: open the difference, out: reduce by the part of the position, zero: close, other side: close then open
@@ -226,7 +226,7 @@ def test_rebalance_band_is_five_percent_of_the_equity():
     by = {(a["instrument"], a["action"]): a for a in acts}
     assert by["PF_ETHUSD", "reduce"]["size_pct"] == 50  # half of the position goes
     assert by["PF_XBTUSD", "open_long"]["size_pct"] == 120 and by["PF_LINKUSD", "open_short"]["size_pct"] == 60
-    e = by["PF_XBTUSD", "open_long"]  # every entry carries the 5 % stop and the measured expected move
+    e = by["PF_XBTUSD", "open_long"]  # every entry carries the 5% stop and the measured expected move
     assert e["stop_pct"] == 5 and e["expected_move_pct"] == Decimal("2.47") and e["horizon_h"] == 168
     assert all("stop_pct" not in a for a in acts if a["action"] in ("close", "reduce"))
 
@@ -234,7 +234,7 @@ def test_rebalance_band_is_five_percent_of_the_equity():
 # ---------------------------------------------------------------------- the decider: the veto council
 
 
-def decider(w, kind="barre", prior=None, veto=True, runner=None, exposure=None, engine=None, now=T0 + 120):
+def decider(w, kind="bar", prior=None, veto=True, runner=None, exposure=None, engine=None, now=T0 + 120):
     eng = engine or TC.engine_target(w.store, now)
     exp = exposure if exposure is not None else {}
     return TC.TrendDecider(
@@ -245,9 +245,9 @@ def decider(w, kind="barre", prior=None, veto=True, runner=None, exposure=None, 
 
 def decide(tmp_path, d):
     out = tmp_path / "rd"
-    (out / "membres").mkdir(parents=True, exist_ok=True)
+    (out / "members").mkdir(parents=True, exist_ok=True)
     (out / "round.json").write_text("{}")
-    return d.decide(out, {"heure_utc": 1})
+    return d.decide(out, {"time_utc": 1})
 
 
 def final_of(res):
@@ -257,12 +257,12 @@ def final_of(res):
 
 def test_the_veto_halves_or_zeroes_a_target_and_the_orders_follow(tmp_path):
     w = world(tmp_path)
-    president = pres(("PF_XBTUSD", 0.5, "maintenance annoncée sur le contrat"), ("PF_ETHUSD", 0, "prix incohérents entre sources"))
+    president = pres(("PF_XBTUSD", 0.5, "maintenance announced on the contract"), ("PF_ETHUSD", 0, "prices inconsistent between sources"))
     d, eng = decider(w, runner=stub_runner(president=president))
     res = decide(tmp_path, d)
     final, coeffs = final_of(res)
     assert final["PF_XBTUSD"] == TC.apply_coefficient(eng.target_bp["PF_XBTUSD"], 1) and final["PF_ETHUSD"] == 0
-    assert coeffs["PF_XBTUSD"]["c"] == "0.5" and coeffs["PF_ETHUSD"]["why"] == "prix incohérents entre sources"
+    assert coeffs["PF_XBTUSD"]["c"] == "0.5" and coeffs["PF_ETHUSD"]["why"] == "prices inconsistent between sources"
     assert coeffs["PF_ETHUSD"]["until_ts"] == T0 + 120 + 4 * 3600 or coeffs["PF_ETHUSD"]["until_ts"] == T0 + 14_400
     opened = {a["instrument"]: a for a in res.decision["actions"]}
     assert opened["PF_XBTUSD"]["size_pct"] * 100 == abs(final["PF_XBTUSD"])  # from flat: the final target
@@ -275,20 +275,20 @@ def test_the_veto_halves_or_zeroes_a_target_and_the_orders_follow(tmp_path):
 def test_any_failure_of_the_council_leaves_every_coefficient_at_1(tmp_path):
     w = world(tmp_path)
     _, eng = decider(w)
-    proposals = {"veilleur": [("PF_XBTUSD", 0, "annonce")]}
-    for fail in (("president",), ("president", "veilleur", "controleur", "avocat_risque")):
+    proposals = {"news_watcher": [("PF_XBTUSD", 0, "announcement")]}
+    for fail in (("president",), ("president", "news_watcher", "controller", "risk_advocate")):
         d, _ = decider(w, runner=stub_runner(proposals, pres(("PF_XBTUSD", 0, "x")), fail=fail))
         res = decide(tmp_path, d)
         final, coeffs = final_of(res)
         assert coeffs == {} and final == TC.final_targets(eng.target_bp, {})  # the engine alone
         assert res.extra["trend"]["president_ok"] is False and res.extra["trend"]["president_error"]
     # an invalid President output (not the schema): same
-    d, _ = decider(w, runner=stub_runner(president={"coefficients": "tous à zéro", "validite_h": 4, "justification": ""}))
+    d, _ = decider(w, runner=stub_runner(president={"coefficients": "all at zero", "validity_h": 4, "justification": ""}))
     assert final_of(decide(tmp_path, d))[1] == {}
     # a member that fails is left out, the President still decides
-    d, _ = decider(w, runner=stub_runner(president=pres(("PF_SOLUSD", 0.5, "annonce Kraken")), fail=("controleur",)))
+    d, _ = decider(w, runner=stub_runner(president=pres(("PF_SOLUSD", 0.5, "Kraken announcement")), fail=("controller",)))
     res = decide(tmp_path, d)
-    assert res.extra["council"]["members_failed"] == ["controleur"] and "PF_SOLUSD" in final_of(res)[1]
+    assert res.extra["council"]["members_failed"] == ["controller"] and "PF_SOLUSD" in final_of(res)[1]
     # a crash of the runner itself
     def boom(*a):
         raise OSError("no cli")
@@ -312,8 +312,8 @@ def test_nothing_to_brake_means_no_llm_call(tmp_path):
 def test_a_veto_round_only_lowers_and_a_restoration_lifts_expired_brakes(tmp_path):
     w = world(tmp_path)
     now = T0 + 3600
-    prior = {"PF_XBTUSD": TC.Brake(0, now + 3600, "contrat en maintenance"), "PF_ETHUSD": TC.Brake(1, now + 3600, "annonce"),
-             "PF_SOLUSD": TC.Brake(1, now - 10, "expirée")}  # fmt: skip
+    prior = {"PF_XBTUSD": TC.Brake(0, now + 3600, "contrat en maintenance"), "PF_ETHUSD": TC.Brake(1, now + 3600, "announcement"),
+             "PF_SOLUSD": TC.Brake(1, now - 10, "expired")}  # fmt: skip
     # the President wants XBT back at 1, ETH at 0.5 (not lower), SOL at 0 (lower than 1: the new brake counts)
     president = pres(("PF_XBTUSD", 1, ""), ("PF_ETHUSD", 0.5, "x"), ("PF_LTCUSD", 0, "nouvel incident"))
     d, eng = decider(w, kind="veto", prior=prior, now=now, runner=stub_runner(president=president))
@@ -325,18 +325,18 @@ def test_a_veto_round_only_lowers_and_a_restoration_lifts_expired_brakes(tmp_pat
     # when the President fails in a veto round, the coefficients in force stay
     d, _ = decider(w, kind="veto", prior=prior, now=now, runner=stub_runner(fail=("president",)))
     assert set(final_of(decide(tmp_path, d))[1]) == {"PF_XBTUSD", "PF_ETHUSD"}
-    # restauration: no LLM, the expired brake is lifted, the valid ones stay
+    # restoration: no LLM, the expired brake is lifted, the valid ones stay
     calls: list[str] = []
-    d, _ = decider(w, kind="restauration", prior=prior, now=now, veto=False, runner=stub_runner(calls=calls))
+    d, _ = decider(w, kind="restoration", prior=prior, now=now, veto=False, runner=stub_runner(calls=calls))
     res = decide(tmp_path, d)
     assert calls == [] and set(final_of(res)[1]) == {"PF_XBTUSD", "PF_ETHUSD"}
 
 
 def test_the_prompts_are_neutral_and_hashed():
     text = " ".join(TC.member_prompt(m) for m in TC.MEMBERS).lower()
-    for banned in ("doubler", "doubler la mise", "objectif ×2", "aggress"):
+    for banned in ("double the stake", "double your", "target ×2", "aggress"):
         assert banned not in text
-    assert "freiner" in text and "coefficient" in text and "ne peut ni augmenter" in text
+    assert "brake" in text and "coefficient" in text and "can neither increase a target" in text
     assert len({TC.member_sha256(m) for m in TC.MEMBERS}) == 4 and len(TC.prompts_sha256()) == 64
 
 
@@ -348,7 +348,7 @@ def test_a_bar_round_journals_the_engine_first_then_trades_the_council_and_its_s
     w = world(tmp_path, runner=stub_runner(calls=calls))
     rep = bar0(w)
     assert not rep.problems, rep.problems
-    assert f"trend:barre:{T0}" in rep.rounds and sorted(calls) == ["avocat_risque", "controleur", "president", "veilleur"]
+    assert f"trend:bar:{T0}" in rep.rounds and sorted(calls) == ["controller", "news_watcher", "president", "risk_advocate"]
     ev = w.w.journal.events()
     kinds = [e["type"] for e in ev]
     eng = [e for e in ev if e["type"] == "trend_engine_target"]
@@ -365,7 +365,7 @@ def test_a_bar_round_journals_the_engine_first_then_trades_the_council_and_its_s
         assert all(e["payload"]["status"] == "filled" for e in w.events("perp_execution") if e["payload"]["portfolio"] == pf)
     # the council's decision carries the engine's numbers and its (empty) coefficients
     dec = [e["payload"] for e in ev if e["type"] == "agent_decision"][0]
-    assert dec["portfolio"] == NAME and dec["trend"]["kind"] == "barre" and dec["trend"]["coefficients"] == {}
+    assert dec["portfolio"] == NAME and dec["trend"]["kind"] == "bar" and dec["trend"]["coefficients"] == {}
     assert dec["trend"]["targets_bp"] == p["targets_bp"] and dec["parsed"]["actions"]
     assert dec["council"]["president_model"] == "claude-opus-5-5" and dec["council"]["prompts_version"] == "v4"
     # the second tick of the same bar does nothing, and the 10-minute cadence plays no round for the council
@@ -377,7 +377,7 @@ def test_a_bar_round_journals_the_engine_first_then_trades_the_council_and_its_s
 
 
 def test_the_shadow_follows_the_engine_when_the_council_brakes(tmp_path):
-    president = pres(("PF_XBTUSD", 0, "contrat en maintenance annoncée par Kraken"), ("PF_SOLUSD", 0.5, "publication macro dans l'heure"))
+    president = pres(("PF_XBTUSD", 0, "contract in maintenance announced by Kraken"), ("PF_SOLUSD", 0.5, "macro release within the hour"))
     w = world(tmp_path, runner=stub_runner(president=president))
     bar0(w)
     c, b = fills(w, NAME), fills(w, BENCH)
@@ -407,7 +407,7 @@ def test_riskd_refusal_for_size_retries_smaller_in_a_bounded_loop(tmp_path):
     w = world(tmp_path)
     sim = w.w.sim
     sim.open_portfolio(NAME, "council", T0 + 100)
-    tight = dataclasses.replace(COUNCIL.policy, max_trade_loss_bp=1500)  # a 4x entry with a 5 % stop loses ~24 %
+    tight = dataclasses.replace(COUNCIL.policy, max_trade_loss_bp=1500)  # a 4x entry with a 5% stop loses ~24%
     view = market_view(w.store, SYMBOLS, T0 + 120)
 
     def intent(k, **kw):
@@ -452,7 +452,7 @@ def test_the_edge_rule_passes_the_engines_measured_move_and_the_aggressive_polic
     w.w.sim.open_portfolio(NAME, "council", T0 + 100)
     view = market_view(w.store, SYMBOLS, T0 + 120)
     act = TC.plan_actions({"PF_XBTUSD": 20_000}, {}, {}, SETTINGS)
-    _, err, intents = __import__("arene.perp.agent", fromlist=["parse_decision"]).parse_decision(
+    _, err, intents = __import__("arena.perp.agent", fromlist=["parse_decision"]).parse_decision(
         {"actions": act, "justification": "x"}, NAME, 1, T0 + 120, max_size_pct=400, max_actions=12)
     assert err is None and intents[0].expected_move_bp == 247 and intents[0].stop_bp == 500
     run_intents(w.w.sim, NAME, intents, view, SPECS, p, T0 + 120, False)
@@ -476,7 +476,7 @@ def test_due_at_bar_close_only_and_ignores_the_ten_minute_cadence(tmp_path):
     seed_history(w, end=T0 + 14_400 - 60)  # the next bar: its candles
     w.advance(T0 + 14_400 + 420)
     rep = w.w.tick(T0 + 14_400 + 420)
-    assert f"trend:barre:{T0 + 14_400}" in rep.rounds and len(w.events("agent_decision")) == 2
+    assert f"trend:bar:{T0 + 14_400}" in rep.rounds and len(w.events("agent_decision")) == 2
 
 
 def test_a_market_move_of_two_percent_calls_a_veto_round_that_can_only_brake(tmp_path):
@@ -488,13 +488,13 @@ def test_a_market_move_of_two_percent_calls_a_veto_round_that_can_only_brake(tmp
     w.advance(T0 + 3600)
     assert not any(r.startswith("trend") for r in w.w.tick(T0 + 3600).rounds)  # a quiet hour: no round
     t1 = T0 + 3600 + 900
-    crash = {s: p * 97 // 100 for s, p in PRICES.items()}  # -3 % within the hour
+    crash = {s: p * 97 // 100 for s, p in PRICES.items()}  # -3% within the hour
     w.advance(t1, crash)
-    president = pres(("PF_XBTUSD", 0.5, "mouvement de 3 % en une heure sur le contrat"))
+    president = pres(("PF_XBTUSD", 0.5, "3% move in one hour on the contract"))
     w.w.trend_runner = stub_runner(president=president, calls=calls)
     rep = w.w.tick(t1)
     assert any(r.startswith("trend:veto") for r in rep.rounds), rep.rounds
-    assert sorted(calls) == ["avocat_risque", "controleur", "president", "veilleur"]
+    assert sorted(calls) == ["controller", "news_watcher", "president", "risk_advocate"]
     dec = [e["payload"] for e in w.events("agent_decision")][-1]
     assert dec["kind"] == "veto" and dec["trend"]["coefficients"]["PF_XBTUSD"]["c"] == "0.5"
     assert dec["trend"]["targets_bp"] == [e["payload"] for e in w.events("trend_engine_target")][0]["targets_bp"]
@@ -504,7 +504,7 @@ def test_a_market_move_of_two_percent_calls_a_veto_round_that_can_only_brake(tmp
 
 
 def test_the_brake_of_a_short_event_is_lifted_by_a_restoration_round_without_llm(tmp_path):
-    president = pres(("PF_XBTUSD", 0, "maintenance annoncée de 14:00 à 15:00"), validite=1)
+    president = pres(("PF_XBTUSD", 0, "maintenance announced from 14:00 to 15:00"), validity=1)
     w = world(tmp_path, runner=stub_runner(president=president))
     bar0(w)
     assert not TC.expired_brakes(w.w.journal.events(), NAME, T0 + 3000)
@@ -513,9 +513,9 @@ def test_the_brake_of_a_short_event_is_lifted_by_a_restoration_round_without_llm
     w.w.trend_runner = stub_runner(calls=calls)
     w.advance(T0 + 4200)
     rep = w.w.tick(T0 + 4200)
-    assert f"trend:restauration:{T0}" in rep.rounds and calls == []
+    assert f"trend:restoration:{T0}" in rep.rounds and calls == []
     dec = [e["payload"] for e in w.events("agent_decision")][-1]
-    assert dec["kind"] == "restauration" and dec["trend"]["coefficients"] == {}
+    assert dec["kind"] == "restoration" and dec["trend"]["coefficients"] == {}
     assert "PF_XBTUSD" in fills(w, NAME)  # the engine reopens what the brake had closed (or never opened)
     assert not TC.expired_brakes(w.w.journal.events(), NAME, T0 + 4800)
 
@@ -529,8 +529,8 @@ def test_the_v4_config_is_valid_strict_and_the_old_councils_still_load(tmp_path)
     assert isinstance(SETTINGS, TrendSettings) and SETTINGS.expected_move_bp == 247 and "TRAIN" in SETTINGS.expected_move_source
     league = load_councils_league()
     assert league.enabled and [c.portfolio for c in league.councils] == [NAME] and league.errors == ()
-    old = load_council(Path("config/perp-conseil.toml"))
-    assert old.kind == "council-v3" and old.trend is None and load_council(Path("config/perp-conseil-opus.toml")).trend is None
+    old = load_council(Path("config/perp-council.toml"))
+    assert old.kind == "council-v3" and old.trend is None and load_council(Path("config/perp-council-opus.toml")).trend is None
     raw = CONFIG.read_text()
     for old_s, new_s in (
         ('president_model = "claude-opus-5-5"', 'president_model = "claude-haiku-5-5"'),
@@ -538,8 +538,8 @@ def test_the_v4_config_is_valid_strict_and_the_old_councils_still_load(tmp_path)
         ('stop_pct = "5"', "stop_pct = 5"),
         ("expected_move_bp = 247", "expected_move_bp = 0"),
         ("horizon_h = 168", "horizon_h = 400"),
-        ('kind = "trend-v4"', 'kind = "autre"'),
-        ('benchmark = "benchmark-perp:moteur-tendance"', 'benchmark = "benchmark-perp:x"'),
+        ('kind = "trend-v4"', 'kind = "other"'),
+        ('benchmark = "benchmark-perp:trend-engine"', 'benchmark = "benchmark-perp:x"'),
         ("horizon_h = 168", "x = 1"),
     ):
         f = tmp_path / "c.toml"
@@ -547,11 +547,11 @@ def test_the_v4_config_is_valid_strict_and_the_old_councils_still_load(tmp_path)
         with pytest.raises(CouncilConfigError):
             load_council(f)
     # a v3 file with the v4 keys, or a v4 file with the v3 shape, is refused
-    f.write_text(Path("config/perp-conseil.toml").read_text() + '\nbenchmark = "x"\n')
+    f.write_text(Path("config/perp-council.toml").read_text() + '\nbenchmark = "x"\n')
     with pytest.raises(CouncilConfigError):
         load_council(f)
-    pol = Path("config/policy-perp-conseil-v4.toml").read_text()
-    assert load_perp_policy(Path("config/policy-perp-conseil-v4.toml"), profile=AGGRESSIVE).sha256
+    pol = Path("config/policy-perp-council-trend.toml").read_text()
+    assert load_perp_policy(Path("config/policy-perp-council-trend.toml"), profile=AGGRESSIVE).sha256
     assert "TRAIN" in pol and "MEASURED" in pol
 
 
@@ -561,12 +561,12 @@ def test_the_v4_config_is_valid_strict_and_the_old_councils_still_load(tmp_path)
 def test_the_site_shows_the_council_its_shadow_and_each_round_line(tmp_path):
     import re
 
-    from arene.risk.policy import load_policy
-    from arene.site import build
+    from arena.risk.policy import load_policy
+    from arena.site import build
     from tests.test_site import ROOT, synthetic_journal
     from tests.test_site import _cfg as _config
 
-    president = pres(("PF_XBTUSD", 0.5, "annonce de maintenance sur le contrat"))
+    president = pres(("PF_XBTUSD", 0.5, "maintenance announcement on the contract"))
     w = world(tmp_path, runner=stub_runner(president=president))
     bar0(w)
     w.advance(T0 + 1200)
@@ -574,25 +574,25 @@ def test_the_site_shows_the_council_its_shadow_and_each_round_line(tmp_path):
     spot = synthetic_journal(tmp_path / "var" / "journal" / "events.jsonl")
     out = tmp_path / "site"
     build(spot.path, out, config=_config(), policy=load_policy(ROOT / "config" / "policy.toml"),
-          now_ts=T0 + 1500, public=True, racine="/arene/", perp_journal=w.var / "journal" / "events.jsonl")  # fmt: skip
+          now_ts=T0 + 1500, public=True, root_path="/arena/", perp_journal=w.var / "journal" / "events.jsonl")  # fmt: skip
 
     def clean(h: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h)).replace(" ", " ").replace("\xa0", " ")
 
-    html = (out / "conseils.html").read_text(encoding="utf-8")
-    assert "Conseil Tendance" in clean(html) and "Témoin moteur seul" in clean(html) and "council-perp-tendance.html" in html
-    page = (out / "conseils" / "council-perp-tendance.html").read_text(encoding="utf-8")
+    html = (out / "councils.html").read_text(encoding="utf-8")
+    assert "Trend Council" in clean(html) and "Benchmark engine only" in clean(html) and "council-perp-trend.html" in html
+    page = (out / "councils" / "council-perp-trend.html").read_text(encoding="utf-8")
     ptxt = clean(page)
-    assert "objectif : 1 %/jour · réalisé :" in ptxt
-    assert "Cibles du moteur" in ptxt and "Coefficients du conseil" in ptxt and "Ordres" in ptxt
-    assert "BTC ×0,5" in ptxt and "annonce de maintenance sur le contrat" in ptxt and "Le Veilleur d’actualités" in ptxt
-    assert "clôture de barre 4 h" in ptxt
-    assert (out / "conseils" / "benchmark-perp-moteur-tendance.html").exists()
-    derives = (out / "derives.html").read_text(encoding="utf-8")
-    assert "moteur-tendance" not in derives and "Témoin moteur seul" not in derives  # a benchmark of the councils' league only
+    assert "target: 1%/day · realized:" in ptxt
+    assert "Engine targets" in ptxt and "Council coefficients" in ptxt and "Orders" in ptxt
+    assert "BTC ×0.5" in ptxt and "maintenance announcement on the contract" in ptxt and "The News Watcher" in ptxt
+    assert "4 h bar close" in ptxt
+    assert (out / "councils" / "benchmark-perp-trend-engine.html").exists()
+    derivatives = (out / "derivatives.html").read_text(encoding="utf-8")
+    assert "trend-engine" not in derivatives and "Benchmark engine only" not in derivatives  # a benchmark of the councils' league only
 
 
-# ---------------------------------------------------------------------- audit of 18/11/2026 (docs/AUDIT-CONSEILS-2026-11-18.md §4)
+# ---------------------------------------------------------------------- audit fixes (council audit §4)
 def timed_runner(timeouts, **kw):
     inner = stub_runner(**kw)
 
@@ -607,7 +607,7 @@ def test_the_bar_round_starts_before_the_spot_cycle_with_its_calls_cut_at_a_dead
     """The bar closes 5 min before a spot cycle: the round plays at HH:03:30, not at HH:08, its calls ending
     before HH:05 (10 s of margin); with under a minute left it waits. The time the process took to reach its tick
     counts."""
-    from arene.perp import watcher as W
+    from arena.perp import watcher as W
 
     assert W.spot_cycle_soon(T0 + 210) and W.spot_cycle_left_s(T0 + 210) == 90
     timeouts: list[float] = []
@@ -620,7 +620,7 @@ def test_the_bar_round_starts_before_the_spot_cycle_with_its_calls_cut_at_a_dead
     w2 = world(tmp_path / "b", runner=timed_runner(timeouts))
     w2.advance(T0 + 210)
     rep = w2.w.tick(T0 + 210)
-    assert f"trend:barre:{T0}" in rep.rounds, rep.notes
+    assert f"trend:bar:{T0}" in rep.rounds, rep.notes
     assert len(timeouts) == 4 and all(t <= 80 for t in timeouts)  # 90 s left minus the 10 s margin
     assert max(timeouts[:3]) <= 40 < float(COUNCIL.member_timeout_s)  # the members: half of the time left
     assert fills(w2, NAME) and fills(w2, NAME) == fills(w2, BENCH)
@@ -656,11 +656,11 @@ def test_a_deadline_too_close_calls_no_model_and_the_engine_plays_alone(tmp_path
     res = decide(tmp_path, d)
     assert calls == [] and res.extra["trend"]["council_off"] == "spot_cycle"
     assert final_of(res) == (TC.final_targets(eng.target_bp, {}), {})
-    assert "le moteur seul" in res.decision["justification"]
+    assert "the engine alone" in res.decision["justification"]
     d, _ = decider(w, runner=stub_runner(calls=calls))
     d.deadline = _t.monotonic() + 50  # the members get 25 s, the President what is left (about 50 s)
     res = decide(tmp_path, d)
-    assert res.extra["trend"]["president_ok"] and sorted(calls) == ["avocat_risque", "controleur", "president", "veilleur"]
+    assert res.extra["trend"]["president_ok"] and sorted(calls) == ["controller", "news_watcher", "president", "risk_advocate"]
 
 
 def test_a_move_in_the_positions_favor_calls_no_veto_round(tmp_path):
@@ -673,16 +673,16 @@ def test_a_move_in_the_positions_favor_calls_no_veto_round(tmp_path):
     w.advance(T0 + 3600)
     w.w.tick(T0 + 3600)  # a quiet hour at the base prices
     t1 = T0 + 3600 + 300
-    w.advance(t1, {s: p * 103 // 100 for s, p in PRICES.items()})  # +3 % in the last 5 minutes: the longs' favor
+    w.advance(t1, {s: p * 103 // 100 for s, p in PRICES.items()})  # +3% in the last 5 minutes: the longs' favor
     rep = w.w.tick(t1)
     pend = [e["payload"] for e in w.events("perp_wake_pending") if e["ts"] >= t1 - 300]
     assert pend and all(p["move_bp"] > 0 for p in pend)  # the move was seen...
     assert not any(r.startswith("trend:veto") for r in rep.rounds) and calls == []  # ...and calls no veto
     w.advance(t1 + 300, dict(PRICES))
-    w.w.tick(t1 + 300)  # back to the base prices: under 2 % on the hour (a crossing is a new one)
+    w.w.tick(t1 + 300)  # back to the base prices: under 2% on the hour (a crossing is a new one)
     assert calls == []
     t2 = t1 + 900
-    w.advance(t2, {s: p * 97 // 100 for s, p in PRICES.items()})  # -3 % on the hour: against the longs
+    w.advance(t2, {s: p * 97 // 100 for s, p in PRICES.items()})  # -3% on the hour: against the longs
     rep = w.w.tick(t2)
     assert any(r.startswith("trend:veto") for r in rep.rounds), rep.rounds
     trig = [e["payload"] for e in w.events("agent_decision")][-1]
@@ -692,7 +692,7 @@ def test_a_move_in_the_positions_favor_calls_no_veto_round(tmp_path):
 def test_the_round_line_says_no_brake_when_the_council_decided_and_engine_alone_otherwise(tmp_path):
     w = world(tmp_path)
     res = decide(tmp_path, decider(w)[0])
-    assert "aucun frein, on suit le moteur" in res.decision["justification"]
-    assert "moteur seul" not in res.decision["justification"]
+    assert "no brake, following the engine" in res.decision["justification"]
+    assert "the engine alone" not in res.decision["justification"]
     res = decide(tmp_path, decider(w, runner=stub_runner(fail=("president",)))[0])
-    assert "le moteur seul (le conseil n'a pas décidé)" in res.decision["justification"]
+    assert "the engine alone (the council did not decide)" in res.decision["justification"]

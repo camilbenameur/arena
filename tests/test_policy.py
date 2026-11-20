@@ -1,4 +1,4 @@
-"""Tests de arene/risk/policy.py : chargement, hash, cohérence, politique incohérente -> PolicyError."""
+"""Tests of arena/risk/policy.py: loading, hash, consistency, inconsistent policy -> PolicyError."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from arene.risk.policy import Policy, PolicyError, load_policy, validate_policy
+from arena.risk.policy import Policy, PolicyError, load_policy, validate_policy
 
 REPO = Path(__file__).resolve().parent.parent
 POLICY_TOML = REPO / "config" / "policy.toml"
@@ -19,7 +19,7 @@ def policy() -> Policy:
     return load_policy(POLICY_TOML)
 
 
-def test_config_reelle_valeurs_du_spec(policy: Policy) -> None:
+def test_real_config_values_match_the_spec(policy: Policy) -> None:
     assert policy.symbols == ("BTC/EUR", "ETH/EUR", "SOL/EUR", "XRP/EUR", "LINK/EUR", "LTC/EUR")
     assert policy.max_order_bp == 2000
     assert policy.max_position_bp == 4000
@@ -39,17 +39,17 @@ def test_config_reelle_valeurs_du_spec(policy: Policy) -> None:
     assert policy.min_order_ueur == 5_000_000
 
 
-def test_config_reelle_coherente(policy: Policy) -> None:
-    validate_policy(policy)  # ne lève pas
+def test_real_config_consistent(policy: Policy) -> None:
+    validate_policy(policy)  # does not raise
     assert policy.max_order_bp <= policy.max_position_bp <= policy.max_exposure_bp <= 10_000
     assert 0 < policy.stop_bp_min < policy.stop_bp_max
 
 
-def test_hash_est_celui_du_fichier(policy: Policy) -> None:
+def test_hash_is_that_of_the_file(policy: Policy) -> None:
     assert policy.sha256 == hashlib.sha256(POLICY_TOML.read_bytes()).hexdigest()
 
 
-def test_politique_gelee_et_entiers_seulement(policy: Policy) -> None:
+def test_policy_frozen_and_integers_only(policy: Policy) -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         policy.max_order_bp = 1  # type: ignore[misc]
     for f in dataclasses.fields(Policy):
@@ -59,16 +59,16 @@ def test_politique_gelee_et_entiers_seulement(policy: Policy) -> None:
             assert type(v) is int
 
 
-def test_hash_change_si_le_fichier_change(tmp_path: Path) -> None:
+def test_hash_changes_if_the_file_changes(tmp_path: Path) -> None:
     text = POLICY_TOML.read_text(encoding="utf-8")
     a, b = tmp_path / "a.toml", tmp_path / "b.toml"
     a.write_text(text, encoding="utf-8")
-    b.write_text(text + "\n# commentaire\n", encoding="utf-8")
+    b.write_text(text + "\n# comment\n", encoding="utf-8")
     assert load_policy(a).sha256 != load_policy(b).sha256
 
 
 def _write(tmp_path: Path, **overrides: str | None) -> Path:
-    """Copie la vraie politique en remplaçant `cle = ...` (ligne entière) ; None supprime la clé."""
+    """Copy the real policy, replacing `key = ...` (whole line); None removes the key."""
     lines = []
     for line in POLICY_TOML.read_text(encoding="utf-8").splitlines():
         key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
@@ -82,7 +82,7 @@ def _write(tmp_path: Path, **overrides: str | None) -> Path:
     return out
 
 
-def test_ecriture_helper_identique_sans_surcharge(tmp_path: Path, policy: Policy) -> None:
+def test_write_helper_identical_without_override(tmp_path: Path, policy: Policy) -> None:
     assert dataclasses.replace(load_policy(_write(tmp_path)), sha256="") == dataclasses.replace(
         policy, sha256=""
     )
@@ -91,13 +91,13 @@ def test_ecriture_helper_identique_sans_surcharge(tmp_path: Path, policy: Policy
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"max_order_bp": "4001"},  # ordre > position
+        {"max_order_bp": "4001"},  # order > position
         {"max_position_bp": "10001", "max_exposure_bp": "10001"},  # > 10000
-        {"max_position_bp": "1999"},  # position < ordre
-        {"max_exposure_bp": "3999"},  # exposition < position
+        {"max_position_bp": "1999"},  # position < order
+        {"max_exposure_bp": "3999"},  # exposure < position
         {"stop_bp_min": "2500"},  # min == max
         {"stop_bp_min": "2600"},  # min > max
-        {"stop_bp_max": "10000"},  # stop >= 100 %
+        {"stop_bp_max": "10000"},  # stop >= 100%
         {"max_order_bp": "0"},
         {"max_order_bp": "-5"},
         {"max_trades_per_day": "0"},
@@ -115,38 +115,38 @@ def test_ecriture_helper_identique_sans_surcharge(tmp_path: Path, policy: Policy
         {"min_order_ueur": "0"},
         {"max_cost_to_expected_move_pct": "0"},
         {"max_cost_to_expected_move_pct": "101"},
-        {"max_order_bp": "20.5"},  # float refusé
-        {"max_order_bp": "true"},  # bool refusé
-        {"max_order_bp": '"2000"'},  # chaîne refusée
+        {"max_order_bp": "20.5"},  # float refused
+        {"max_order_bp": "true"},  # bool refused
+        {"max_order_bp": '"2000"'},  # string refused
         {"symbols": "[]"},
         {"symbols": '["BTC/EUR", "BTC/EUR"]'},
         {"symbols": '["BTC/EUR", ""]'},
         {"symbols": '["BTC/EUR", " ETH/EUR"]'},
         {"symbols": '["BTC/EUR", 3]'},
         {"symbols": '"BTC/EUR"'},
-        {"max_order_bp": None},  # clé manquante
+        {"max_order_bp": None},  # missing key
         {"symbols": None},
         {"min_order_ueur": None},
     ],
     ids=lambda o: ",".join(f"{k}={v}" for k, v in o.items()),
 )
-def test_politique_incoherente_leve_policy_error(tmp_path: Path, overrides: dict[str, str | None]) -> None:
+def test_inconsistent_policy_raises_policy_error(tmp_path: Path, overrides: dict[str, str | None]) -> None:
     with pytest.raises(PolicyError):
         load_policy(_write(tmp_path, **overrides))
 
 
-def test_cle_inconnue_refusee(tmp_path: Path) -> None:
+def test_unknown_key_refused(tmp_path: Path) -> None:
     path = _write(tmp_path)
-    path.write_text(path.read_text(encoding="utf-8") + "levier_max = 3\n", encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8") + "leverage_max = 3\n", encoding="utf-8")
     with pytest.raises(PolicyError):
         load_policy(path)
 
 
-def test_fichier_absent_ou_toml_invalide(tmp_path: Path) -> None:
+def test_missing_file_or_invalid_toml(tmp_path: Path) -> None:
     with pytest.raises(PolicyError):
         load_policy(tmp_path / "absent.toml")
     bad = tmp_path / "bad.toml"
-    bad.write_text("ceci n'est pas = = du toml [", encoding="utf-8")
+    bad.write_text("this is not = = toml [", encoding="utf-8")
     with pytest.raises(PolicyError):
         load_policy(bad)
     binary = tmp_path / "bin.toml"
@@ -155,7 +155,7 @@ def test_fichier_absent_ou_toml_invalide(tmp_path: Path) -> None:
         load_policy(binary)
 
 
-def test_valeurs_limites_acceptees(tmp_path: Path) -> None:
+def test_limit_values_accepted(tmp_path: Path) -> None:
     ok = load_policy(
         _write(
             tmp_path,
@@ -170,7 +170,7 @@ def test_valeurs_limites_acceptees(tmp_path: Path) -> None:
     assert ok.stop_bp_max - ok.stop_bp_min == 1
 
 
-def test_validate_policy_sur_dataclass_construite(policy: Policy) -> None:
+def test_validate_policy_on_built_dataclass(policy: Policy) -> None:
     validate_policy(dataclasses.replace(policy, max_order_bp=policy.max_position_bp))
     with pytest.raises(PolicyError):
         validate_policy(dataclasses.replace(policy, max_order_bp=policy.max_position_bp + 1))

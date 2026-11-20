@@ -7,24 +7,24 @@ from pathlib import Path
 import httpx
 import pytest
 
-from arene.data import RateLimitedHttp
-from arene.paths import Paths
-from arene.perp import benchmarks as B
-from arene.perp.collect import data_root
-from arene.perp.config import load_perp_config
-from arene.perp.counters import counters_for
-from arene.perp.kraken_futures import KrakenFuturesClient
-from arene.perp.ledger import replay
-from arene.perp.policy import load_perp_policy
-from arene.perp.store import PerpDataStore, TickerSnapshot
-from arene.perp.types import Candle, FundingRate, FxQuote, PerpTicker
-from arene.perp.watcher import PerpWatcher, load_specs
+from arena.data import RateLimitedHttp
+from arena.paths import Paths
+from arena.perp import benchmarks as B
+from arena.perp.collect import data_root
+from arena.perp.config import load_perp_config
+from arena.perp.counters import counters_for
+from arena.perp.kraken_futures import KrakenFuturesClient
+from arena.perp.ledger import replay
+from arena.perp.policy import load_perp_policy
+from arena.perp.store import PerpDataStore, TickerSnapshot
+from arena.perp.types import Candle, FundingRate, FxQuote, PerpTicker
+from arena.perp.watcher import PerpWatcher, load_specs
 
 FIX = Path(__file__).parent / "fixtures" / "perp"
 CFG = load_perp_config()
 POLICY = load_perp_policy()
 SYMBOLS = [i.kraken_symbol for i in CFG.instruments]
-T0 = 1_794_499_200  # a 4-hour rendez-vous (16:00 UTC)
+T0 = 1_794_499_200  # a 4-hour scheduled round (16:00 UTC)
 PRICES = {
     "PF_XBTUSD": 70_000_000_000,
     "PF_ETHUSD": 2_000_000_000,
@@ -262,7 +262,7 @@ def test_specs_cache(tmp_path):
 
 
 def test_basket_orders_rebalance_to_equal_parts():
-    from arene.perp.ledger import MarginAccount, PerpPosition
+    from arena.perp.ledger import MarginAccount, PerpPosition
 
     acc = MarginAccount("b", 1_000_000_000, 1_000_000_000)
     acc.positions["PF_XBTUSD"] = PerpPosition("PF_XBTUSD", 500_000, 70_000_000_000, 0, 1)
@@ -315,14 +315,14 @@ def test_interrupted_round_is_resumed(tmp_path, monkeypatch):
 
 
 def test_reference_orders_are_stamped_now_after_minute_fills(tmp_path):
-    """A late rendez-vous tick after stop fills of the same tick: the trend's new entries still pass."""
+    """A late scheduled round tick after stop fills of the same tick: the trend's new entries still pass."""
     w = World(tmp_path)
     w.w.tick(T0 + 120)
     t1 = T0 + 4 * 3600
     w.advance(t1 - 300)
     w.w.tick(t1 - 300)
     crash = {s: p * 85 // 100 for s, p in PRICES.items()}
-    w.advance(t1 + 1500, crash)  # stops hit after the rendez-vous time, the tick runs 25 min late
+    w.advance(t1 + 1500, crash)  # stops hit after the scheduled round time, the tick runs 25 min late
     rep = w.w.tick(t1 + 1500)
     assert not [p for p in rep.problems if "older than the previous fill" in p], rep.problems
 
@@ -346,20 +346,20 @@ def test_a_held_minute_without_data_is_waited_for(tmp_path):
 
 
 def test_no_extra_round_just_before_a_spot_cycle():
-    from arene.perp.watcher import spot_cycle_soon
+    from arena.perp.watcher import spot_cycle_soon
 
     day = 1_794_441_600  # 00:00 UTC
     assert spot_cycle_soon(day + 4 * 3600)  # 04:00, 5 min before the 04:05 cycle
     assert spot_cycle_soon(day + 4 * 3600 + 299)  # 04:04:59
     assert not spot_cycle_soon(day + 4 * 3600 + 300)  # 04:05: the cycle's lock says whether it still runs
     assert not spot_cycle_soon(day + 3 * 3600 + 3599)  # 03:59:59
-    assert not spot_cycle_soon(day + 2 * 3600)  # a perp rendez-vous is far from the spot cycles
+    assert not spot_cycle_soon(day + 2 * 3600)  # a perp scheduled round is far from the spot cycles
 
 
 def test_spot_busy_tests_the_lock_without_keeping_it(tmp_path):
     import fcntl
 
-    from arene.perp.watcher import spot_busy
+    from arena.perp.watcher import spot_busy
 
     lock = tmp_path / "cycle.lock"
     assert not spot_busy(lock) and not lock.exists()  # never created by the perp league

@@ -1,0 +1,13 @@
+[Unit]
+Description=Arena paper-trading league: one 4 h cycle
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/arena
+# The venv is created by `uv sync` in the repository. No key is passed here: the code reads
+# $CREDENTIALS_DIRECTORY or ~/.config/arena/secrets at run time (no key -> no_key, everything else still runs).
+ExecStart=%h/arena/.venv/bin/arena cycle
+TimeoutStartSec=1500
+Nice=5

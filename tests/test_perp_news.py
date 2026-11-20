@@ -1,4 +1,4 @@
-"""The news of the perp league (docs/SPEC-PERP-ACTUALITES.md): Kraken's announcements, the macro calendar,
+"""The news of the perp league (docs/SPEC-PERP-NEWS.md): Kraken's announcements, the macro calendar,
 their journal, their place in the round dossier and the snapshot, and the call-backs they trigger."""
 
 from __future__ import annotations
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from arene.perp import news as N
-from arene.perp.agent_round import snapshot
+from arena.perp import news as N
+from arena.perp.agent_round import snapshot
 from tests.test_perp_llm_league import NAMES, asked_world, private_rounds
 from tests.test_perp_watcher import T0
 
@@ -101,7 +101,7 @@ def test_contract_states_change_items():
     hot = {"result": "success", "instrumentStatus": [{**row, "experiencingExtremeVolatility": True,
                                                        "extremeVolatilityInitialMarginMultiplier": 2}]}  # fmt: skip
     [it], st = N.contract_items(hot, INSTS, st)
-    assert it["state"] == "volatility:x2" and it["wake"] and "marge initiale x2" in it["title"]
+    assert it["state"] == "volatility:x2" and it["wake"] and "initial margin x2" in it["title"]
     assert N.contract_items(hot, INSTS, st)[0] == []
     [back], st = N.contract_items(ok, INSTS, st)
     assert back["status"] == "normal" and not back["wake"]
@@ -192,11 +192,11 @@ def test_a_new_announcement_is_journaled_once_and_calls_every_model_back(tmp_pat
     assert {t["kind"] for t in rnd["triggers"].values()} == {"news"}
     data = round_json(w, T0 + 600)
     snap = snapshot(data, "news", rnd["triggers"][NAMES[0]])
-    [a] = snap["actualites"]["annonces_kraken"]
+    [a] = snap["news"]["kraken_announcements"]
     assert (
-        a["titre"] == "Futures Trading Engine degraded"
+        a["title"] == "Futures Trading Engine degraded"
         and a["type"] == "incident"
-        and a["statut"] == "investigating"
+        and a["status"] == "investigating"
     )
     w.advance(T0 + 900)
     w.w.tick(T0 + 900)  # seen: no call-back, and never journaled twice
@@ -216,8 +216,8 @@ def test_a_closed_announcement_calls_nobody_but_stays_shown_a_day(tmp_path):
 
 
 def test_a_macro_release_calls_the_models_back_three_minutes_after(tmp_path):
-    cpi = N.CalendarEvent("cpi-x", "cpi", "CPI de test (BLS)", T0 + 900, "https://www.bls.gov/x")
-    ppi = N.CalendarEvent("ppi-x", "ppi", "PPI de test (BLS)", T0 + 600, "https://www.bls.gov/y")
+    cpi = N.CalendarEvent("cpi-x", "cpi", "Test CPI (BLS)", T0 + 900, "https://www.bls.gov/x")
+    ppi = N.CalendarEvent("ppi-x", "ppi", "Test PPI (BLS)", T0 + 600, "https://www.bls.gov/y")
     w, calls = news_world(tmp_path, (ppi, cpi))
     w.advance(T0 + 600)
     w.w.tick(T0 + 600)
@@ -230,10 +230,10 @@ def test_a_macro_release_calls_the_models_back_three_minutes_after(tmp_path):
     [rnd] = private_rounds(w)
     t = rnd["triggers"][NAMES[0]]
     assert t["kind"] == "calendar" and t["releases"] == [
-        {"id": "cpi-x", "label": "CPI de test (BLS)", "ts": T0 + 900}
+        {"id": "cpi-x", "label": "Test CPI (BLS)", "ts": T0 + 900}
     ]
-    cal = snapshot(round_json(w, T0 + 1200), "calendar", t)["actualites"]["calendrier_macro"]
-    assert [(c["type"], c["dans_min"], c["te_rappelle"]) for c in cal] == [
+    cal = snapshot(round_json(w, T0 + 1200), "calendar", t)["news"]["macro_calendar"]
+    assert [(c["type"], c["in_min"], c["remind_me"]) for c in cal] == [
         ("ppi", -10, False),
         ("cpi", -5, True),
     ]
@@ -255,7 +255,7 @@ def test_news_attach_to_another_trigger(tmp_path):
 def test_without_news_the_round_dossier_is_unchanged(tmp_path):
     w, _calls, _ = asked_world(tmp_path, {})
     data = round_json(w, T0)
-    assert "news" not in data and "actualites" not in snapshot(data, "rendezvous", None)
+    assert "news" not in data and "news" not in snapshot(data, "rendezvous", None)
 
 
 def test_a_torn_items_file_never_stops_the_tick(tmp_path):
@@ -269,9 +269,9 @@ def test_a_torn_items_file_never_stops_the_tick(tmp_path):
 
 
 def test_the_prompts_name_the_news():
-    from arene.perp.agent import PROMPT_PATH
-    from arene.perp.council import PROMPT_DIR
+    from arena.perp.agent import PROMPT_PATH
+    from arena.perp.council import PROMPT_DIR
 
-    for text in (PROMPT_PATH.read_text(), (PROMPT_DIR / "commun.md").read_text()):
-        assert "`actualites`" in text and "`calendar`" in text and "`news`" in text
-        assert "pas d'actualité, pas de chiffre extérieur" not in text
+    for text in (PROMPT_PATH.read_text(), (PROMPT_DIR / "common.md").read_text()):
+        assert "`news`" in text and "`calendar`" in text and "`news`" in text
+        assert "no news, no outside figure" not in text

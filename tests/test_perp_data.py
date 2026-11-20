@@ -1,4 +1,4 @@
-"""Perp league, step 1: Kraken Futures client, data store, config, collector. No network except `reseau`."""
+"""Perp league, step 1: Kraken Futures client, data store, config, collector. No network except `network`."""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from arene.data import DataError, RateLimitedHttp
-from arene.data.kraken import KrakenClient
-from arene.perp import collect as collect_mod
-from arene.perp.collect import collect_once, data_root, gap_report, main, run_lock
-from arene.perp.config import PerpConfigError, load_perp_config
-from arene.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
-from arene.perp.store import PerpDataStore, Series, TickerSnapshot, missing_steps
-from arene.perp.types import BookSnapshot, Candle, FundingRate, FxQuote, OpenInterest, PerpTicker
+from arena.data import DataError, RateLimitedHttp
+from arena.data.kraken import KrakenClient
+from arena.perp import collect as collect_mod
+from arena.perp.collect import collect_once, data_root, gap_report, main, run_lock
+from arena.perp.config import PerpConfigError, load_perp_config
+from arena.perp.kraken_futures import CLOSE_GRACE_S, KrakenFuturesClient
+from arena.perp.store import PerpDataStore, Series, TickerSnapshot, missing_steps
+from arena.perp.types import BookSnapshot, Candle, FundingRate, FxQuote, OpenInterest, PerpTicker
 
 FIX = Path(__file__).parent / "fixtures" / "perp"
 CONFIG = Path(__file__).resolve().parent.parent / "config" / "perp.toml"
@@ -71,8 +71,8 @@ def test_tickers_are_decimal_exact_and_filtered():
     from decimal import ROUND_HALF_EVEN, Decimal
 
     text = (FIX / "tickers.json").read_text()
-    lit = text.split('"symbol": "PF_XBTUSD"')[1].split('"markPrice": ')[1].split(",")[0]
-    assert xbt.mark_uusd == int((Decimal(lit) * 10**6).to_integral_value(ROUND_HALF_EVEN))
+    reads = text.split('"symbol": "PF_XBTUSD"')[1].split('"markPrice": ')[1].split(",")[0]
+    assert xbt.mark_uusd == int((Decimal(reads) * 10**6).to_integral_value(ROUND_HALF_EVEN))
     assert xbt.ts == 1794498210
     assert raw["PF_XBTUSD"]["tag"] == "perpetual"
 
@@ -277,10 +277,10 @@ def test_order_book_unsorted_and_zero_levels():
     assert b.asks[0][0] == 102_000_000
 
 
-def test_eurusd_incoherent_quote_raises():
+def test_eurusd_inconsistent_quote_raises():
     body = b'{"error":[],"result":{"ZEURZUSD":{"a":["1.10","1","1"],"b":["1.20","1","1"]}}}'
     c = client_for(route({"/0/public/Ticker": body}), now=1)
-    with pytest.raises(DataError, match="incoherent"):
+    with pytest.raises(DataError, match="inconsistent"):
         c.eurusd()
 
 
@@ -666,12 +666,12 @@ def test_main_rejects_bad_backfill(tmp_path):
 
 
 def test_main_refuses_the_spot_state_directory(tmp_path, monkeypatch):
-    monkeypatch.setenv("ARENE_VAR", str(tmp_path))
+    monkeypatch.setenv("ARENA_VAR", str(tmp_path))
     assert main(["run", "--var", str(tmp_path)]) == 2
     assert main(["report", "--var", str(tmp_path / "sub")]) == 2
 
 
-@pytest.mark.reseau
+@pytest.mark.network
 def test_live_public_api_smoke():
     c = KrakenFuturesClient()
     t, problems = c.tickers(SYMBOLS)

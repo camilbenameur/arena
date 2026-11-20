@@ -1,17 +1,13 @@
-# Perp league, step 7: the LLM portfolios (docs/ETUDE-AGENTS-TRADERS.md §11, decisions D7, D8 and step 7 unblocked
-# by the owner on 12/11/2026). Hashed (sha256 of the bytes) and journaled with every agent round.
+# Perp league, step 7: the LLM portfolios (decisions D7 and D8). Hashed (sha256 of the bytes) and journaled with every agent round.
 enabled = true
-# LLM wake-ups on from 13/11/2026 (the owner's decision, earlier than the two weeks of the study, step 7). Time limits
-# lifted the same day (the owner, ~14:10 UTC, docs/SPEC-PERP-REVEILS-LIBRES.md): market wake-ups at 2 % in 1 h, 15 min
-# apart; alerts and wake-ups asked by the model itself (5 min to 1 h ahead since ~18:00 UTC) served at the next tick.
+# LLM wake-ups are on, with no time limit (docs/SPEC-PERP-FREE-WAKEUPS.md): market wake-ups at 2 % in 1 h, 15 min
+# apart; alerts and wake-ups asked by the model itself (5 min to 1 h ahead) served at the next tick.
 wakeups = true
-# The only time limit left: rounds per model and UTC day, rendez-vous included (the rendez-vous to come are
-# reserved). 144 on 13/11/2026 (the owner, ~18:00 UTC: "plusieurs fois par heure même +"), 260 on 14/11/2026 with the
-# 10-minute cadence: 144 rounds a day by itself, plus alerts, market wake-ups and 5-minute wake-ups asked.
+# The only time limit left: rounds per model and UTC day, scheduled rounds included (the scheduled rounds to come are
+# reserved). 260 with the 10-minute cadence: 144 rounds a day by itself, plus alerts, market wake-ups and 5-minute wake-ups asked.
 rounds_per_day = 260
 # Cadence (docs/SPEC-PERP-CADENCE.md): every model is called again at most `cadence_min` after its last round
-# (15 min on 13/11/2026). 0 turns it off. 14/11/2026 (the owner: "Augmente la cadence on s'autorise deux
-# fois plus de conso qu'actuellement"): 10 min, and a maximum: a wake-up asked for later does not delay the call.
+# (15 min at first, now 10 min). 0 turns it off. The cadence is a maximum: a wake-up asked for later does not delay the call.
 cadence_min = 10
 max_parallel = 4          # at most 4 `claude` processes at the same time (study §2.4)
 timeout_s = 240           # per call (study §2.4)
@@ -19,10 +15,10 @@ max_budget_usd = "1.00"   # hard ceiling of one call (--max-budget-usd); a round
 effort = "low"            # as in the spot league
 
 # Daily budgets (D7): equivalent USD per UTC day. A model over its budget skips its round (positions and stops
-# stay in place) and the skip is journaled. Raised again on 13/11/2026 (~18:00 UTC) so they never bind before
-# `rounds_per_day`: 144 rounds at the costs measured that day (Haiku 0.002, Sonnet 0.033, Opus 0.072, Fable 0.166 $
-# per round), plus a margin of about 1.5x: those costs were measured on rounds that did not trade. Set on 14/11/2026
-# to about twice the expected cost at the 10-minute cadence (150 rounds a day; about 1.8x at 200) (mean costs of 13/11 18:28 to 14/11 01:40: Haiku
+# stay in place) and the skip is journaled. Raised so they never bind before
+# `rounds_per_day`: 144 rounds at the measured costs (Haiku 0.002, Sonnet 0.033, Opus 0.072, Fable 0.166 $
+# per round), plus a margin of about 1.5x: those costs were measured on rounds that did not trade. Set
+# to about twice the expected cost at the 10-minute cadence (150 rounds a day; about 1.8x at 200) (measured mean costs: Haiku
 # 0.0014, Sonnet 0.014, Opus 0.037, Fable 0.084 $ per round): ceilings against a runaway, not a target.
 [[models]]
 portfolio = "llm-perp:claude-haiku-5-5"

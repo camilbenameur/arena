@@ -1,0 +1,14 @@
+[Unit]
+Description=Arena perp league: watcher tick (minutes, stops, funding, controls, benchmark and LLM rounds; paper)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/arena
+ExecStart=%h/arena/.venv/bin/python -m arena.perp.watcher tick
+# Exit 3 = the tick finished with problems (listed in the perp_tick event): not a unit failure.
+# A crash (exit 1) fails the unit: `systemctl --user --failed` shows it.
+SuccessExitStatus=3
+# A tick with an LLM round runs up to 4 calls in parallel (240 s each, then killed).
+TimeoutStartSec=900
+Nice=10

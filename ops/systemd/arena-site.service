@@ -1,0 +1,12 @@
+[Unit]
+Description=Arena paper-trading league: private static dashboard (127.0.0.1:8787)
+
+[Service]
+WorkingDirectory=%h/arena
+ExecStartPre=/usr/bin/mkdir -p %h/arena/var/site
+ExecStart=%h/arena/.venv/bin/python -m http.server 8787 --bind 127.0.0.1 --directory %h/arena/var/site
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
