@@ -32,9 +32,18 @@
   function dayLabel(d) { return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
   function hourLabel(d) { return pad(d.getUTCHours()) + ":00"; }
   var KINDS = data.kinds || [];
+  var PAUSES = data.pauses || []; /* [[from, to], ...]: league paused for absence (site/pauses.py) */
+  function paused(t) {
+    for (var k = 0; k < PAUSES.length; k++) if (t >= PAUSES[k][0] && t <= PAUSES[k][1]) return true;
+    return false;
+  }
   function pad(n) { return (n < 10 ? "0" : "") + n; }
   function hm(d) { var m = d.getUTCMinutes(); return pad(d.getUTCHours()) + ":" + (m < 10 ? "0" : "") + m; }
   function whenLabel(i) {
+    var w = whenText(i);
+    return paused(data.x[i]) && KINDS[i] !== "direct" ? w + " · league paused" : w;
+  }
+  function whenText(i) {
     if (i === 0 && KINDS[0] === "inception") return "Start";
     var d = new Date(data.x[i] * 1000);
     if (KINDS[i] === "direct") return "Live, Kraken price at " + hm(d) + ":" + pad(d.getUTCSeconds()) + " UTC";
@@ -232,8 +241,29 @@
       ],
       hooks: {
         drawAxes: [function (u) {
-          // Start line (0%), under the curves.
+          // Pause bands (absence), then the start line (0%), all under the curves.
           var r = uPlot.pxRatio;
+          if (PAUSES.length) {
+            var c = u.ctx, top = u.bbox.top, h = u.bbox.height;
+            c.save();
+            c.beginPath();
+            c.rect(u.bbox.left, top, u.bbox.width, h);
+            c.clip();
+            PAUSES.forEach(function (p) {
+              var x0 = u.valToPos(p[0], "x", true), x1 = u.valToPos(p[1], "x", true);
+              if (x1 - x0 < 1) return;
+              c.fillStyle = css("--sunken");
+              c.fillRect(x0, top, x1 - x0, h);
+              if (x1 - x0 > 56 * r) {
+                c.fillStyle = css("--muted");
+                c.font = Math.round(11 * r) + "px " + css("--sans");
+                c.textBaseline = "top";
+                c.textAlign = "left";
+                c.fillText("paused", x0 + 6 * r, top + 6 * r);
+              }
+            });
+            c.restore();
+          }
           var y = Math.round(u.valToPos(100, "y", true)) + 0.5;
           var ctx = u.ctx;
           ctx.save();

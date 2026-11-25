@@ -403,6 +403,7 @@ def _chart_scripts(root: str, chart: dict[str, Any], focus: str | None, *, last:
     payload = {
         "x": chart["x"], "kinds": chart.get("kinds") or [], "series": chart["series"], "styles": _styles(chart, focus),
         "short": [short_name(s["name"]) for s in chart["series"]],
+        "pauses": chart.get("pauses") or [],
     }
     if last:
         payload["last"] = last
@@ -447,8 +448,22 @@ def _chart_block(chart: dict[str, Any], *, focus_name: str | None = None, focus:
         '<figure class="chart-panel">'
         f'<div id="chart" class="chart-area" role="img" aria-label="{e(label)}">'
         '<noscript><p class="empty">Chart: JavaScript required. Values are in the table.</p></noscript></div>'
-        f"{_legend(chart, focus)}"
+        f"{_legend(chart, focus)}{pause_note(chart)}"
         "</figure>"
+    )
+
+
+def pause_note(chart: dict[str, Any]) -> str:
+    """Caption of the grey band (site/pauses.py), only when the curve shows a pause."""
+    ps = chart.get("pauses") or []
+    if not ps:
+        return ""
+    spans = ", ".join(f"{when(a, year=False)} to {when(b, year=False)}" for a, b in ps)
+    return (
+        f'<p class="chart-note"><span class="pause-swatch" aria-hidden="true"></span>League paused, {e(spans)}: '
+        "the operator's weekly presence check was missed, so no new position could be opened, and the AIs, councils "
+        "and random trader were closed out after 9 days. Values kept being recorded, and nothing was replayed "
+        "afterwards.</p>"
     )
 
 

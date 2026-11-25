@@ -143,6 +143,12 @@ def cmd_unkill(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: i
 
 def cmd_ack(a: argparse.Namespace, paths: Paths, clients: cyc.Clients, now: int) -> int:
     dormancy.write_ack(paths, now)
+    # Journaled so that the site can date each pause for absence (arena/site/pauses.py); var/ack keeps only the last.
+    try:
+        if verify(paths.journal).ok:
+            Journal(paths.journal).append("operator_ack", {"ack_ts": now}, now)
+    except JournalError as exc:
+        print(f"journal not written: {exc}", file=sys.stderr)
     print(f"presence confirmed ({_iso(now)}): dormancy restarts from zero.")
     return 0
 

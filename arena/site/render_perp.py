@@ -18,6 +18,7 @@ from arena.site.render import (
     MINUS,
     NBSP,
     _chart_scripts,
+    pause_note,
     _group,
     _legend,
     last_value,
@@ -413,7 +414,7 @@ def _chart_block(chart: dict[str, Any], *, focus: str | None = None, focus_name:
         f'<div id="chart" class="chart-area" role="img" aria-label="{e(label)}">'
         '<noscript><p class="empty">Chart: JavaScript required. Values in the table.</p></noscript></div>'
         # The curve is the journal's: its legend dates the reading, the live estimate is elsewhere.
-        f'{_legend(chart, focus).replace(">Live: ", ">Latest snapshot: ", 1)}</figure>'
+        f'{_legend(chart, focus).replace(">Live: ", ">Latest snapshot: ", 1)}{pause_note(chart)}</figure>'
     )
 
 

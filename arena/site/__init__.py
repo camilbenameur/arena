@@ -17,6 +17,8 @@ from arena.config import Config
 from arena.risk.policy import Policy
 from arena.site import home, render, render_perp
 from arena.site import data as site_data
+from arena.journal import Journal
+from arena.site import pauses as site_pauses
 from arena.site import perp as site_perp
 
 HERE = Path(__file__).resolve().parent
@@ -56,6 +58,7 @@ def build(
     except Exception:  # the derivatives league must never prevent the spot site from being built
         logging.getLogger("arena.site").exception("derivatives league: computation failed, site built without it")
         data["perp"] = None
+    _add_pauses(journal_path, data)
     vm, gen = data["venue_mode"], data["generated_ts"]
 
     tmp = out_dir.with_name(f".{out_dir.name}.tmp-{os.getpid()}")
@@ -132,8 +135,26 @@ def build(
     shutil.rmtree(old, ignore_errors=True)
 
 
+def _add_pauses(journal_path: Path, data: dict[str, Any]) -> None:
+    """Absence pauses (site/pauses.py) on each league's curve: the spot journal holds the confirmations, and each
+    league counts from its own start, as the cycle and the derivatives watcher do."""
+    events = list(Journal(journal_path).iter_events(strict=False))
+    acks = site_pauses.ack_times(events, journal_path.parent.parent / "ack")
+    now = data["generated_ts"]
+    spot_start = events[0]["ts"] if events else None
+    if data.get("chart"):
+        data["chart"]["pauses"] = site_pauses.clip(site_pauses.dormancy_pauses(acks, spot_start, now), data["chart"]["x"])
+    perp = data.get("perp")
+    if not perp:
+        return
+    for league in (perp, perp.get("councils")):
+        if league and league.get("chart"):
+            ps = site_pauses.dormancy_pauses(acks, perp.get("opened_ts"), now)
+            league["chart"]["pauses"] = site_pauses.clip(ps, league["chart"]["x"])
+
+
 def _model_chart(data: dict[str, Any], p: dict[str, Any]) -> dict[str, Any]:
     """Curve of a portfolio with the basket as reference."""
     keep = {p["id"], "benchmark:basket"}
-    return {"x": data["chart"]["x"], "kinds": data["chart"].get("kinds", []),
+    return {"x": data["chart"]["x"], "kinds": data["chart"].get("kinds", []), "pauses": data["chart"].get("pauses", []),
             "series": [s for s in data["chart"]["series"] if s["id"] in keep]}
