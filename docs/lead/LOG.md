@@ -24,3 +24,15 @@ Daily log of the research lead. Tracker: GitHub issue #1. Paper trading only, st
 **Axis 1 started:** the frozen wick rule, with no retuning, on the other liquid Kraken Futures perpetuals. More contracts means more events (the rule fired on ~60 days per year on 6 contracts), and running a rule unchanged on instruments it never saw is a clean out-of-sample test. Stress tests: entry 1 minute late, doubled costs.
 
 **Axis 2 done: no.** Cross-asset daily rules (trend, dual momentum, risk parity, bond carry, seasonality), 11 ETFs from 2008, design 2008-2015, sealed control 2016-2026 read once, 22 trials. No finalist beats buy-and-hold or 60/40 on return or Sharpe in the control. Best control: SPY November to April (7.2% CAGR) and risk parity (5.8%), against 11.4% for a global equity index and 7.6% for 60/40. Cross-asset rules only cut drawdowns. Kraken cannot trade these instruments anyway (an EU broker with UCITS ETFs would be needed). Details: `axis-02-cross-asset/README.md`.
+
+**Axis 1 done: no.** The frozen wick rule does not generalise beyond the 6 contracts it was designed on. Same year, same bench, no retuning:
+
+| Universe | Events | Base | Entry +1 min | Costs 48 bp |
+|---|---|---|---|---|
+| Original 6 | 92 | +295% / DD -37% | +173% | +155% |
+| 5 new contracts, volume >= USD 5M | 287 | -34% / DD -85% | -50% | -83% |
+| 26 new contracts, volume >= USD 1M | 1,497 | +1,129% / DD -95% | -41% | -98.5% |
+
+On smaller coins the rule fires 2 to 7 times more often, at a much lower gain per trade (-1.8 to +15.6 bp against 71.5 bp): ordinary volatility, not liquidation wicks. The 26-contract result comes from one quarter and one coin (QNT: 64% of the P&L), and turns negative with a one-minute delay or doubled costs.
+
+**Consequence for the live hunter:** it stays on the 6 large contracts, and its edge must now be read as a large-cap effect that has not been confirmed elsewhere. Its live record (still zero trades) is the next real test. No change to the robot.
