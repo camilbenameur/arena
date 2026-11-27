@@ -1,6 +1,6 @@
 # Preregistration, axis 9b: a population of Claude researchers
 
-STATUS: DRAFT
+STATUS: FROZEN
 
 Before any 9b control run the lead replaces the word DRAFT on the line above by the word FROZEN (the gate accepts only a line
 that consists of that status marker and nothing else), fills the section "Sessions" below with the output of
@@ -72,4 +72,32 @@ To be filled by the lead after the last session ended and before the commit, one
 `python docs/lead/axis-09-llm-researcher/evaluate.py --print-session-list` (the line has this exact form, a session without a
 rule reads `session <name> no rule`):
 
-(none yet)
+session fable-s01 frozen_rule.py sha256: 607600ce14e06e17400d13cf13378bd5c47d498c7461714877bdd2d188191fb0
+session fable-s02 frozen_rule.py sha256: f2d0d8a690ce83deee736778a742d631e93f5fca763fbd71dd6a47e6240fd595
+session fable-s03 frozen_rule.py sha256: 7850e218a774fb1164f1a7c7f3eea3a5d691c56f4971b4b5eac206ba4fb64a78
+session fable-s04 frozen_rule.py sha256: 8c579b8097281984de03ac6d6c3858e822834c1e2a5a66a47c78bf14ee7bf0b1
+session fable-s05 frozen_rule.py sha256: 1ea8d061d8a16425f183b1d0ef42909c84cb6f86d539912fb9008d014f6e3387
+session fable-s06 frozen_rule.py sha256: 105606373d341699b48ed0f67f14fd3b2485cee2fe0ff5578994819db898e95b
+session fable-s07 frozen_rule.py sha256: 6c34e151cd7d16a5be552f1680a640f38da119d495c2adffb1f950fbd62436a3
+session fable-s08 no rule
+session fable-s09 frozen_rule.py sha256: 37b4701ce63dfc3daadee70e833ed6201c88731250f9c48a5773e60fb826da07
+session fable-s10 frozen_rule.py sha256: c763d3ab82d5a7e2d206353cb2771b90ca3e680c2267062cdbe9565aff019d21
+session fable-s11 frozen_rule.py sha256: 65b5f20c82a0be2be06e59f8fa03d36bcf488f8434aaa2ca815511cdaf09ec6d
+session fable-s12 frozen_rule.py sha256: ec626975bbab47cb9af8d62b9958dbaf0cfce438ea4961fc4bb4b7246d481bc3
+session fable-s13 frozen_rule.py sha256: 4e5c002c8684f860f60773213df8eda69679a175ef45e254c2198669664a7654
+session fable-s14 frozen_rule.py sha256: 72365dd12c0060cf32ccf2301a374b1778e4997d99f5e8ea64a302ada7607da7
+session fable-s15 frozen_rule.py sha256: a9f855d663e18bd304975d00fe7e591536cf8232ff12ced26c2c0152a1597e03
+session fable-s16 frozen_rule.py sha256: a3ac2b92f0101757709b43c494ff911b3816737672e959a757f13945658e1126
+session fable-s17 no rule
+session opus-s01 frozen_rule.py sha256: 590cf5ef32a1744c40d292c2fffc0cc8fe8895a1f5fca65de5d96c0db73ee75f
+session opus-s02 frozen_rule.py sha256: ff78b9c87becdec87c2f87181193eb26f7d52464e5ab828fe23f21d3e8e3142f
+session opus-s03 frozen_rule.py sha256: 7190c55287262baa857898a65a0091abc24a94c0ae25e283204d194ed7859aa1
+session opus-s04 frozen_rule.py sha256: ee29743c84dbb45de4baec2950ccf6d5e44d477dc1393d37febee379bdc17bbe
+session opus-s05 frozen_rule.py sha256: 96873c1c75c641b0128063a541b798e49b27b248a595dc9721a4fc69950b1aea
+session opus-s06 frozen_rule.py sha256: 59453d7aab33ab4c3a7e120ca1e3528fe00c5646589559379cf1aa59b5877fd5
+session opus-s07 frozen_rule.py sha256: 70f5c00831f94e84e1e39cfca5ad7d435c2abbdcd9edcf819a9bb6f68f8ddcc4
+session opus-s08 frozen_rule.py sha256: 517bd293934fee71d80dc4053a4ae240c9bf4109f88f4e790aeca50481a3b026
+session opus-s09 frozen_rule.py sha256: 5bce486d3417ed89ae593d30dc1081d0e2a2732c54c9382befafb60ca20278a5
+session opus-s10 frozen_rule.py sha256: 29cc90e165f6e9fdfda87243915c03fd86a4eeb560a27836a9768f995cbe3254
+
+Frozen on 2026-11-27 by the lead after the last session ended: 27 sessions run (17 Fable, 10 Opus), 25 rules, 2 Fable sessions without a rule (connection dropped mid-stream; their reservations stay counted). The axis-9b budget was spent; the planned extra Opus sessions were not run. Every transcript was checked: the only network-related words are the brief's own prohibition.

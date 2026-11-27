@@ -1,0 +1,11 @@
+{
+ "effort": "high",
+ "halt": true,
+ "model": "claude-fable-5-2",
+ "open_reservation_usd": 2.594,
+ "rule_written": false,
+ "session": "fable-s17",
+ "stop": "error: RemoteProtocolError: peer closed connection without sending complete message body (incomplete chunked read)",
+ "turns": 0,
+ "usd": 0
+}

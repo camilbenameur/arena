@@ -1,0 +1,11 @@
+{
+ "effort": "high",
+ "halt": false,
+ "model": "claude-fable-5-2",
+ "open_reservation_usd": 0,
+ "rule_written": true,
+ "session": "fable-s05",
+ "stop": "done",
+ "turns": 1,
+ "usd": 1.1593
+}

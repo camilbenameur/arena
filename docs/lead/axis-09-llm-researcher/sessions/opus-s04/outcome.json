@@ -1,0 +1,11 @@
+{
+ "effort": "high",
+ "halt": false,
+ "model": "claude-opus-5-5",
+ "open_reservation_usd": 0,
+ "rule_written": true,
+ "session": "opus-s04",
+ "stop": "done",
+ "turns": 1,
+ "usd": 0.3475
+}
