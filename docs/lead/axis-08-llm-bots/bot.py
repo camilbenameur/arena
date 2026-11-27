@@ -85,6 +85,14 @@ contract can carry a larger weight than a very volatile one.
 - Positions that are working should usually be kept; do not cut a winner because the last bar was a pause. Cut a loser when \
 the reason you held it is gone, not because it moved against you by one ordinary bar.
 - Trend and carry matter at this horizon; a single bar rarely does.""",
+    "v3_overlay": _COMMON
+    + """
+
+## Your starting point
+Your default portfolio is the equal-weight basket: weight +1.0 in every contract. Holding it costs nothing in trading. \
+Deviate from it only where you have a clear view: cut or short a contract you expect to fall, or add up to +2.0 to one you \
+expect to keep rising. Every deviation must be paid for by a move larger than its round-trip cost. When you have no view on \
+a contract, keep it at +1.0.""",
 }
 
 
