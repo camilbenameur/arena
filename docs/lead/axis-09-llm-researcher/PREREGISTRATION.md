@@ -1,6 +1,6 @@
 # Preregistration, axis 9: Claude as a researcher
 
-STATUS: DRAFT
+STATUS: FROZEN
 
 Before the control run the lead replaces the word DRAFT on the line above by the word FROZEN (the gate accepts only a line
 that consists of that status marker and nothing else), adds the line `frozen_rule.py sha256: <64 hex digits>` for the
@@ -56,3 +56,9 @@ Reading: in a falling control window a pass of (1) means beating a trend engine 
 To be added by the lead after the session and before the commit, on a line of its own, in this exact form:
 
 `frozen_rule.py sha256: <hex>` (without the backticks)
+
+## Frozen rule
+
+frozen_rule.py sha256: 8a6da2e172985f3949b9ae42a3a783f6012b9017509dd979f5c6c0e5a7780283
+
+Returned by claude-fable-5-2 on 2026-11-27 after one session (14 trials logged in trials_by_model.md, cost 1.14 USD). The model labels it "no robust edge found; most defensible simple fallback". The transcript shows no network use (6 code executions, all on the two uploaded files).
