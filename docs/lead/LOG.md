@@ -66,3 +66,9 @@ On smaller coins the rule fires 2 to 7 times more often, at a much lower gain pe
 - **Before costs:** the rule earns +4 bp in design and -4 bp in control, far below the 20 bp of costs.
 - **Not the wick effect:** removing the 7 to 19% of events that coincide with wicks changes nothing.
 - **Verification:** both adversarial checks judged the result sound.
+
+**Axis 6 stopped at the feasibility gate: too few events.** Short after a hack, sized by severity.
+- **Event count:** DefiLlama lists 1,378 incidents. About 12 to 15 credible events per period have a perp on the affected token, almost all on Binance only and none on Kraken. That is at most 28 design and 24 control events, before any loss from missing timestamps.
+- **Timestamps:** the dates are day-level only, with no source links, so an entry 30 minutes after the hack cannot be reconstructed.
+- **Prices:** none were loaded, and the adversarial check confirms it.
+- **Verdict:** not testable honestly.
