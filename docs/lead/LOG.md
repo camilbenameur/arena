@@ -118,3 +118,10 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 - Spend so far: $4.41.
 
 **Wave 2 (running):** a third and last prompt variant, "overlay": start from the basket and deviate only with a view. It runs on Haiku, Sonnet, Opus and Fable, together with the other Opus and Fable variants.
+
+**Axis 8, wave 2 and freeze.**
+- **The overlay prompt** (start from the basket, deviate only with a view) brings every model close to the basket: +43.3% (Haiku), +45.8% (Sonnet), +44.2% (Opus), +44.9% (Fable), against +45.8% for the basket itself.
+- **Fable:** with the plain and cost-aware prompts it does no better than Haiku (+14.0% and +14.8%).
+- **On design, no bot passes all criteria.** Only Haiku beats the random bot with the same turnover, plain at the 95% level and overlay barely.
+- **Freeze:** the preregistration is frozen and committed (04cdcfc). All 12 design bots go to the sealed control, with no selection, and both deviations are declared: Fable added, and the code hash changed only by the added variant.
+- **Spend:** $22.09 at the freeze. The control runs are under way.
