@@ -60,3 +60,9 @@ On smaller coins the rule fires 2 to 7 times more often, at a much lower gain pe
   - The fill model ignores the queue and counts sweeps as independent prints.
 
 **Process fix from now on:** I commit each preregistration to git myself before any control run, so its date and content can be verified. The control-run lock also becomes a commit.
+
+**Axis 5 done: no.** Reversal after an open-interest washout, on Binance 5-minute open interest from 2020-2021 for 6 contracts. Design runs to 2025, the sealed control covers 2026, 16 trials.
+- **Result:** net of 0.20% round-trip costs, every delay from 5 to 60 minutes loses in both design and control. At 15 minutes the control loses -24 bp per event, or -1.7 bp counting one event per crash day. All 6 contracts are negative.
+- **Before costs:** the rule earns +4 bp in design and -4 bp in control, far below the 20 bp of costs.
+- **Not the wick effect:** removing the 7 to 19% of events that coincide with wicks changes nothing.
+- **Verification:** both adversarial checks judged the result sound.
