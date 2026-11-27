@@ -1,0 +1,668 @@
+{
+ "1": {
+  "spec": {
+   "id": 1,
+   "type": "always",
+   "coins": [
+    "BTC"
+   ],
+   "k": 1
+  },
+  "control_base": {
+   "total_ret": 0.0557,
+   "ann_ret": 0.0228,
+   "ann_vol": 0.0025,
+   "sharpe": 9.5092,
+   "max_dd": -0.0042,
+   "worst_month": -0.0017,
+   "pct_pos_months": 0.8966,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.4155,
+   "funding_eur": 65.1861,
+   "costs_eur": 9.4836
+  },
+  "by_year": {
+   "2024": 0.0176,
+   "2025": 0.026,
+   "2026": 0.0112
+  },
+  "control_optim": {
+   "total_ret": 0.0584,
+   "ann_ret": 0.0238,
+   "ann_vol": 0.0023,
+   "sharpe": 10.3907,
+   "max_dd": -0.0037,
+   "worst_month": -0.0015,
+   "pct_pos_months": 0.8966,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.4155,
+   "funding_eur": 65.2618,
+   "costs_eur": 6.903
+  },
+  "control_base_margin0.5": {
+   "total_ret": 0.0748,
+   "ann_ret": 0.0304,
+   "ann_vol": 0.0033,
+   "sharpe": 9.4946,
+   "max_dd": -0.0056,
+   "worst_month": -0.0023,
+   "pct_pos_months": 0.8966,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.4155,
+   "funding_eur": 87.5249,
+   "costs_eur": 12.7465
+  },
+  "kraken_funding_replay_base": {
+   "total_ret": 0.0136,
+   "ann_ret": 0.0136,
+   "ann_vol": 0.0037,
+   "sharpe": 3.6152,
+   "max_dd": -0.0034,
+   "worst_month": -0.0028,
+   "pct_pos_months": 0.6923,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 1.0007,
+   "funding_eur": 18.2253,
+   "costs_eur": 4.69
+  },
+  "binance_funding_same_window_base": {
+   "total_ret": 0.013,
+   "ann_ret": 0.013,
+   "ann_vol": 0.0036,
+   "sharpe": 3.5893,
+   "max_dd": -0.003,
+   "worst_month": -0.0028,
+   "pct_pos_months": 0.6923,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 1.0007,
+   "funding_eur": 17.592,
+   "costs_eur": 4.6707
+  }
+ },
+ "2": {
+  "spec": {
+   "id": 2,
+   "type": "always",
+   "coins": [
+    "ETH"
+   ],
+   "k": 1
+  },
+  "control_base": {
+   "total_ret": 0.0465,
+   "ann_ret": 0.019,
+   "ann_vol": 0.0028,
+   "sharpe": 7.0379,
+   "max_dd": -0.0045,
+   "worst_month": -0.0028,
+   "pct_pos_months": 0.8621,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.4155,
+   "funding_eur": 60.7129,
+   "costs_eur": 13.8021
+  },
+  "by_year": {
+   "2024": 0.02,
+   "2025": 0.0197,
+   "2026": 0.0061
+  },
+  "control_optim": {
+   "total_ret": 0.0503,
+   "ann_ret": 0.0206,
+   "ann_vol": 0.0026,
+   "sharpe": 8.2321,
+   "max_dd": -0.0042,
+   "worst_month": -0.0024,
+   "pct_pos_months": 0.8621,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.4155,
+   "funding_eur": 60.8093,
+   "costs_eur": 10.0557
+  },
+  "control_base_margin0.5": {
+   "total_ret": 0.062,
+   "ann_ret": 0.0253,
+   "ann_vol": 0.0038,
+   "sharpe": 6.9042,
+   "max_dd": -0.0061,
+   "worst_month": -0.0037,
+   "pct_pos_months": 0.8621,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.4155,
+   "funding_eur": 81.2441,
+   "costs_eur": 18.6848
+  },
+  "kraken_funding_replay_base": {
+   "total_ret": 0.0117,
+   "ann_ret": 0.0116,
+   "ann_vol": 0.0037,
+   "sharpe": 3.0885,
+   "max_dd": -0.0037,
+   "worst_month": -0.0027,
+   "pct_pos_months": 0.6923,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 1.0007,
+   "funding_eur": 18.3548,
+   "costs_eur": 6.604
+  },
+  "binance_funding_same_window_base": {
+   "total_ret": 0.0055,
+   "ann_ret": 0.0055,
+   "ann_vol": 0.0037,
+   "sharpe": 1.4854,
+   "max_dd": -0.0051,
+   "worst_month": -0.0028,
+   "pct_pos_months": 0.6154,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 1.0007,
+   "funding_eur": 12.1466,
+   "costs_eur": 6.5942
+  }
+ },
+ "3": {
+  "spec": {
+   "id": 3,
+   "type": "always",
+   "coins": [
+    "BTC",
+    "ETH"
+   ],
+   "k": 2
+  },
+  "control_base": {
+   "total_ret": 0.0511,
+   "ann_ret": 0.0209,
+   "ann_vol": 0.0023,
+   "sharpe": 9.6789,
+   "max_dd": -0.0044,
+   "worst_month": -0.0021,
+   "pct_pos_months": 0.8966,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.8311,
+   "funding_eur": 62.9511,
+   "costs_eur": 11.6315
+  },
+  "by_year": {
+   "2024": 0.0188,
+   "2025": 0.0229,
+   "2026": 0.0086
+  },
+  "control_optim": {
+   "total_ret": 0.0543,
+   "ann_ret": 0.0222,
+   "ann_vol": 0.0021,
+   "sharpe": 10.7472,
+   "max_dd": -0.0039,
+   "worst_month": -0.0018,
+   "pct_pos_months": 0.8966,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.8311,
+   "funding_eur": 63.0405,
+   "costs_eur": 8.4713
+  },
+  "control_base_margin0.5": {
+   "total_ret": 0.0684,
+   "ann_ret": 0.0279,
+   "ann_vol": 0.003,
+   "sharpe": 9.6099,
+   "max_dd": -0.0058,
+   "worst_month": -0.0028,
+   "pct_pos_months": 0.8966,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 0.8311,
+   "funding_eur": 84.3704,
+   "costs_eur": 15.7097
+  },
+  "kraken_funding_replay_base": {
+   "total_ret": 0.0126,
+   "ann_ret": 0.0126,
+   "ann_vol": 0.0034,
+   "sharpe": 3.6415,
+   "max_dd": -0.0035,
+   "worst_month": -0.0027,
+   "pct_pos_months": 0.6923,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 2.0014,
+   "funding_eur": 18.2804,
+   "costs_eur": 5.6441
+  },
+  "binance_funding_same_window_base": {
+   "total_ret": 0.0092,
+   "ann_ret": 0.0092,
+   "ann_vol": 0.0034,
+   "sharpe": 2.7176,
+   "max_dd": -0.004,
+   "worst_month": -0.0027,
+   "pct_pos_months": 0.6923,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 2.0014,
+   "funding_eur": 14.8629,
+   "costs_eur": 5.6349
+  }
+ },
+ "21": {
+  "spec": {
+   "id": 21,
+   "type": "thr",
+   "coins": [
+    "BTC",
+    "ETH"
+   ],
+   "w": 63,
+   "enter": 0.03,
+   "exit": 0.0,
+   "k": 2
+  },
+  "control_base": {
+   "total_ret": 0.0403,
+   "ann_ret": 0.0165,
+   "ann_vol": 0.0033,
+   "sharpe": 5.2596,
+   "max_dd": -0.0092,
+   "worst_month": -0.0047,
+   "pct_pos_months": 0.7931,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 4.1553,
+   "funding_eur": 62.8691,
+   "costs_eur": 22.3768
+  },
+  "by_year": {
+   "2024": 0.0151,
+   "2025": 0.0229,
+   "2026": 0.0018
+  },
+  "control_optim": {
+   "total_ret": 0.0465,
+   "ann_ret": 0.0191,
+   "ann_vol": 0.0027,
+   "sharpe": 7.1973,
+   "max_dd": -0.0064,
+   "worst_month": -0.0036,
+   "pct_pos_months": 0.7931,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 4.1553,
+   "funding_eur": 63.0279,
+   "costs_eur": 16.3202
+  },
+  "control_base_margin0.5": {
+   "total_ret": 0.0543,
+   "ann_ret": 0.0222,
+   "ann_vol": 0.0044,
+   "sharpe": 5.2786,
+   "max_dd": -0.0117,
+   "worst_month": -0.0057,
+   "pct_pos_months": 0.7931,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 4.1553,
+   "funding_eur": 84.4033,
+   "costs_eur": 29.9782
+  },
+  "kraken_funding_replay_base": {
+   "total_ret": 0.0061,
+   "ann_ret": 0.0061,
+   "ann_vol": 0.0041,
+   "sharpe": 1.5024,
+   "max_dd": -0.0058,
+   "worst_month": -0.0042,
+   "pct_pos_months": 0.4615,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 7.0048,
+   "funding_eur": 18.3881,
+   "costs_eur": 12.226
+  },
+  "binance_funding_same_window_base": {
+   "total_ret": 0.0019,
+   "ann_ret": 0.0019,
+   "ann_vol": 0.0047,
+   "sharpe": 0.401,
+   "max_dd": -0.0089,
+   "worst_month": -0.0044,
+   "pct_pos_months": 0.5385,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 8.0055,
+   "funding_eur": 15.8687,
+   "costs_eur": 14.0069
+  }
+ },
+ "24": {
+  "spec": {
+   "id": 24,
+   "type": "rot",
+   "coins": [
+    "BTC",
+    "ETH",
+    "XRP",
+    "ADA",
+    "SOL",
+    "DOGE",
+    "LTC",
+    "LINK",
+    "DOT",
+    "AVAX",
+    "BCH",
+    "ATOM",
+    "UNI",
+    "TRX",
+    "XLM",
+    "AAVE",
+    "ETC",
+    "FIL",
+    "NEAR",
+    "ALGO",
+    "XTZ",
+    "SAND",
+    "MANA",
+    "CRV",
+    "SNX"
+   ],
+   "w": 126,
+   "enter": 0.08,
+   "k": 5
+  },
+  "control_base": {
+   "total_ret": -0.014,
+   "ann_ret": -0.0058,
+   "ann_vol": 0.0056,
+   "sharpe": -0.8511,
+   "max_dd": -0.0177,
+   "worst_month": -0.0049,
+   "pct_pos_months": 0.2414,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 32.4113,
+   "funding_eur": 39.0735,
+   "costs_eur": 52.6223
+  },
+  "by_year": {
+   "2024": 0.0019,
+   "2025": -0.0117,
+   "2026": -0.0042
+  },
+  "control_optim": {
+   "total_ret": 0.0003,
+   "ann_ret": 0.0001,
+   "ann_vol": 0.0048,
+   "sharpe": 0.197,
+   "max_dd": -0.0096,
+   "worst_month": -0.0036,
+   "pct_pos_months": 0.3793,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 32.4113,
+   "funding_eur": 39.2497,
+   "costs_eur": 38.5491
+  },
+  "control_base_margin0.5": {
+   "total_ret": -0.0186,
+   "ann_ret": -0.0078,
+   "ann_vol": 0.0074,
+   "sharpe": -0.8505,
+   "max_dd": -0.0235,
+   "worst_month": -0.0066,
+   "pct_pos_months": 0.2414,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 32.4113,
+   "funding_eur": 51.9722,
+   "costs_eur": 70.0675
+  },
+  "kraken_funding_replay_base": {
+   "total_ret": -0.0055,
+   "ann_ret": -0.0055,
+   "ann_vol": 0.0032,
+   "sharpe": -1.7301,
+   "max_dd": -0.0061,
+   "worst_month": -0.0029,
+   "pct_pos_months": 0.0,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 15.0103,
+   "funding_eur": 4.5231,
+   "costs_eur": 10.0657
+  },
+  "binance_funding_same_window_base": {
+   "total_ret": -0.0043,
+   "ann_ret": -0.0043,
+   "ann_vol": 0.003,
+   "sharpe": -1.4159,
+   "max_dd": -0.0053,
+   "worst_month": -0.0025,
+   "pct_pos_months": 0.1538,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 12.0082,
+   "funding_eur": 2.9341,
+   "costs_eur": 7.4066
+  }
+ },
+ "13": {
+  "spec": {
+   "id": 13,
+   "type": "rot",
+   "coins": [
+    "BTC",
+    "ETH",
+    "XRP",
+    "ADA",
+    "SOL",
+    "DOGE",
+    "LTC",
+    "LINK",
+    "DOT",
+    "AVAX",
+    "BCH",
+    "ATOM",
+    "UNI",
+    "TRX",
+    "XLM",
+    "AAVE",
+    "ETC",
+    "FIL",
+    "NEAR",
+    "ALGO",
+    "XTZ",
+    "SAND",
+    "MANA",
+    "CRV",
+    "SNX"
+   ],
+   "w": 63,
+   "enter": 0.15,
+   "k": 3
+  },
+  "control_base": {
+   "total_ret": -0.0045,
+   "ann_ret": -0.0019,
+   "ann_vol": 0.0032,
+   "sharpe": -0.5772,
+   "max_dd": -0.0055,
+   "worst_month": -0.0051,
+   "pct_pos_months": 0.0345,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 6.6485,
+   "funding_eur": 10.5624,
+   "costs_eur": 15.8929
+  },
+  "by_year": {
+   "2024": -0.0045,
+   "2025": 0.0,
+   "2026": 0.0
+  },
+  "control_optim": {
+   "total_ret": -0.0002,
+   "ann_ret": -0.0001,
+   "ann_vol": 0.0024,
+   "sharpe": -0.0253,
+   "max_dd": -0.0031,
+   "worst_month": -0.0017,
+   "pct_pos_months": 0.0345,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 6.6485,
+   "funding_eur": 10.5777,
+   "costs_eur": 11.5791
+  },
+  "control_base_margin0.5": {
+   "total_ret": -0.006,
+   "ann_ret": -0.0025,
+   "ann_vol": 0.0043,
+   "sharpe": -0.5774,
+   "max_dd": -0.0073,
+   "worst_month": -0.0068,
+   "pct_pos_months": 0.0345,
+   "n_months": 29,
+   "years": 2.4075,
+   "trades_per_year": 6.6485,
+   "funding_eur": 14.0735,
+   "costs_eur": 21.1818
+  },
+  "kraken_funding_replay_base": {
+   "total_ret": -0.0082,
+   "ann_ret": -0.0082,
+   "ann_vol": 0.007,
+   "sharpe": -1.1617,
+   "max_dd": -0.0091,
+   "worst_month": -0.0041,
+   "pct_pos_months": 0.0769,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 14.0096,
+   "funding_eur": 4.5644,
+   "costs_eur": 12.861
+  },
+  "binance_funding_same_window_base": {
+   "total_ret": 0.0,
+   "ann_ret": 0.0,
+   "ann_vol": 0.0,
+   "sharpe": 0,
+   "max_dd": 0.0,
+   "worst_month": 0.0,
+   "pct_pos_months": 0.0,
+   "n_months": 13,
+   "years": 1.0011,
+   "trades_per_year": 0.0,
+   "funding_eur": 0.0,
+   "costs_eur": 0.0
+  }
+ },
+ "19": {
+  "spec": {
+   "id": 19,
+   "type": "xv",
+   "coins": [
+    "BTC",
+    "ETH",
+    "SOL",
+    "XRP",
+    "DOGE",
+    "LTC",
+    "LINK",
+    "ADA"
+   ],
+   "w": 21,
+   "enter": 0.05,
+   "exit": 0.02,
+   "k": 3
+  },
+  "control_base": {
+   "total_ret": -0.0404,
+   "ann_ret": -0.017,
+   "ann_vol": 0.0032,
+   "sharpe": -5.3618,
+   "max_dd": -0.0406,
+   "worst_month": -0.0048,
+   "pct_pos_months": 0.0667,
+   "n_months": 30,
+   "years": 2.4084,
+   "trades_per_year": 68.1468,
+   "funding_eur": 13.207,
+   "costs_eur": 53.6225
+  },
+  "by_half": {
+   "2024": -0.0085,
+   "2025": -0.0208,
+   "2026": -0.0116
+  },
+  "kraken_vs_binance": {
+   "total_ret": -0.0297,
+   "ann_ret": -0.0296,
+   "ann_vol": 0.0044,
+   "sharpe": -6.7584,
+   "max_dd": -0.0303,
+   "worst_month": -0.0074,
+   "pct_pos_months": 0.1538,
+   "n_months": 13,
+   "years": 1.0021,
+   "trades_per_year": 134.0918,
+   "funding_eur": 14.3616,
+   "costs_eur": 44.0517
+  }
+ },
+ "20": {
+  "spec": {
+   "id": 20,
+   "type": "xv",
+   "coins": [
+    "BTC"
+   ],
+   "w": 63,
+   "enter": 0.03,
+   "exit": 0.01,
+   "k": 1
+  },
+  "control_base": {
+   "total_ret": -0.0096,
+   "ann_ret": -0.004,
+   "ann_vol": 0.0024,
+   "sharpe": -1.6545,
+   "max_dd": -0.0098,
+   "worst_month": -0.0021,
+   "pct_pos_months": 0.1,
+   "n_months": 30,
+   "years": 2.4084,
+   "trades_per_year": 5.8174,
+   "funding_eur": 4.3616,
+   "costs_eur": 13.9476
+  },
+  "by_half": {
+   "2024": -0.0034,
+   "2025": -0.0054,
+   "2026": -0.0009
+  },
+  "kraken_vs_binance": {
+   "total_ret": -0.0052,
+   "ann_ret": -0.0052,
+   "ann_vol": 0.0031,
+   "sharpe": -1.6871,
+   "max_dd": -0.0077,
+   "worst_month": -0.0017,
+   "pct_pos_months": 0.1538,
+   "n_months": 13,
+   "years": 1.0021,
+   "trades_per_year": 9.0062,
+   "funding_eur": 3.7684,
+   "costs_eur": 8.9746
+  }
+ }
+}

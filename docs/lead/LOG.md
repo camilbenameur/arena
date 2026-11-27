@@ -45,3 +45,8 @@ On smaller coins the rule fires 2 to 7 times more often, at a much lower gain pe
 5. a short after hacks, sized by severity.
 
 8 ideas were rejected, with reasons: macro-release windows, post-listing fade, perp premium fades, the gold-token spread, delisting shorts, and LLM classifiers (the control period lies inside the models' knowledge, so they leak). None is a fast-profit engine: realistic expectations are 0 to 8% per year, and the first three are mainly cheap falsifications.
+
+**Axis 3 done: it works, but it is a cash substitute.** Market-neutral carry (long spot, short perp), Binance and Bybit funding from 2020, design up to mid-2024, sealed control after, 24 trials, Kraken retail costs.
+- **Always-on BTC+ETH:** +2.1% a year in the control, max drawdown -0.4%, 90% of months positive. On Kraken's own funding over the last 12 months, +1.3%. It was +18.7% in 2021: the return follows the funding regime.
+- **Variants:** every timing, rotation and cross-venue variant did worse, from -1.7% to +1.7% a year. A round trip costs 0.55% of equity, so anything that trades often loses.
+- **Verdict:** worth running only as a low-risk benchmark (EUR 13 to 20 a year on EUR 1,000), not as a profit source. It is not added to the arena for now.
