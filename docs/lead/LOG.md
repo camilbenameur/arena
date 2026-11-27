@@ -94,3 +94,8 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 - **Comparison:** each bot is compared with the trend engine, the basket and a random bot with the same turnover.
 - **Budget:** about $160 of API credit to use before December, through the Batch API (-50%), with a hard spend cap in the harness.
 - **Phase 1 (now):** build the harness and a zero-cost dry run. Real runs start once the key is stored on this machine.
+
+**Axis 8, harness ready and first batches submitted.**
+- **Fixes:** the 8 flaws found by the checkers are fixed and re-verified. They were: a bypassable control gate, a dry run burning the control run, a non-atomic spend cap, a possible double batch submission, a bot id blind to the feature code, and June data in the first design month (design now starts 2026-07-31).
+- **Pilots:** 2 calls per model, and every model accepted the JSON schema and the effort setting. Answers are short (~120 output tokens), so a full design pass in batch costs about $0.10 (Haiku), $1 (Sonnet), $2 (Opus) and $4.5 (Fable).
+- **Wave 1:** Haiku x 2 prompts, Sonnet x 2, Opus x 1, all in batch. Spend so far: $0.10.
