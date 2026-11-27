@@ -72,3 +72,16 @@ On smaller coins the rule fires 2 to 7 times more often, at a much lower gain pe
 - **Timestamps:** the dates are day-level only, with no source links, so an entry 30 minutes after the hack cannot be reconstructed.
 - **Prices:** none were loaded, and the adversarial check confirms it.
 - **Verdict:** not testable honestly.
+
+**Axis 7 blocked by tooling, not tested.** Short before token unlocks.
+- **No event built:** the agent could not assemble any event with point-in-time proof that the schedule was public. DefiLlama emissions is paid, and the Wayback Machine returned HTTP 429.
+- **Overstated effort:** the adversarial check found the researcher claimed 30 minutes of retries, while the logs show 4 attempts over 3 minutes. Its "too few events" verdict really meant "not attempted". The README is corrected.
+- **Kept for a retry:** a point-in-time perp universe (704 assets, first Kraken or Binance listing date) and 15 unverified leads. The retry would use other sources: archived tracker pages through a browser, project docs, or on-chain vesting contracts.
+
+**End of day 1: 7 axes, no winning strategy to run.**
+- **Clear no:** the wick rule beyond its 6 large contracts, cross-asset ETFs, the open-interest washout.
+- **Holds but small:** market-neutral carry, about +2% a year.
+- **Inconclusive:** stablecoin bids.
+- **Untestable or blocked:** shorts after hacks, shorts before unlocks.
+
+The only live candidate is still the wick hunter on the 6 large contracts, waiting for its first wick.

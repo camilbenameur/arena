@@ -1,0 +1,2263 @@
+{
+"0G": {
+"binance_onboard": "2025-09-17"
+},
+"1INCH": {
+"binance_onboard": "2020-12-25"
+},
+"1MBABYDOGE": {
+"binance_onboard": "2024-09-16"
+},
+"2Z": {
+"binance_onboard": "2025-10-02"
+},
+"4": {
+"binance_onboard": "2025-10-08"
+},
+"42": {
+"binance_onboard": "2025-10-27"
+},
+"A": {
+"binance_onboard": "2025-05-28"
+},
+"A2Z": {
+"binance_onboard": "2025-07-30"
+},
+"AAPLX": {
+"kraken_open": "2026-02-06"
+},
+"AAVE": {
+"kraken_open": "2022-06-27",
+"binance_onboard": "2020-10-16"
+},
+"ACE": {
+"binance_onboard": "2023-12-18"
+},
+"ACH": {
+"binance_onboard": "2023-02-21"
+},
+"ACT": {
+"binance_onboard": "2024-11-11"
+},
+"ACU": {
+"binance_onboard": "2026-01-21"
+},
+"ACX": {
+"binance_onboard": "2024-12-06"
+},
+"ADA": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-01-31"
+},
+"AERO": {
+"binance_onboard": "2024-12-04"
+},
+"AEVO": {
+"binance_onboard": "2024-03-13"
+},
+"AGIX": {
+"binance_onboard": "2023-02-15"
+},
+"AGLD": {
+"binance_onboard": "2023-07-29"
+},
+"AGT": {
+"binance_onboard": "2025-05-20"
+},
+"AI": {
+"binance_onboard": "2024-01-08"
+},
+"AI16Z": {
+"binance_onboard": "2025-01-02"
+},
+"AIA": {
+"binance_onboard": "2026-01-20"
+},
+"AIGENSYN": {
+"binance_onboard": "2026-04-29"
+},
+"AIN": {
+"binance_onboard": "2025-07-10"
+},
+"AIO": {
+"binance_onboard": "2025-08-13"
+},
+"AIOT": {
+"binance_onboard": "2025-04-30"
+},
+"AIXBT": {
+"binance_onboard": "2024-12-20"
+},
+"AKE": {
+"binance_onboard": "2025-09-26"
+},
+"AKT": {
+"binance_onboard": "2024-11-18"
+},
+"ALCH": {
+"binance_onboard": "2025-01-07"
+},
+"ALGO": {
+"kraken_open": "2022-07-06",
+"binance_onboard": "2020-06-16"
+},
+"ALICE": {
+"kraken_open": "2022-09-21",
+"binance_onboard": "2021-03-15"
+},
+"ALL": {
+"binance_onboard": "2025-08-06"
+},
+"ALLO": {
+"binance_onboard": "2025-11-11"
+},
+"ALPACA": {
+"binance_onboard": "2024-08-22"
+},
+"ALPHA": {
+"binance_onboard": "2020-11-23"
+},
+"ALPINE": {
+"binance_onboard": "2025-05-06"
+},
+"ALT": {
+"binance_onboard": "2024-01-25"
+},
+"AMB": {
+"binance_onboard": "2023-03-29"
+},
+"AMD": {
+"kraken_open": "2026-10-15"
+},
+"AMZNX": {
+"kraken_open": "2026-08-05"
+},
+"ANIME": {
+"binance_onboard": "2025-01-23"
+},
+"ANKR": {
+"binance_onboard": "2021-01-25"
+},
+"ANTX": {
+"kraken_open": "2026-11-13"
+},
+"APE": {
+"kraken_open": "2022-06-13",
+"binance_onboard": "2022-03-17"
+},
+"API3": {
+"binance_onboard": "2022-02-21"
+},
+"APR": {
+"binance_onboard": "2025-10-23"
+},
+"APT": {
+"kraken_open": "2022-10-19",
+"binance_onboard": "2022-10-18"
+},
+"AR": {
+"binance_onboard": "2021-09-28"
+},
+"ARB": {
+"kraken_open": "2023-03-23",
+"binance_onboard": "2023-03-23"
+},
+"ARC": {
+"kraken_open": "2025-01-28",
+"binance_onboard": "2025-01-17"
+},
+"ARIA": {
+"binance_onboard": "2025-09-03"
+},
+"ARK": {
+"binance_onboard": "2023-09-19"
+},
+"ARKM": {
+"binance_onboard": "2023-07-28"
+},
+"ARPA": {
+"binance_onboard": "2021-10-18"
+},
+"ARX": {
+"binance_onboard": "2026-06-23"
+},
+"ASR": {
+"binance_onboard": "2025-05-06"
+},
+"ASTER": {
+"kraken_open": "2025-09-25",
+"binance_onboard": "2025-09-19"
+},
+"ASTR": {
+"binance_onboard": "2023-02-13"
+},
+"AT": {
+"binance_onboard": "2025-10-29"
+},
+"ATA": {
+"binance_onboard": "2021-08-30"
+},
+"ATH": {
+"binance_onboard": "2025-04-02"
+},
+"ATOM": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-02-07"
+},
+"AUCTION": {
+"binance_onboard": "2023-12-15"
+},
+"AVA": {
+"binance_onboard": "2024-12-13"
+},
+"AVAAI": {
+"binance_onboard": "2025-01-17"
+},
+"AVAX": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-09-23"
+},
+"AVNT": {
+"binance_onboard": "2025-09-09"
+},
+"AWE": {
+"binance_onboard": "2025-05-21"
+},
+"AXL": {
+"binance_onboard": "2024-03-01"
+},
+"AXS": {
+"kraken_open": "2022-08-03",
+"binance_onboard": "2020-11-20"
+},
+"AZTEC": {
+"binance_onboard": "2026-02-11"
+},
+"B": {
+"binance_onboard": "2025-05-22"
+},
+"B2": {
+"binance_onboard": "2025-05-06"
+},
+"B3": {
+"binance_onboard": "2025-02-13"
+},
+"BABY": {
+"binance_onboard": "2025-04-05"
+},
+"BADGER": {
+"binance_onboard": "2023-11-09"
+},
+"BAKE": {
+"binance_onboard": "2021-05-18"
+},
+"BAL": {
+"binance_onboard": "2020-09-01"
+},
+"BAN": {
+"binance_onboard": "2024-11-18"
+},
+"BANANA": {
+"binance_onboard": "2024-08-15"
+},
+"BANANAS31": {
+"binance_onboard": "2025-03-22"
+},
+"BAND": {
+"binance_onboard": "2020-07-29"
+},
+"BANK": {
+"binance_onboard": "2025-04-18"
+},
+"BARD": {
+"binance_onboard": "2025-09-18"
+},
+"BAS": {
+"binance_onboard": "2025-08-26"
+},
+"BASED": {
+"binance_onboard": "2026-03-30"
+},
+"BAT": {
+"kraken_open": "2022-07-20",
+"binance_onboard": "2020-02-13"
+},
+"BB": {
+"binance_onboard": "2024-05-13"
+},
+"BCH": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2019-12-19"
+},
+"BEAMX": {
+"binance_onboard": "2023-11-17"
+},
+"BEAT": {
+"binance_onboard": "2025-11-12"
+},
+"BEL": {
+"binance_onboard": "2020-11-18"
+},
+"BERA": {
+"binance_onboard": "2025-02-06"
+},
+"BICO": {
+"kraken_open": "2024-05-01",
+"binance_onboard": "2023-09-28"
+},
+"BID": {
+"binance_onboard": "2025-03-20"
+},
+"BIGTIME": {
+"binance_onboard": "2023-10-12"
+},
+"BILL": {
+"binance_onboard": "2026-05-07"
+},
+"BIO": {
+"kraken_open": "2025-01-28",
+"binance_onboard": "2025-01-03"
+},
+"BIRB": {
+"binance_onboard": "2026-01-29"
+},
+"BLESS": {
+"binance_onboard": "2025-09-23"
+},
+"BLUAI": {
+"binance_onboard": "2025-10-21"
+},
+"BLUR": {
+"binance_onboard": "2023-04-27"
+},
+"BLZ": {
+"binance_onboard": "2020-09-17"
+},
+"BMT": {
+"binance_onboard": "2025-03-17"
+},
+"BNB": {
+"kraken_open": "2023-11-22",
+"binance_onboard": "2020-02-10"
+},
+"BNT": {
+"binance_onboard": "2023-08-10"
+},
+"BNX": {
+"binance_onboard": "2023-02-22"
+},
+"BOB": {
+"binance_onboard": "2025-06-05"
+},
+"BOME": {
+"kraken_open": "2024-04-24",
+"binance_onboard": "2024-03-16"
+},
+"BOND": {
+"binance_onboard": "2023-10-15"
+},
+"BONK": {
+"kraken_open": "2023-12-21",
+"binance_onboard": "2023-11-22"
+},
+"BR": {
+"binance_onboard": "2025-03-21"
+},
+"BRENTOIL": {
+"kraken_open": "2026-08-20"
+},
+"BRETT": {
+"kraken_open": "2024-06-18",
+"binance_onboard": "2024-08-20"
+},
+"BREV": {
+"binance_onboard": "2025-12-30"
+},
+"BROCCOLI714": {
+"binance_onboard": "2025-03-21"
+},
+"BROCCOLIF3B": {
+"binance_onboard": "2025-03-21"
+},
+"BSB": {
+"binance_onboard": "2026-03-25"
+},
+"BSV": {
+"binance_onboard": "2023-10-20"
+},
+"BSW": {
+"binance_onboard": "2024-09-05"
+},
+"BTC": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2019-09-08"
+},
+"BTCDOM": {
+"binance_onboard": "2021-06-17"
+},
+"BTR": {
+"binance_onboard": "2025-08-27"
+},
+"BTW": {
+"binance_onboard": "2026-06-04"
+},
+"BULLA": {
+"binance_onboard": "2025-07-04"
+},
+"C": {
+"binance_onboard": "2025-07-15"
+},
+"C98": {
+"kraken_open": "2024-05-22",
+"binance_onboard": "2021-08-23"
+},
+"CAKE": {
+"kraken_open": "2024-11-19",
+"binance_onboard": "2023-11-02"
+},
+"CAP": {
+"binance_onboard": "2026-06-27"
+},
+"CARV": {
+"binance_onboard": "2025-08-07"
+},
+"CAT": {
+"binance_onboard": "2024-10-21"
+},
+"CATI": {
+"kraken_open": "2024-10-15",
+"binance_onboard": "2024-09-20"
+},
+"CC": {
+"binance_onboard": "2025-10-31"
+},
+"CELO": {
+"binance_onboard": "2021-09-26"
+},
+"CELR": {
+"binance_onboard": "2021-03-29"
+},
+"CETUS": {
+"binance_onboard": "2024-11-06"
+},
+"CFG": {
+"kraken_open": "2026-02-26",
+"binance_onboard": "2026-03-16"
+},
+"CFX": {
+"kraken_open": "2023-08-09",
+"binance_onboard": "2023-02-19"
+},
+"CGPT": {
+"binance_onboard": "2024-12-20"
+},
+"CHEEMS": {
+"binance_onboard": "2024-11-25"
+},
+"CHESS": {
+"binance_onboard": "2024-08-29"
+},
+"CHF": {
+"kraken_open": "2025-04-24"
+},
+"CHILLGUY": {
+"kraken_open": "2025-01-15",
+"binance_onboard": "2024-11-27"
+},
+"CHIP": {
+"binance_onboard": "2026-04-16"
+},
+"CHR": {
+"binance_onboard": "2021-03-12"
+},
+"CHZ": {
+"kraken_open": "2022-07-20",
+"binance_onboard": "2021-01-21"
+},
+"CKB": {
+"binance_onboard": "2023-02-27"
+},
+"CLANKER": {
+"binance_onboard": "2025-11-12"
+},
+"CLO": {
+"binance_onboard": "2025-10-14"
+},
+"COAI": {
+"binance_onboard": "2025-09-25"
+},
+"COINX": {
+"kraken_open": "2026-08-05"
+},
+"COLLECT": {
+"binance_onboard": "2025-12-31"
+},
+"COMBO": {
+"binance_onboard": "2023-06-02"
+},
+"COMMON": {
+"binance_onboard": "2025-10-27"
+},
+"COMP": {
+"kraken_open": "2022-07-13",
+"binance_onboard": "2020-06-30"
+},
+"COOKIE": {
+"kraken_open": "2025-02-04",
+"binance_onboard": "2025-01-07"
+},
+"COS": {
+"binance_onboard": "2024-09-30"
+},
+"COTI": {
+"binance_onboard": "2021-03-09"
+},
+"COW": {
+"binance_onboard": "2024-11-06"
+},
+"CRCLX": {
+"kraken_open": "2026-02-06"
+},
+"CRO": {
+"kraken_open": "2024-12-20"
+},
+"CROSS": {
+"binance_onboard": "2025-07-10"
+},
+"CRV": {
+"kraken_open": "2022-06-27",
+"binance_onboard": "2020-09-01"
+},
+"CSPR": {
+"kraken_open": "2024-12-05"
+},
+"CT": {
+"binance_onboard": "2026-10-01"
+},
+"CTK": {
+"binance_onboard": "2025-04-30"
+},
+"CTR": {
+"binance_onboard": "2026-05-28"
+},
+"CTSI": {
+"kraken_open": "2024-05-29",
+"binance_onboard": "2021-10-25"
+},
+"CUDIS": {
+"binance_onboard": "2025-08-20"
+},
+"CVC": {
+"binance_onboard": "2025-05-16"
+},
+"CVX": {
+"kraken_open": "2023-03-30",
+"binance_onboard": "2025-07-23"
+},
+"CYBER": {
+"binance_onboard": "2023-08-21"
+},
+"CYS": {
+"binance_onboard": "2025-12-12"
+},
+"D": {
+"binance_onboard": "2025-01-09"
+},
+"DAM": {
+"binance_onboard": "2025-08-18"
+},
+"DAR": {
+"binance_onboard": "2022-04-28"
+},
+"DASH": {
+"kraken_open": "2022-08-24",
+"binance_onboard": "2020-02-04"
+},
+"DATAIP": {
+"binance_onboard": "2026-07-03"
+},
+"DEEP": {
+"binance_onboard": "2025-04-22"
+},
+"DEFI": {
+"binance_onboard": "2020-08-28"
+},
+"DEGEN": {
+"binance_onboard": "2024-11-15"
+},
+"DEGO": {
+"binance_onboard": "2024-12-13"
+},
+"DENT": {
+"binance_onboard": "2021-03-23"
+},
+"DEXE": {
+"kraken_open": "2025-02-04",
+"binance_onboard": "2024-12-24"
+},
+"DF": {
+"binance_onboard": "2024-12-30"
+},
+"DGB": {
+"binance_onboard": "2021-04-19"
+},
+"DIA": {
+"binance_onboard": "2024-10-02"
+},
+"DMC": {
+"binance_onboard": "2025-06-24"
+},
+"DODOX": {
+"binance_onboard": "2023-08-08"
+},
+"DOGE": {
+"kraken_open": "2022-06-20",
+"binance_onboard": "2020-07-10"
+},
+"DOGS": {
+"binance_onboard": "2024-08-26"
+},
+"DOLO": {
+"binance_onboard": "2025-05-01"
+},
+"DOOD": {
+"binance_onboard": "2025-05-09"
+},
+"DOS": {
+"binance_onboard": "2026-08-11"
+},
+"DOT": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-08-22"
+},
+"DRIFT": {
+"binance_onboard": "2024-11-08"
+},
+"DUSK": {
+"binance_onboard": "2022-01-06"
+},
+"DYDX": {
+"kraken_open": "2022-09-07",
+"binance_onboard": "2021-09-09"
+},
+"DYM": {
+"binance_onboard": "2024-02-07"
+},
+"EDEN": {
+"binance_onboard": "2025-09-30"
+},
+"EDGE": {
+"binance_onboard": "2026-03-19"
+},
+"EDU": {
+"binance_onboard": "2023-04-28"
+},
+"EGLD": {
+"kraken_open": "2022-09-07",
+"binance_onboard": "2020-09-14"
+},
+"EIGEN": {
+"kraken_open": "2024-10-09",
+"binance_onboard": "2024-10-01"
+},
+"ELSA": {
+"binance_onboard": "2026-01-22"
+},
+"ENA": {
+"kraken_open": "2024-04-24",
+"binance_onboard": "2024-04-02"
+},
+"ENJ": {
+"binance_onboard": "2020-09-29"
+},
+"ENS": {
+"kraken_open": "2022-09-28",
+"binance_onboard": "2021-11-29"
+},
+"ENSO": {
+"binance_onboard": "2025-10-14"
+},
+"EPIC": {
+"binance_onboard": "2025-03-13"
+},
+"EPT": {
+"binance_onboard": "2025-04-21"
+},
+"ERA": {
+"binance_onboard": "2025-07-17"
+},
+"ESP": {
+"binance_onboard": "2026-02-10"
+},
+"ESPORTS": {
+"binance_onboard": "2025-07-29"
+},
+"ETC": {
+"kraken_open": "2022-08-03",
+"binance_onboard": "2020-01-16"
+},
+"ETH": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2019-11-27"
+},
+"ETHFI": {
+"kraken_open": "2024-05-09",
+"binance_onboard": "2024-03-18"
+},
+"ETHW": {
+"binance_onboard": "2023-11-28"
+},
+"EUL": {
+"binance_onboard": "2025-10-13"
+},
+"EUR": {
+"kraken_open": "2025-04-17"
+},
+"EVAA": {
+"binance_onboard": "2025-10-03"
+},
+"EWY": {
+"kraken_open": "2026-10-15"
+},
+"EWZ": {
+"kraken_open": "2026-10-21"
+},
+"F": {
+"binance_onboard": "2025-06-18"
+},
+"FARTCOIN": {
+"kraken_open": "2025-01-20",
+"binance_onboard": "2024-12-20"
+},
+"FET": {
+"kraken_open": "2023-03-23",
+"binance_onboard": "2023-01-15"
+},
+"FF": {
+"binance_onboard": "2025-09-29"
+},
+"FHE": {
+"binance_onboard": "2025-04-12"
+},
+"FIDA": {
+"binance_onboard": "2024-09-19"
+},
+"FIGHT": {
+"binance_onboard": "2026-01-23"
+},
+"FIL": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-10-16"
+},
+"FIO": {
+"binance_onboard": "2024-09-20"
+},
+"FIS": {
+"binance_onboard": "2025-04-25"
+},
+"FLM": {
+"binance_onboard": "2020-09-29"
+},
+"FLOCK": {
+"binance_onboard": "2025-09-09"
+},
+"FLOKI": {
+"kraken_open": "2024-05-15",
+"binance_onboard": "2023-05-06"
+},
+"FLOW": {
+"kraken_open": "2022-08-17",
+"binance_onboard": "2022-02-09"
+},
+"FLUID": {
+"binance_onboard": "2025-09-24"
+},
+"FLUX": {
+"binance_onboard": "2024-09-03"
+},
+"FOGO": {
+"binance_onboard": "2026-01-10"
+},
+"FOLKS": {
+"binance_onboard": "2025-11-06"
+},
+"FORM": {
+"binance_onboard": "2025-03-19"
+},
+"FORTH": {
+"binance_onboard": "2025-04-08"
+},
+"FRAX": {
+"binance_onboard": "2026-01-15"
+},
+"FTM": {
+"binance_onboard": "2020-09-24"
+},
+"FTT": {
+"binance_onboard": "2022-04-14"
+},
+"FUN": {
+"binance_onboard": "2025-03-31"
+},
+"FXS": {
+"binance_onboard": "2023-01-19"
+},
+"G": {
+"binance_onboard": "2024-08-15"
+},
+"GAIB": {
+"binance_onboard": "2025-11-20"
+},
+"GALA": {
+"kraken_open": "2022-08-03",
+"binance_onboard": "2021-09-17"
+},
+"GAS": {
+"binance_onboard": "2023-10-25"
+},
+"GBP": {
+"kraken_open": "2025-04-17"
+},
+"GENIUS": {
+"binance_onboard": "2026-04-16"
+},
+"GHST": {
+"binance_onboard": "2024-09-23"
+},
+"GIGGLE": {
+"binance_onboard": "2025-10-09"
+},
+"GLDX": {
+"kraken_open": "2025-12-17"
+},
+"GLM": {
+"binance_onboard": "2024-02-22"
+},
+"GLMR": {
+"binance_onboard": "2023-09-26"
+},
+"GMT": {
+"binance_onboard": "2022-03-14"
+},
+"GMX": {
+"binance_onboard": "2023-02-16"
+},
+"GOAT": {
+"kraken_open": "2024-10-24",
+"binance_onboard": "2024-10-24"
+},
+"GOOGLX": {
+"kraken_open": "2026-02-06"
+},
+"GPS": {
+"kraken_open": "2025-03-14",
+"binance_onboard": "2025-02-17"
+},
+"GRAM": {
+"binance_onboard": "2026-07-02"
+},
+"GRASS": {
+"kraken_open": "2024-11-14",
+"binance_onboard": "2024-11-08"
+},
+"GRIFFAIN": {
+"binance_onboard": "2025-01-02"
+},
+"GRT": {
+"kraken_open": "2022-08-17",
+"binance_onboard": "2020-12-18"
+},
+"GRVT": {
+"binance_onboard": "2026-07-31"
+},
+"GTC": {
+"binance_onboard": "2021-03-15"
+},
+"GUA": {
+"binance_onboard": "2025-12-21"
+},
+"GUN": {
+"binance_onboard": "2025-03-31"
+},
+"GWEI": {
+"binance_onboard": "2026-01-29"
+},
+"H": {
+"binance_onboard": "2025-06-25"
+},
+"HAEDAL": {
+"binance_onboard": "2025-05-01"
+},
+"HANA": {
+"binance_onboard": "2025-09-26"
+},
+"HBAR": {
+"kraken_open": "2024-06-25",
+"binance_onboard": "2021-03-17"
+},
+"HEI": {
+"binance_onboard": "2025-02-13"
+},
+"HEMI": {
+"binance_onboard": "2025-08-29"
+},
+"HFT": {
+"binance_onboard": "2023-04-05"
+},
+"HIFI": {
+"binance_onboard": "2023-09-16"
+},
+"HIGH": {
+"binance_onboard": "2023-02-03"
+},
+"HIPPO": {
+"binance_onboard": "2024-11-13"
+},
+"HIVE": {
+"binance_onboard": "2024-12-23"
+},
+"HMSTR": {
+"binance_onboard": "2024-09-26"
+},
+"HOLO": {
+"binance_onboard": "2025-09-11"
+},
+"HOME": {
+"binance_onboard": "2025-06-10"
+},
+"HOODX": {
+"kraken_open": "2026-02-06"
+},
+"HOOK": {
+"binance_onboard": "2023-01-19"
+},
+"HOT": {
+"binance_onboard": "2021-03-30"
+},
+"HUMA": {
+"binance_onboard": "2025-05-26"
+},
+"HYPE": {
+"kraken_open": "2025-01-24",
+"binance_onboard": "2025-05-30"
+},
+"HYPER": {
+"binance_onboard": "2025-04-22"
+},
+"ICNT": {
+"binance_onboard": "2025-07-03"
+},
+"ICP": {
+"kraken_open": "2022-09-14",
+"binance_onboard": "2021-07-30"
+},
+"ICX": {
+"binance_onboard": "2020-09-15"
+},
+"ID": {
+"binance_onboard": "2023-03-23"
+},
+"IDEX": {
+"binance_onboard": "2023-05-02"
+},
+"IDOL": {
+"binance_onboard": "2025-07-04"
+},
+"ILV": {
+"binance_onboard": "2023-11-10"
+},
+"IMX": {
+"kraken_open": "2022-10-12",
+"binance_onboard": "2022-02-10"
+},
+"IN": {
+"binance_onboard": "2025-08-07"
+},
+"INIT": {
+"binance_onboard": "2025-04-16"
+},
+"INJ": {
+"kraken_open": "2023-04-05",
+"binance_onboard": "2022-08-16"
+},
+"INTC": {
+"kraken_open": "2026-09-23"
+},
+"INX": {
+"binance_onboard": "2026-01-30"
+},
+"IO": {
+"binance_onboard": "2024-06-11"
+},
+"IOST": {
+"binance_onboard": "2020-02-21"
+},
+"IOTA": {
+"binance_onboard": "2020-02-12"
+},
+"IOTX": {
+"kraken_open": "2024-12-19",
+"binance_onboard": "2021-08-11"
+},
+"IP": {
+"binance_onboard": "2025-02-13"
+},
+"IR": {
+"binance_onboard": "2025-12-21"
+},
+"IRYS": {
+"binance_onboard": "2025-11-26"
+},
+"JASMY": {
+"kraken_open": "2023-04-05",
+"binance_onboard": "2022-04-19"
+},
+"JCT": {
+"binance_onboard": "2025-11-10"
+},
+"JELLYJELLY": {
+"binance_onboard": "2025-03-26"
+},
+"JOE": {
+"binance_onboard": "2023-03-28"
+},
+"JST": {
+"binance_onboard": "2025-04-28"
+},
+"JTO": {
+"kraken_open": "2023-12-21",
+"binance_onboard": "2023-12-08"
+},
+"JUP": {
+"kraken_open": "2024-02-01",
+"binance_onboard": "2024-01-31"
+},
+"KAIA": {
+"kraken_open": "2024-11-14",
+"binance_onboard": "2024-12-04"
+},
+"KAITO": {
+"kraken_open": "2025-03-11",
+"binance_onboard": "2025-02-20"
+},
+"KAS": {
+"kraken_open": "2024-01-09",
+"binance_onboard": "2023-11-17"
+},
+"KAT": {
+"binance_onboard": "2026-03-02"
+},
+"KAVA": {
+"binance_onboard": "2020-07-28"
+},
+"KDA": {
+"binance_onboard": "2024-09-18"
+},
+"KERNEL": {
+"binance_onboard": "2025-04-14"
+},
+"KEY": {
+"binance_onboard": "2023-05-23"
+},
+"KGEN": {
+"binance_onboard": "2025-10-07"
+},
+"KITE": {
+"binance_onboard": "2025-10-29"
+},
+"KLAY": {
+"binance_onboard": "2021-10-11"
+},
+"KMNO": {
+"binance_onboard": "2024-12-20"
+},
+"KNC": {
+"binance_onboard": "2020-06-22"
+},
+"KOMA": {
+"binance_onboard": "2024-12-10"
+},
+"KSM": {
+"binance_onboard": "2020-10-14"
+},
+"LA": {
+"binance_onboard": "2025-06-05"
+},
+"LAB": {
+"binance_onboard": "2025-10-17"
+},
+"LAYER": {
+"binance_onboard": "2025-02-11"
+},
+"LDO": {
+"kraken_open": "2023-03-08",
+"binance_onboard": "2022-09-21"
+},
+"LEVER": {
+"binance_onboard": "2023-03-29"
+},
+"LIGHT": {
+"binance_onboard": "2025-09-27"
+},
+"LINA": {
+"binance_onboard": "2021-03-17"
+},
+"LINEA": {
+"binance_onboard": "2025-09-01"
+},
+"LINK": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-01-17"
+},
+"LISTA": {
+"binance_onboard": "2024-06-20"
+},
+"LIT": {
+"binance_onboard": "2025-12-23"
+},
+"LOKA": {
+"binance_onboard": "2024-09-24"
+},
+"LOOM": {
+"binance_onboard": "2023-10-11"
+},
+"LPT": {
+"kraken_open": "2022-07-20",
+"binance_onboard": "2021-11-10"
+},
+"LQTY": {
+"binance_onboard": "2023-03-08"
+},
+"LRC": {
+"binance_onboard": "2020-10-19"
+},
+"LSK": {
+"binance_onboard": "2024-01-25"
+},
+"LTC": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-01-09"
+},
+"LUMIA": {
+"binance_onboard": "2024-12-18"
+},
+"LUNA2": {
+"kraken_open": "2022-06-01",
+"binance_onboard": "2022-09-09"
+},
+"LUNC": {
+"binance_onboard": "2022-09-08"
+},
+"LYN": {
+"binance_onboard": "2025-10-06"
+},
+"M": {
+"binance_onboard": "2025-07-07"
+},
+"MAGIC": {
+"binance_onboard": "2023-01-23"
+},
+"MAGMA": {
+"binance_onboard": "2025-12-31"
+},
+"MANA": {
+"kraken_open": "2022-06-27",
+"binance_onboard": "2021-03-14"
+},
+"MANTA": {
+"binance_onboard": "2024-01-18"
+},
+"MANTRA": {
+"binance_onboard": "2026-03-04"
+},
+"MARSCOIN": {
+"binance_onboard": "2026-09-01"
+},
+"MASK": {
+"binance_onboard": "2021-07-16"
+},
+"MAV": {
+"binance_onboard": "2023-06-29"
+},
+"MAVIA": {
+"binance_onboard": "2025-03-26"
+},
+"MBOX": {
+"binance_onboard": "2024-08-28"
+},
+"ME": {
+"binance_onboard": "2024-12-10"
+},
+"MEGA": {
+"binance_onboard": "2026-01-30"
+},
+"MELANIA": {
+"kraken_open": "2025-01-20",
+"binance_onboard": "2025-01-20"
+},
+"MEME": {
+"binance_onboard": "2023-11-03"
+},
+"MEMEFI": {
+"binance_onboard": "2025-04-25"
+},
+"MERL": {
+"binance_onboard": "2025-05-29"
+},
+"MET": {
+"binance_onboard": "2025-10-11"
+},
+"METAX": {
+"kraken_open": "2026-08-05"
+},
+"METIS": {
+"binance_onboard": "2024-03-12"
+},
+"MEW": {
+"kraken_open": "2024-06-18",
+"binance_onboard": "2024-06-17"
+},
+"MILK": {
+"binance_onboard": "2025-05-06"
+},
+"MINA": {
+"binance_onboard": "2023-02-03"
+},
+"MIRA": {
+"binance_onboard": "2025-09-26"
+},
+"MITO": {
+"binance_onboard": "2025-08-28"
+},
+"MKR": {
+"binance_onboard": "2020-08-13"
+},
+"MLN": {
+"binance_onboard": "2025-03-31"
+},
+"MMT": {
+"binance_onboard": "2025-11-04"
+},
+"MNT": {
+"kraken_open": "2024-07-11"
+},
+"MOCA": {
+"binance_onboard": "2024-12-16"
+},
+"MOG": {
+"kraken_open": "2024-08-15",
+"binance_onboard": "2024-11-07"
+},
+"MON": {
+"kraken_open": "2025-12-22",
+"binance_onboard": "2025-10-10"
+},
+"MOODENG": {
+"kraken_open": "2024-10-31",
+"binance_onboard": "2024-10-25"
+},
+"MOONSHOTX": {
+"kraken_open": "2026-10-01"
+},
+"MORPHO": {
+"kraken_open": "2024-11-26",
+"binance_onboard": "2024-11-27"
+},
+"MOVE": {
+"binance_onboard": "2024-12-09"
+},
+"MOVR": {
+"kraken_open": "2024-05-15",
+"binance_onboard": "2023-12-26"
+},
+"MRVL": {
+"kraken_open": "2026-10-15"
+},
+"MSTRX": {
+"kraken_open": "2026-02-06"
+},
+"MTL": {
+"binance_onboard": "2021-03-31"
+},
+"MU": {
+"kraken_open": "2026-09-23"
+},
+"MUBARAK": {
+"kraken_open": "2025-05-22",
+"binance_onboard": "2025-03-17"
+},
+"MYRO": {
+"binance_onboard": "2024-03-05"
+},
+"MYX": {
+"binance_onboard": "2025-06-18"
+},
+"NAORIS": {
+"binance_onboard": "2025-07-31"
+},
+"NATGAS": {
+"kraken_open": "2026-08-13"
+},
+"NBIS": {
+"kraken_open": "2026-09-03"
+},
+"NEAR": {
+"kraken_open": "2022-06-13",
+"binance_onboard": "2020-10-15"
+},
+"NEIRO": {
+"kraken_open": "2024-10-09",
+"binance_onboard": "2024-09-16"
+},
+"NEIROETH": {
+"binance_onboard": "2024-09-06"
+},
+"NEO": {
+"binance_onboard": "2020-02-17"
+},
+"NEWT": {
+"binance_onboard": "2025-06-19"
+},
+"NFP": {
+"binance_onboard": "2023-12-27"
+},
+"NIGHT": {
+"kraken_open": "2025-12-12",
+"binance_onboard": "2025-12-10"
+},
+"NIL": {
+"binance_onboard": "2025-03-24"
+},
+"NKN": {
+"binance_onboard": "2021-04-08"
+},
+"NMR": {
+"binance_onboard": "2023-06-22"
+},
+"NOM": {
+"binance_onboard": "2025-10-01"
+},
+"NOT": {
+"kraken_open": "2024-07-09",
+"binance_onboard": "2024-05-16"
+},
+"NTRN": {
+"binance_onboard": "2023-11-14"
+},
+"NULS": {
+"binance_onboard": "2024-08-26"
+},
+"NVDAX": {
+"kraken_open": "2026-02-06"
+},
+"NXPC": {
+"binance_onboard": "2025-05-15"
+},
+"O": {
+"binance_onboard": "2026-06-24"
+},
+"OBOL": {
+"binance_onboard": "2025-05-07"
+},
+"OCEAN": {
+"binance_onboard": "2020-11-03"
+},
+"OG": {
+"binance_onboard": "2025-05-12"
+},
+"OGN": {
+"binance_onboard": "2021-03-31"
+},
+"OL": {
+"binance_onboard": "2025-06-25"
+},
+"OM": {
+"binance_onboard": "2024-02-13"
+},
+"OMG": {
+"binance_onboard": "2020-07-02"
+},
+"OMNI": {
+"binance_onboard": "2024-04-17"
+},
+"ON": {
+"binance_onboard": "2025-10-24"
+},
+"ONDO": {
+"kraken_open": "2024-04-11",
+"binance_onboard": "2024-01-20"
+},
+"ONE": {
+"binance_onboard": "2021-03-17"
+},
+"ONG": {
+"binance_onboard": "2023-11-27"
+},
+"ONT": {
+"binance_onboard": "2020-02-11"
+},
+"OP": {
+"kraken_open": "2022-06-02",
+"binance_onboard": "2022-06-01"
+},
+"OPEN": {
+"kraken_open": "2025-10-09",
+"binance_onboard": "2025-09-08"
+},
+"OPENAIX": {
+"kraken_open": "2026-06-15"
+},
+"OPG": {
+"binance_onboard": "2026-04-22"
+},
+"OPN": {
+"kraken_open": "2026-03-06",
+"binance_onboard": "2026-02-21"
+},
+"ORBS": {
+"binance_onboard": "2023-10-17"
+},
+"ORCA": {
+"binance_onboard": "2024-12-06"
+},
+"ORDER": {
+"binance_onboard": "2025-09-26"
+},
+"ORDI": {
+"kraken_open": "2024-01-24",
+"binance_onboard": "2023-11-07"
+},
+"OURAX": {
+"kraken_open": "2026-10-01"
+},
+"OXT": {
+"binance_onboard": "2023-08-11"
+},
+"PARTI": {
+"binance_onboard": "2025-03-25"
+},
+"PAXG": {
+"kraken_open": "2023-08-16",
+"binance_onboard": "2025-03-27"
+},
+"PENDLE": {
+"kraken_open": "2024-05-29",
+"binance_onboard": "2023-07-28"
+},
+"PENGU": {
+"kraken_open": "2024-12-20",
+"binance_onboard": "2024-12-17"
+},
+"PEOPLE": {
+"binance_onboard": "2021-12-23"
+},
+"PEPE": {
+"kraken_open": "2023-05-25",
+"binance_onboard": "2023-05-05"
+},
+"PERP": {
+"binance_onboard": "2023-03-05"
+},
+"PHA": {
+"binance_onboard": "2024-12-30"
+},
+"PHAROS": {
+"binance_onboard": "2026-05-14"
+},
+"PHB": {
+"binance_onboard": "2023-02-15"
+},
+"PIEVERSE": {
+"binance_onboard": "2025-11-14"
+},
+"PIPPIN": {
+"binance_onboard": "2025-01-24"
+},
+"PIXEL": {
+"binance_onboard": "2024-02-19"
+},
+"PLAY": {
+"binance_onboard": "2025-07-31"
+},
+"PLTR": {
+"kraken_open": "2026-10-21"
+},
+"PLUME": {
+"binance_onboard": "2025-03-21"
+},
+"PNUT": {
+"binance_onboard": "2024-11-11"
+},
+"POL": {
+"kraken_open": "2024-09-19",
+"binance_onboard": "2024-09-13"
+},
+"POLYX": {
+"binance_onboard": "2023-10-25"
+},
+"PONKE": {
+"binance_onboard": "2024-11-04"
+},
+"PONS": {
+"kraken_open": "2026-09-25",
+"binance_onboard": "2026-09-06"
+},
+"POPCAT": {
+"kraken_open": "2024-06-18",
+"binance_onboard": "2024-08-22"
+},
+"PORT3": {
+"binance_onboard": "2025-06-04"
+},
+"PORTAL": {
+"kraken_open": "2024-06-25",
+"binance_onboard": "2024-02-29"
+},
+"POWER": {
+"binance_onboard": "2025-12-06"
+},
+"POWR": {
+"binance_onboard": "2023-10-27"
+},
+"PREDICT": {
+"binance_onboard": "2026-10-25"
+},
+"PRL": {
+"binance_onboard": "2026-04-01"
+},
+"PROM": {
+"binance_onboard": "2025-01-15"
+},
+"PROMPT": {
+"binance_onboard": "2025-04-11"
+},
+"PROVE": {
+"binance_onboard": "2025-08-05"
+},
+"PTB": {
+"binance_onboard": "2025-09-03"
+},
+"PUFFER": {
+"binance_onboard": "2025-06-04"
+},
+"PUMP": {
+"kraken_open": "2025-07-14",
+"binance_onboard": "2025-07-10"
+},
+"PUMPBTC": {
+"binance_onboard": "2025-06-13"
+},
+"PUNDIX": {
+"binance_onboard": "2025-04-30"
+},
+"PYTH": {
+"kraken_open": "2023-11-29",
+"binance_onboard": "2023-11-22"
+},
+"Q": {
+"binance_onboard": "2025-09-02"
+},
+"QNT": {
+"kraken_open": "2022-10-12",
+"binance_onboard": "2022-10-18"
+},
+"QQQX": {
+"kraken_open": "2025-12-17"
+},
+"QTUM": {
+"kraken_open": "2022-08-24",
+"binance_onboard": "2020-02-20"
+},
+"QUICK": {
+"binance_onboard": "2024-09-06"
+},
+"RAD": {
+"binance_onboard": "2023-05-09"
+},
+"RARE": {
+"binance_onboard": "2024-08-15"
+},
+"RATS": {
+"binance_onboard": "2023-12-15"
+},
+"RAVE": {
+"binance_onboard": "2025-12-14"
+},
+"RAY": {
+"kraken_open": "2024-10-24",
+"binance_onboard": "2021-08-18"
+},
+"RAYSOL": {
+"binance_onboard": "2024-12-10"
+},
+"RDNT": {
+"binance_onboard": "2023-04-04"
+},
+"RE": {
+"binance_onboard": "2026-06-18"
+},
+"RECALL": {
+"binance_onboard": "2025-10-15"
+},
+"RED": {
+"binance_onboard": "2025-03-06"
+},
+"REEF": {
+"binance_onboard": "2021-01-25"
+},
+"REI": {
+"binance_onboard": "2024-09-27"
+},
+"REN": {
+"binance_onboard": "2020-10-13"
+},
+"RENDER": {
+"kraken_open": "2024-07-30",
+"binance_onboard": "2024-07-26"
+},
+"RESOLV": {
+"binance_onboard": "2025-06-10"
+},
+"REZ": {
+"binance_onboard": "2024-04-30"
+},
+"RIF": {
+"binance_onboard": "2023-10-21"
+},
+"RIVER": {
+"kraken_open": "2025-11-06",
+"binance_onboard": "2025-10-17"
+},
+"RLC": {
+"binance_onboard": "2020-07-31"
+},
+"RLS": {
+"binance_onboard": "2025-12-02"
+},
+"ROBO": {
+"binance_onboard": "2026-02-27"
+},
+"RONIN": {
+"binance_onboard": "2024-02-06"
+},
+"ROSE": {
+"kraken_open": "2024-10-24",
+"binance_onboard": "2021-12-31"
+},
+"RPL": {
+"binance_onboard": "2024-09-09"
+},
+"RSR": {
+"kraken_open": "2024-09-25",
+"binance_onboard": "2020-10-19"
+},
+"RUNE": {
+"kraken_open": "2022-09-07",
+"binance_onboard": "2020-09-04"
+},
+"RVN": {
+"binance_onboard": "2021-02-23"
+},
+"RVV": {
+"binance_onboard": "2025-10-18"
+},
+"S": {
+"binance_onboard": "2025-01-16"
+},
+"SAFE": {
+"binance_onboard": "2024-10-25"
+},
+"SAGA": {
+"kraken_open": "2024-04-12",
+"binance_onboard": "2024-04-09"
+},
+"SAHARA": {
+"binance_onboard": "2025-06-26"
+},
+"SAMSUNG": {
+"kraken_open": "2026-09-03"
+},
+"SAND": {
+"kraken_open": "2022-07-13",
+"binance_onboard": "2021-01-18"
+},
+"SANTOS": {
+"binance_onboard": "2024-10-28"
+},
+"SAPIEN": {
+"binance_onboard": "2025-08-20"
+},
+"SATS": {
+"binance_onboard": "2023-12-12"
+},
+"SC": {
+"binance_onboard": "2021-04-12"
+},
+"SCR": {
+"binance_onboard": "2024-10-22"
+},
+"SCRT": {
+"binance_onboard": "2024-11-21"
+},
+"SEI": {
+"kraken_open": "2023-09-06",
+"binance_onboard": "2023-08-17"
+},
+"SENT": {
+"binance_onboard": "2025-11-14"
+},
+"SFP": {
+"binance_onboard": "2021-02-24"
+},
+"SHELL": {
+"binance_onboard": "2025-02-17"
+},
+"SHIB": {
+"kraken_open": "2023-05-30",
+"binance_onboard": "2021-05-10"
+},
+"SIGN": {
+"binance_onboard": "2025-04-28"
+},
+"SIREN": {
+"binance_onboard": "2025-03-22"
+},
+"SKATE": {
+"binance_onboard": "2025-06-09"
+},
+"SKHY": {
+"kraken_open": "2026-09-03"
+},
+"SKL": {
+"binance_onboard": "2020-08-24"
+},
+"SKR": {
+"binance_onboard": "2026-01-22"
+},
+"SKY": {
+"binance_onboard": "2025-09-09"
+},
+"SKYAI": {
+"binance_onboard": "2025-05-13"
+},
+"SLERF": {
+"binance_onboard": "2024-11-21"
+},
+"SLP": {
+"binance_onboard": "2025-07-23"
+},
+"SLX": {
+"binance_onboard": "2026-06-01"
+},
+"SNDK": {
+"kraken_open": "2026-09-03"
+},
+"SNT": {
+"binance_onboard": "2023-11-02"
+},
+"SNX": {
+"kraken_open": "2022-07-06",
+"binance_onboard": "2020-08-14"
+},
+"SOL": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-09-14"
+},
+"SOLV": {
+"binance_onboard": "2025-01-17"
+},
+"SOMI": {
+"binance_onboard": "2025-08-25"
+},
+"SONIC": {
+"binance_onboard": "2025-01-08"
+},
+"SOON": {
+"kraken_open": "2025-09-25",
+"binance_onboard": "2025-05-23"
+},
+"SOPH": {
+"binance_onboard": "2025-05-28"
+},
+"SOXL": {
+"kraken_open": "2026-09-03"
+},
+"SOXS": {
+"kraken_open": "2026-09-03"
+},
+"SPACE": {
+"binance_onboard": "2026-01-23"
+},
+"SPCXX": {
+"kraken_open": "2026-06-06"
+},
+"SPELL": {
+"binance_onboard": "2022-09-05"
+},
+"SPK": {
+"kraken_open": "2025-06-25",
+"binance_onboard": "2025-06-17"
+},
+"SPORTFUN": {
+"binance_onboard": "2026-01-16"
+},
+"SPX": {
+"kraken_open": "2024-12-19",
+"binance_onboard": "2024-12-10"
+},
+"SPYX": {
+"kraken_open": "2025-12-17"
+},
+"SQD": {
+"binance_onboard": "2025-06-11"
+},
+"SSV": {
+"binance_onboard": "2023-02-23"
+},
+"STABLE": {
+"binance_onboard": "2025-11-06"
+},
+"STAR": {
+"binance_onboard": "2026-05-14"
+},
+"STBL": {
+"binance_onboard": "2025-09-17"
+},
+"STEEM": {
+"binance_onboard": "2023-11-08"
+},
+"STG": {
+"binance_onboard": "2022-08-24"
+},
+"STMX": {
+"binance_onboard": "2021-03-17"
+},
+"STO": {
+"binance_onboard": "2025-04-12"
+},
+"STORJ": {
+"binance_onboard": "2020-09-16"
+},
+"STPT": {
+"binance_onboard": "2023-10-18"
+},
+"STRAX": {
+"binance_onboard": "2023-10-11"
+},
+"STRK": {
+"kraken_open": "2024-02-21",
+"binance_onboard": "2024-02-20"
+},
+"STX": {
+"kraken_open": "2023-03-30",
+"binance_onboard": "2023-02-20"
+},
+"SUI": {
+"kraken_open": "2023-05-03",
+"binance_onboard": "2023-05-03"
+},
+"SUN": {
+"binance_onboard": "2024-08-22"
+},
+"SUPER": {
+"kraken_open": "2024-04-25",
+"binance_onboard": "2023-11-26"
+},
+"SUSHI": {
+"kraken_open": "2022-08-31",
+"binance_onboard": "2020-09-04"
+},
+"SWARMS": {
+"binance_onboard": "2025-01-07"
+},
+"SWELL": {
+"binance_onboard": "2024-11-08"
+},
+"SXT": {
+"binance_onboard": "2025-05-02"
+},
+"SYN": {
+"kraken_open": "2024-08-22",
+"binance_onboard": "2024-08-16"
+},
+"SYRUP": {
+"kraken_open": "2025-05-19",
+"binance_onboard": "2025-05-07"
+},
+"SYS": {
+"binance_onboard": "2024-08-19"
+},
+"T": {
+"binance_onboard": "2023-01-31"
+},
+"TA": {
+"binance_onboard": "2025-07-21"
+},
+"TAC": {
+"binance_onboard": "2025-07-15"
+},
+"TAG": {
+"binance_onboard": "2025-07-25"
+},
+"TAIKO": {
+"binance_onboard": "2025-06-11"
+},
+"TAKE": {
+"binance_onboard": "2025-09-03"
+},
+"TANSSI": {
+"binance_onboard": "2025-07-09"
+},
+"TAO": {
+"kraken_open": "2024-06-27",
+"binance_onboard": "2024-04-11"
+},
+"THE": {
+"binance_onboard": "2024-11-27"
+},
+"THETA": {
+"binance_onboard": "2020-05-27"
+},
+"TIA": {
+"kraken_open": "2023-11-29",
+"binance_onboard": "2023-10-31"
+},
+"TLM": {
+"kraken_open": "2024-06-05",
+"binance_onboard": "2023-03-29"
+},
+"TNSR": {
+"binance_onboard": "2024-04-08"
+},
+"TOKEN": {
+"binance_onboard": "2023-11-03"
+},
+"TON": {
+"binance_onboard": "2024-03-01"
+},
+"TOSHI": {
+"binance_onboard": "2025-09-17"
+},
+"TOWNS": {
+"binance_onboard": "2025-08-05"
+},
+"TRADOOR": {
+"binance_onboard": "2025-09-19"
+},
+"TRB": {
+"kraken_open": "2024-06-20",
+"binance_onboard": "2020-09-03"
+},
+"TREE": {
+"binance_onboard": "2025-07-29"
+},
+"TRIA": {
+"binance_onboard": "2026-02-06"
+},
+"TROY": {
+"binance_onboard": "2024-10-31"
+},
+"TRU": {
+"binance_onboard": "2023-03-06"
+},
+"TRUMP": {
+"kraken_open": "2025-01-18",
+"binance_onboard": "2025-01-18"
+},
+"TRUST": {
+"binance_onboard": "2025-11-05"
+},
+"TRUTH": {
+"binance_onboard": "2025-10-01"
+},
+"TRX": {
+"kraken_open": "2022-06-20",
+"binance_onboard": "2020-01-15"
+},
+"TSLAX": {
+"kraken_open": "2026-02-06"
+},
+"TST": {
+"binance_onboard": "2025-02-09"
+},
+"TURBO": {
+"kraken_open": "2024-06-05",
+"binance_onboard": "2024-05-30"
+},
+"TURTLE": {
+"binance_onboard": "2025-10-22"
+},
+"TUT": {
+"binance_onboard": "2025-03-20"
+},
+"TWT": {
+"binance_onboard": "2023-11-03"
+},
+"UAI": {
+"binance_onboard": "2025-11-06"
+},
+"UB": {
+"binance_onboard": "2025-09-12"
+},
+"UMA": {
+"binance_onboard": "2023-05-09"
+},
+"UNFI": {
+"binance_onboard": "2021-02-09"
+},
+"UNI": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-09-18"
+},
+"US": {
+"binance_onboard": "2025-12-12"
+},
+"US100": {
+"kraken_open": "2026-08-25"
+},
+"USDC": {
+"kraken_open": "2023-03-11",
+"binance_onboard": "2023-03-12"
+},
+"USDT": {
+"kraken_open": "2023-03-11"
+},
+"USELESS": {
+"binance_onboard": "2025-08-15"
+},
+"USTC": {
+"binance_onboard": "2023-11-27"
+},
+"USUAL": {
+"binance_onboard": "2024-12-18"
+},
+"UXLINK": {
+"binance_onboard": "2024-09-15"
+},
+"VANA": {
+"binance_onboard": "2024-12-16"
+},
+"VANRY": {
+"binance_onboard": "2024-03-13"
+},
+"VELODROME": {
+"binance_onboard": "2024-12-13"
+},
+"VELVET": {
+"binance_onboard": "2025-07-15"
+},
+"VET": {
+"binance_onboard": "2020-02-14"
+},
+"VFY": {
+"binance_onboard": "2025-09-30"
+},
+"VIC": {
+"binance_onboard": "2025-03-12"
+},
+"VIDT": {
+"binance_onboard": "2024-08-23"
+},
+"VINE": {
+"binance_onboard": "2025-01-24"
+},
+"VIRTUAL": {
+"kraken_open": "2025-01-20",
+"binance_onboard": "2024-12-10"
+},
+"VOXEL": {
+"binance_onboard": "2024-08-20"
+},
+"VTHO": {
+"binance_onboard": "2025-01-22"
+},
+"VVV": {
+"binance_onboard": "2025-01-29"
+},
+"W": {
+"kraken_open": "2024-04-08",
+"binance_onboard": "2024-04-03"
+},
+"WAL": {
+"binance_onboard": "2025-03-27"
+},
+"WAVES": {
+"binance_onboard": "2020-08-12"
+},
+"WAXP": {
+"binance_onboard": "2023-10-18"
+},
+"WCT": {
+"binance_onboard": "2025-04-15"
+},
+"WET": {
+"binance_onboard": "2025-12-10"
+},
+"WHY": {
+"binance_onboard": "2024-11-25"
+},
+"WIF": {
+"kraken_open": "2024-01-22",
+"binance_onboard": "2024-01-18"
+},
+"WLD": {
+"kraken_open": "2023-08-02",
+"binance_onboard": "2023-07-24"
+},
+"WLFI": {
+"kraken_open": "2025-09-01",
+"binance_onboard": "2025-08-23"
+},
+"WOO": {
+"binance_onboard": "2022-04-07"
+},
+"WTIOIL": {
+"kraken_open": "2026-05-28"
+},
+"X": {
+"binance_onboard": "2024-11-13"
+},
+"XAG": {
+"kraken_open": "2026-07-23"
+},
+"XAI": {
+"binance_onboard": "2024-01-09"
+},
+"XAN": {
+"binance_onboard": "2025-09-29"
+},
+"XAU": {
+"kraken_open": "2026-08-05"
+},
+"XAUT": {
+"kraken_open": "2025-09-11",
+"binance_onboard": "2026-03-26"
+},
+"XCN": {
+"binance_onboard": "2025-04-11"
+},
+"XCU": {
+"kraken_open": "2026-08-13"
+},
+"XEC": {
+"binance_onboard": "2021-09-16"
+},
+"XEM": {
+"binance_onboard": "2021-03-02"
+},
+"XLM": {
+"kraken_open": "2022-07-06",
+"binance_onboard": "2020-01-20"
+},
+"XMR": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-02-03"
+},
+"XNY": {
+"binance_onboard": "2025-08-13"
+},
+"XPIN": {
+"binance_onboard": "2025-09-12"
+},
+"XPL": {
+"kraken_open": "2025-09-26",
+"binance_onboard": "2025-08-22"
+},
+"XRP": {
+"kraken_open": "2022-03-22",
+"binance_onboard": "2020-01-06"
+},
+"XTZ": {
+"kraken_open": "2022-07-06",
+"binance_onboard": "2020-02-06"
+},
+"XVG": {
+"binance_onboard": "2023-07-05"
+},
+"XVS": {
+"binance_onboard": "2023-04-12"
+},
+"YALA": {
+"binance_onboard": "2025-08-07"
+},
+"YB": {
+"binance_onboard": "2025-10-10"
+},
+"YFI": {
+"kraken_open": "2022-07-13",
+"binance_onboard": "2020-08-31"
+},
+"YGG": {
+"binance_onboard": "2023-08-05"
+},
+"ZAMA": {
+"binance_onboard": "2026-01-09"
+},
+"ZBT": {
+"binance_onboard": "2025-10-17"
+},
+"ZEC": {
+"kraken_open": "2022-08-24",
+"binance_onboard": "2020-02-05"
+},
+"ZEN": {
+"kraken_open": "2024-12-05",
+"binance_onboard": "2020-11-24"
+},
+"ZEREBRO": {
+"binance_onboard": "2025-01-02"
+},
+"ZEST": {
+"binance_onboard": "2026-06-04"
+},
+"ZETA": {
+"binance_onboard": "2024-02-02"
+},
+"ZIG": {
+"kraken_open": "2026-01-16"
+},
+"ZIL": {
+"binance_onboard": "2020-06-18"
+},
+"ZK": {
+"kraken_open": "2024-08-01",
+"binance_onboard": "2024-06-17"
+},
+"ZKC": {
+"binance_onboard": "2025-09-15"
+},
+"ZKJ": {
+"binance_onboard": "2025-05-13"
+},
+"ZKP": {
+"binance_onboard": "2025-12-21"
+},
+"ZORA": {
+"binance_onboard": "2025-07-25"
+},
+"ZRC": {
+"binance_onboard": "2025-07-29"
+},
+"ZRO": {
+"kraken_open": "2024-06-21",
+"binance_onboard": "2024-06-20"
+},
+"ZRX": {
+"binance_onboard": "2020-06-24"
+},
+"\u54c8\u57fa\u7c73": {
+"binance_onboard": "2026-09-06"
+},
+"\u5e01\u5b89\u4eba\u751f": {
+"binance_onboard": "2025-10-20"
+},
+"\u6211\u8e0f\u9a6c\u6765\u4e86": {
+"binance_onboard": "2026-01-21"
+},
+"\u725b\u6765": {
+"binance_onboard": "2026-08-30"
+},
+"\u9f99\u867e": {
+"binance_onboard": "2026-03-11"
+}
+}

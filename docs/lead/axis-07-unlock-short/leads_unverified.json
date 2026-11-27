@@ -1,0 +1,20 @@
+{
+ "note": "Recalled leads, NOT evidence. Dates are approximate (month-level confidence), no size verified, no archive proof. Excluded from every gate count. Listed only to tell a later retry where to look.",
+ "leads": [
+  {"token":"ARB","approx_date":"2024-03-16","kind":"team+investors 1y cliff"},
+  {"token":"APT","approx_date":"2023-10-12","kind":"team+investors 1y cliff then monthly"},
+  {"token":"OP","approx_date":"2023-05-31","kind":"team+investors 1y cliff then monthly"},
+  {"token":"PYTH","approx_date":"2024-05-20","kind":"team+investors cliff"},
+  {"token":"STRK","approx_date":"2024-04-15","kind":"team+investors 3y schedule start, monthly"},
+  {"token":"TIA","approx_date":"2024-10-31","kind":"team+investors 1y cliff"},
+  {"token":"JTO","approx_date":"2024-12-07","kind":"team+investors 1y cliff"},
+  {"token":"ONDO","approx_date":"2025-01-18","kind":"team+investors 1y cliff"},
+  {"token":"ETHFI","approx_date":"2025-03-18","kind":"team+investors 1y cliff"},
+  {"token":"ENA","approx_date":"2025-04-02","kind":"team+investors 1y cliff"},
+  {"token":"W","approx_date":"2025-04-03","kind":"team+investors annual cliff"},
+  {"token":"SAGA","approx_date":"2025-04-09","kind":"team+investors 1y cliff"},
+  {"token":"ZK","approx_date":"2025-06-17","kind":"team+investors 1y cliff"},
+  {"token":"ZRO","approx_date":"2025-06-20","kind":"team+investors 1y cliff"},
+  {"token":"EIGEN","approx_date":"2025-09-30","kind":"team+investors 1y cliff"}
+ ]
+}
