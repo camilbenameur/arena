@@ -164,9 +164,10 @@ def test_status_line_is_anchored(tmp_path):
         C.control_gate(pre, rule, repo)
 
 
-def test_shipped_preregistration_is_a_draft():
+def test_shipped_axis9_preregistration_is_frozen_with_the_rule_hash():
+    # frozen by the lead on 2026-11-27 after Fable's session, before the single control run
     text = (Path(R.__file__).parent / "PREREGISTRATION.md").read_text()
-    assert "STATUS: DRAFT" in text.splitlines() and not C.FROZEN_RE.search(text)
+    assert C.FROZEN_RE.search(text) and "frozen_rule.py sha256: " in text
 
 
 def test_control_lock_refuses_second_run(tmp_path):

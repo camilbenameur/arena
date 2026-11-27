@@ -182,9 +182,9 @@ def _git(repo: Path, *a: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=False).stdout.strip()
 
 
-def control_gate(prereg: Path, rule: Path, repo: Path = REPO) -> str:
-    """Refuses unless PREREGISTRATION.md is committed, unmodified, has a line-anchored STATUS: FROZEN and lists the sha256 of
-    frozen_rule.py as `frozen_rule.py sha256: <hex>` on its own line. Returns the commit holding it. Does not take the lock."""
+def _gate_base(prereg: Path, rule: Path, repo: Path) -> tuple[str, str]:
+    """Shared checks: the preregistration exists, is committed, unmodified and carries a line-anchored STATUS: FROZEN.
+    Returns (commit, text)."""
     if not prereg.exists():
         raise SystemExit(f"control refused: {prereg.name} does not exist")
     if not rule.exists():
@@ -198,9 +198,43 @@ def control_gate(prereg: Path, rule: Path, repo: Path = REPO) -> str:
     text = prereg.read_text()
     if not FROZEN_RE.search(text):
         raise SystemExit(f"control refused: {prereg.name} has no line reading exactly STATUS: FROZEN")
+    return commit, text
+
+
+def control_gate(prereg: Path, rule: Path, repo: Path = REPO) -> str:
+    """Refuses unless PREREGISTRATION.md is committed, unmodified, has a line-anchored STATUS: FROZEN and lists the sha256 of
+    frozen_rule.py as `frozen_rule.py sha256: <hex>` on its own line. Returns the commit holding it. Does not take the lock."""
+    commit, text = _gate_base(prereg, rule, repo)
     listed = set(re.findall(r"^frozen_rule\.py sha256: ([0-9a-f]{64})$", text, re.M))
     if sha256_file(rule) not in listed:
         raise SystemExit("control refused: the sha256 of frozen_rule.py is not listed in the committed preregistration")
+    return commit
+
+
+# axis 9b: a population of independent researcher sessions, one directory per session
+SESSION_RE = re.compile(r"^(fable|opus)-[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
+
+
+def check_session_name(name: str) -> str:
+    if not SESSION_RE.match(name or ""):
+        raise SystemExit(f"bad session name {name!r}: expected <fable|opus>-<id> with id made of letters, digits, _ or -")
+    return name
+
+
+def session_dirs(name: str, repo_dir: Path = HERE, data_dir: Path = DATA_DIR) -> tuple[Path, Path]:
+    """(code dir holding frozen_rule.py and trials_by_model.md, data dir holding transcript, ledger, lock and results)."""
+    check_session_name(name)
+    return repo_dir / "sessions" / name, data_dir / "sessions" / name
+
+
+def control_gate_session(prereg: Path, rule: Path, session: str, repo: Path = REPO) -> str:
+    """Axis 9b gate: same as control_gate, but the committed preregistration must list this session with the sha256 of its
+    frozen_rule.py, on a line of its own: `session <name> frozen_rule.py sha256: <hex>`."""
+    check_session_name(session)
+    commit, text = _gate_base(prereg, rule, repo)
+    listed = set(re.findall(r"^session " + re.escape(session) + r" frozen_rule\.py sha256: ([0-9a-f]{64})$", text, re.M))
+    if sha256_file(rule) not in listed:
+        raise SystemExit(f"control refused: the sha256 of {session}/frozen_rule.py is not listed for this session in the committed preregistration")
     return commit
 
 
