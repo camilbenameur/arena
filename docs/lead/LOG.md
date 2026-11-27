@@ -165,3 +165,14 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
     - Design: +10.1%.
   - Against the references, it beats the basket (-35.8%) but not the trend engine at 2x (+33.9%). It is flat in October (-0.2%), and the random bot with the same turnover (+16.4% on average) beats it in 90% of draws.
   - It fails the preregistered criteria, but it is the only LLM-originated result that is positive out of sample. Its honest self-assessment matched what happened better than any trading bot did.
+
+**Axis 8b, part A: replicates (original control run + 3 replicates per plain-prompt bot).**
+
+| Bot | Returns over 4 runs | Mean | Beats same-turnover random |
+|---|---|---|---|
+| Haiku | -12.0% to -6.4% | -9.2% | 0 to 10% of draws |
+| Sonnet | -7.0% to -2.8% | -4.9% | 0 to 5% |
+| Opus | -4.4% to -0.4% | -2.4% | 0 to 10% |
+| Fable | -5.5% to -4.6% | -5.1% | 5 to 15% |
+
+The losses are stable across samples: no run of any model is positive. Total API spend so far: $124.8 (axis 8: $123.6, axis 9: $1.2).
