@@ -151,3 +151,5 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
   - Resuming a run now repairs a torn decision file before appending.
   - A finished run can no longer be resumed.
   - Batches reserve against 2,200 output tokens per request instead of 16,000. The largest output seen so far is 439. This is declared in the preregistration.
+
+**Axis 8b, part B design (high effort, stateful, sync).** Opus plain +5.0%, Opus cost-aware +10.6%, Fable plain +12.1%, Fable cost-aware +12.8%. These bots trade less (turnover 4 to 7x), but they beat the random bot with the same turnover in only 10 to 20% of draws, worse than the low-effort stateless bots on the same window. Knowing their own position and thinking harder did not help on design. All 4 go to the control as preregistered. Ledger: about $80.
