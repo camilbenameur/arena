@@ -176,3 +176,19 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 | Fable | -5.5% to -4.6% | -5.1% | 5 to 15% |
 
 The losses are stable across samples: no run of any model is positive. Total API spend so far: $124.8 (axis 8: $123.6, axis 9: $1.2).
+
+**Axis 9b: a population of LLM researchers (preregistration cebde1f).** 27 independent sessions: 17 Fable, 10 Opus. Each got only the design data and its own code sandbox, used no network, and returned 25 frozen rules in all (2 sessions dropped). Every rule was evaluated once on the sealed control (October to November 2026).
+
+| | Rules | Mean control return | Positive | Mean of same-turnover random |
+|---|---|---|---|---|
+| Fable 5.2 | 15 | +1.1% | 6 | |
+| Opus 5.5 | 10 | -4.1% | 3 | |
+| All | 25 | **-1.0%** (median -5.0%, sd 16.1) | 9 | **+2.7%** |
+
+- **Primary reading:** negative. The mean is below 0 (t = -0.3) and below the same-turnover random bots (difference -3.7 points, t = -3.9).
+- **Against the references:** no rule beats the trend engine at 2x (+33.9%), none passes all the axis-8 criteria, and only 1 of 25 beats its own random p95. 23 beat the basket (-35.8%), but 2 Opus sessions simply froze "hold the basket" (-36.2%).
+- **What drives the results:** each rule's control return tracks its net long or short lean, not its timing. Its random version, made of the same weights shuffled in time, lands on the same side.
+- **Self-assessment:** all 25 sessions labelled themselves "no robust edge found". Their honest self-assessment was the most reliable output of the experiment.
+- **Spend:** axis 9 and 9b cost $23.6. API total: about $147 of the $160 credit, plus about $5 held for the two dropped sessions.
+
+**Conclusion of axes 8 to 9b (LLMs, data after their training cutoff):** neither as traders (12 bots, 16 replicates, 4 high-effort stateful bots) nor as researchers (26 rules) did Claude models produce a trading edge out of sample. They are useful for honest critique and for running the protocol, not for alpha.
