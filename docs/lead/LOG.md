@@ -155,3 +155,13 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 **Axis 8b, part B design (high effort, stateful, sync).** Opus plain +5.0%, Opus cost-aware +10.6%, Fable plain +12.1%, Fable cost-aware +12.8%. These bots trade less (turnover 4 to 7x), but they beat the random bot with the same turnover in only 10 to 20% of draws, worse than the low-effort stateless bots on the same window. Knowing their own position and thinking harder did not help on design. All 4 go to the control as preregistered. Ledger: about $80.
 
 **Axis 8b, part B control: all 4 fail.** Opus plain -2.4%, Opus cost-aware +0.2%, Fable plain -4.4%, Fable cost-aware -4.2% (October to November 2026). Each beats the random bot with the same turnover in only 0 to 10% of draws. Thinking harder and knowing its own position lowers turnover and drawdown, but the bots still pick their moments worse than chance. Ledger after part B: $117.
+
+**Axis 9: Claude Fable as a researcher, not a trader.**
+- **Setup:** Fable got only the design data (4-hour bars, July to September 2026) and a code sandbox. It used no network, as the transcript shows.
+- **Its own verdict:** in one session it ran 14 trials, each with a mechanism written down in advance. It labelled its result "no robust edge found". It froze a volume-weighted 7-day momentum rule with hysteresis and a volatility target, and predicted a Sharpe of 0 to 0.3 out of sample. Cost: $1.14.
+- **Sealed control:**
+  - Results:
+    - October to November: +10.0%, max drawdown -8.5%, Sharpe 2.74.
+    - Design: +10.1%.
+  - Against the references, it beats the basket (-35.8%) but not the trend engine at 2x (+33.9%). It is flat in October (-0.2%), and the random bot with the same turnover (+16.4% on average) beats it in 90% of draws.
+  - It fails the preregistered criteria, but it is the only LLM-originated result that is positive out of sample. Its honest self-assessment matched what happened better than any trading bot did.
