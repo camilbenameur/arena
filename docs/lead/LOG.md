@@ -142,3 +142,12 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 - **Spend:** $42.63.
 
 **Verdict:** on data the models cannot have seen, Claude models deciding from prices every 4 hours do not trade profitably, at any model size or prompt tried. Bigger models lose less, but do not make money.
+
+**Axis 8b launched (preregistration frozen, 3b83b15).** It runs with the remaining API credit.
+- **Part A:** 3 replicates of each of the four plain-prompt frozen bots on the control, to measure the sampling noise of their result.
+- **Part B:** Opus and Fable at high effort, in stateful mode (they see their own position, equity and drawdown), with the plain and cost-aware prompts, design then control.
+- **Declared upfront:** the lead had already seen the axis 8 control results, so part B is a weaker out-of-sample test. Only effort and mode change, not the prompts.
+- **Fixes made before launch:**
+  - Resuming a run now repairs a torn decision file before appending.
+  - A finished run can no longer be resumed.
+  - Batches reserve against 2,200 output tokens per request instead of 16,000. The largest output seen so far is 439. This is declared in the preregistration.
