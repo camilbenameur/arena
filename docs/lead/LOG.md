@@ -50,3 +50,13 @@ On smaller coins the rule fires 2 to 7 times more often, at a much lower gain pe
 - **Always-on BTC+ETH:** +2.1% a year in the control, max drawdown -0.4%, 90% of months positive. On Kraken's own funding over the last 12 months, +1.3%. It was +18.7% in 2021: the return follows the funding regime.
 - **Variants:** every timing, rotation and cross-venue variant did worse, from -1.7% to +1.7% a year. A round trip costs 0.55% of equity, so anything that trades often loses.
 - **Verdict:** worth running only as a low-risk benchmark (EUR 13 to 20 a year on EUR 1,000), not as a profit source. It is not added to the arena for now.
+
+**Axis 4 done: inconclusive, not worth running.** Resting bids below par on Kraken stablecoins.
+- **Fees:** stablecoin and FX pairs cost 0.20% per side, which kills the rule on USDT, USDC, PYUSD and RLUSD. Only USDG/USD (0.00% maker, 0.01% taker) is left.
+- **USDG/USD:** it passes every criterion on paper, at about EUR 29 a year. But the result rests on 8 independent events in design (25 of 36 fills on the 2025-10-10 crash) and on a single one in the control (2 fills on 2026-10-07). No fill ever lost money, so the tail risk was never tested.
+- **The two adversarial checks:** both judged the result unsound.
+  - The preregistration cannot be shown to predate the design results.
+  - The engine was written while the control period was being downloaded.
+  - The fill model ignores the queue and counts sweeps as independent prints.
+
+**Process fix from now on:** I commit each preregistration to git myself before any control run, so its date and content can be verified. The control-run lock also becomes a commit.
