@@ -125,3 +125,20 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 - **On design, no bot passes all criteria.** Only Haiku beats the random bot with the same turnover, plain at the 95% level and overlay barely.
 - **Freeze:** the preregistration is frozen and committed (04cdcfc). All 12 design bots go to the sealed control, with no selection, and both deviations are declared: Fable added, and the code hash changed only by the added variant.
 - **Spend:** $22.09 at the freeze. The control runs are under way.
+
+**Axis 8, sealed control done: all 12 LLM bots fail.** Control window October to November 2026 (342 decisions, a falling market). The basket lost 35.8%, while the trend engine at 2x gained +33.9%.
+
+| Bot | Plain | Cost-aware | Overlay |
+|---|---|---|---|
+| Haiku 5.5 | -12.0% | -11.3% | -34.1% |
+| Sonnet 5.5 | -5.1% | -3.8% | -34.6% |
+| Opus 5.5 | -2.7% | -4.5% | -35.0% |
+| Fable 5.2 | -5.5% | -4.5% | -35.4% |
+
+- **Basket and trend:** every bot beats the basket but stays far below the trend engine, and none is positive in both months.
+- **Timing:** the decisive test is the random bot built from each bot's own weights shuffled in time. The plain and cost-aware bots beat it in only 0 to 15% of draws (the random versions average about +3%). Their timing is worse than chance out of sample. On design, the same bots beat it in 55 to 95% of draws, so there is no stable skill.
+- **Overlay:** the overlay bots simply track the basket down.
+- **Incident:** the cost-aware Haiku submission failed with a connection error. The API batch list showed that no batch had been created, so its lock was removed by hand (logged in `control_overrides.jsonl`), and it ran once afterwards.
+- **Spend:** $42.63.
+
+**Verdict:** on data the models cannot have seen, Claude models deciding from prices every 4 hours do not trade profitably, at any model size or prompt tried. Bigger models lose less, but do not make money.
