@@ -85,3 +85,12 @@ On smaller coins the rule fires 2 to 7 times more often, at a much lower gain pe
 - **Untestable or blocked:** shorts after hacks, shorts before unlocks.
 
 The only live candidate is still the wick hunter on the 6 large contracts, waiting for its first wick.
+
+## 2026-11-27 evening, day 2 started early (at the user's request)
+
+**Axis 8: LLM trading bots, tested without leakage.** The earlier rejection of LLM classifiers came from leakage: the control period was inside the models' knowledge. Every current model (Haiku 5.5, Sonnet 5.5, Opus 5.5, Fable 5.2) has a training-data cutoff of June 2026. A backtest on July to November 2026 is therefore clean: the models cannot know those prices.
+- **Prompts:** no dates and no absolute price levels.
+- **Split:** design July to September, sealed control October to November.
+- **Comparison:** each bot is compared with the trend engine, the basket and a random bot with the same turnover.
+- **Budget:** about $160 of API credit to use before December, through the Batch API (-50%), with a hard spend cap in the harness.
+- **Phase 1 (now):** build the harness and a zero-cost dry run. Real runs start once the key is stored on this machine.
