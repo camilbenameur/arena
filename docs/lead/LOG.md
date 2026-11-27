@@ -99,3 +99,22 @@ The only live candidate is still the wick hunter on the 6 large contracts, waiti
 - **Fixes:** the 8 flaws found by the checkers are fixed and re-verified. They were: a bypassable control gate, a dry run burning the control run, a non-atomic spend cap, a possible double batch submission, a bot id blind to the feature code, and June data in the first design month (design now starts 2026-07-31).
 - **Pilots:** 2 calls per model, and every model accepted the JSON schema and the effort setting. Answers are short (~120 output tokens), so a full design pass in batch costs about $0.10 (Haiku), $1 (Sonnet), $2 (Opus) and $4.5 (Fable).
 - **Wave 1:** Haiku x 2 prompts, Sonnet x 2, Opus x 1, all in batch. Spend so far: $0.10.
+
+**Axis 8, wave 1 results (design window, 2026-07-31 to 2026-09-30, 372 decisions, batch, stateless bots).**
+
+| Bot | Return | Max DD | Sharpe | Turnover | Beats random with same turnover |
+|---|---|---|---|---|---|
+| Haiku, plain prompt | +13.7% | -4.7% | 3.87 | 17x | 95% of draws |
+| Haiku, cost-aware prompt | +14.7% | -5.3% | 3.27 | 35x | 80% |
+| Opus, plain prompt | +10.0% | -7.8% | 2.54 | 18x | 60% |
+| Sonnet, cost-aware prompt | +9.8% | -7.1% | 2.45 | 29x | 60% |
+| Sonnet, plain prompt | +8.5% | -5.8% | 2.64 | 12x | 60% |
+| Trend engine 2x | +37.1% | -27.3% | 2.63 | 39x | |
+| Basket 1x | +45.8% | -11.9% | 4.30 | 1x | |
+
+**Reading:**
+- All five bots make money with small drawdowns, but they hold little exposure in a rising market. None beats the basket or the trend engine on return.
+- Only Haiku with the plain prompt beats the random bot with the same turnover at the 95% level.
+- Spend so far: $4.41.
+
+**Wave 2 (running):** a third and last prompt variant, "overlay": start from the basket and deviate only with a view. It runs on Haiku, Sonnet, Opus and Fable, together with the other Opus and Fable variants.
