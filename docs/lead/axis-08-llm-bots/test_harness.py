@@ -32,9 +32,11 @@ def test_frozen_regex_is_line_anchored():
     assert not RUN.is_frozen("status: frozen")
 
 
-def test_shipped_8b_preregistration_is_not_frozen_while_draft():
-    # the 8b file is a DRAFT until the lead freezes it; once frozen and committed this test is expected to be updated
-    assert not RUN.is_frozen(RUN.PREREG_8B.read_text())
+def test_shipped_8b_preregistration_is_frozen_with_16_bots():
+    # frozen by the lead on 2026-11-27: 12 replicates (part A) and 4 high-effort sync bots (part B)
+    text = RUN.PREREG_8B.read_text()
+    assert RUN.is_frozen(text)
+    assert sum(1 for line in text.splitlines() if line.startswith("- claude-")) == 16
 
 
 # --- 2. control lock only after a successful reserve, dry runs ignored
