@@ -109,3 +109,26 @@ def table(rep: dict) -> str:
         lines.append(f"statuses: {st} | truncated by max_tokens (held): {rep.get('truncations', 0)} of {rep.get('decisions', '?')}")
     lines.append("months (bot): " + ", ".join(f"{m} {v:+.1f}%" for m, v in rep["bot"]["months_pct"].items()))
     return "\n".join(lines)
+
+
+def spread(reports: dict[str, dict]) -> dict:
+    """Original run + replicates of the same frozen bot (label -> report.json): per-run figures and the spread of the
+    return. Batch outputs differ between calls even with identical prompts, so the spread is the sampling noise."""
+    per = {k: {"return_pct": v["bot"]["return_pct"], "max_dd_pct": v["bot"]["max_dd_pct"], "sharpe": v["bot"]["sharpe"],
+               "turnover_x": v["bot"]["turnover_x"], "months_pct": v["bot"]["months_pct"],
+               "beats_random_share": v["random"]["share_beaten_by_bot"], "all_pass": v["all_pass"]} for k, v in reports.items()}
+    rets = np.array([p["return_pct"] for p in per.values()])
+    return {"n_runs": len(per), "per_run": per, "return_min_pct": round(float(rets.min()), 2),
+            "return_max_pct": round(float(rets.max()), 2), "return_mean_pct": round(float(rets.mean()), 2),
+            "return_std_pct": round(float(rets.std(ddof=1)), 2) if len(rets) > 1 else None,
+            "return_range_pp": round(float(rets.max() - rets.min()), 2), "any_pass": any(p["all_pass"] for p in per.values())}
+
+
+def spread_table(sp: dict) -> str:
+    lines = [f"{'run':10}{'return%':>9}{'maxDD%':>9}{'Sharpe':>8}{'turnover x':>11}{'beats random':>14}{'all pass':>10}"]
+    for k, p in sp["per_run"].items():
+        lines.append(f"{k:10}{p['return_pct']:>9.2f}{p['max_dd_pct']:>9.2f}{p['sharpe']:>8.2f}{p['turnover_x']:>11.1f}"
+                     f"{100 * p['beats_random_share']:>13.0f}%{str(p['all_pass']):>10}")
+    lines.append(f"spread over {sp['n_runs']} runs: return {sp['return_min_pct']:+.2f}% to {sp['return_max_pct']:+.2f}% "
+                 f"(range {sp['return_range_pp']:.2f} pp, mean {sp['return_mean_pct']:+.2f}%, std {sp['return_std_pct']})")
+    return "\n".join(lines)

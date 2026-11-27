@@ -32,8 +32,9 @@ def test_frozen_regex_is_line_anchored():
     assert not RUN.is_frozen("status: frozen")
 
 
-def test_shipped_preregistration_is_not_frozen():
-    assert not RUN.is_frozen(RUN.PREREG.read_text())
+def test_shipped_8b_preregistration_is_not_frozen_while_draft():
+    # the 8b file is a DRAFT until the lead freezes it; once frozen and committed this test is expected to be updated
+    assert not RUN.is_frozen(RUN.PREREG_8B.read_text())
 
 
 # --- 2. control lock only after a successful reserve, dry runs ignored
@@ -176,3 +177,174 @@ def test_max_tokens_and_truncation_status():
     assert BOT.MAX_TOKENS >= 16000
     msg = SimpleNamespace(stop_reason="max_tokens", content=[])
     assert BOT.parse_message(msg)[2] == "max_tokens"
+
+
+# --- axis 8b: frozen code, replicate gate, sync resume
+FROZEN_CODE_HASH = "bb0e9052"
+
+
+def test_frozen_code_hash_unchanged_and_frozen_ids_still_compute():
+    assert BOT.code_hash() == FROZEN_CODE_HASH
+    ids = RUN.listed_ids(RUN.PREREG.read_text())
+    assert len(ids) == 12 and all(i.split("__")[1].endswith("-" + FROZEN_CODE_HASH) for i in ids)
+    recomputed = {RUN.bot_id(m, v, e, "batch") for m, e in BOT.MODELS.values() for v in BOT.VARIANTS}
+    assert recomputed == ids
+
+
+def _prereg_repo(tmp_path, monkeypatch, *, axis8_frozen=True, b_text=None, commit_b=True, base="BASE"):
+    """Throw-away git repo holding fake PREREGISTRATION.md / PREREGISTRATION-8b.md, wired into the run module."""
+    import subprocess
+
+    d = tmp_path / "repo" / "docs"
+    d.mkdir(parents=True)
+    g = lambda *a: subprocess.run(["git", "-C", str(tmp_path / "repo"), *a], check=True, capture_output=True)  # noqa: E731
+    g("init", "-q")
+    g("config", "user.email", "test")
+    g("config", "user.name", "t")
+    g("config", "commit.gpgsign", "false")
+    p8 = d / "PREREGISTRATION.md"
+    p8.write_text(f"STATUS: {'FROZEN' if axis8_frozen else 'DRAFT'}\n- {base}\n")
+    g("add", "-A")
+    g("commit", "-qm", "axis8")
+    pb = d / "PREREGISTRATION-8b.md"
+    if b_text is not None:
+        pb.write_text(b_text)
+        if commit_b:
+            g("add", "-A")
+            g("commit", "-qm", "8b")
+    monkeypatch.setattr(RUN.BR, "REPO", tmp_path / "repo")
+    monkeypatch.setattr(RUN, "PREREG", p8)
+    monkeypatch.setattr(RUN, "PREREG_8B", pb)
+    monkeypatch.setattr(RUN, "DATA_DIR", tmp_path / "data")
+    return tmp_path / "repo"
+
+
+def test_replicate_gate_needs_8b_file(tmp_path, monkeypatch):
+    _prereg_repo(tmp_path, monkeypatch)  # no 8b file at all
+    with pytest.raises(SystemExit, match="PREREGISTRATION-8b.md"):
+        RUN.control_gate("BASE", False, replicate=1)
+
+
+def test_replicate_gate_needs_base_in_axis8_and_replicate_listed_and_frozen(tmp_path, monkeypatch):
+    _prereg_repo(tmp_path, monkeypatch, b_text="STATUS: FROZEN\n- BASE__r1\n- OTHER__r1\n")
+    assert RUN.control_gate("BASE", False, replicate=1)  # base in axis 8, BASE__r1 listed, 8b frozen and committed
+    with pytest.raises(SystemExit, match="not listed in PREREGISTRATION-8b"):
+        RUN.control_gate("BASE", False, replicate=2)  # r2 not listed
+    with pytest.raises(SystemExit, match="axis-8 preregistration"):
+        RUN.control_gate("OTHER", False, replicate=1)  # OTHER__r1 is listed in 8b but OTHER is not a frozen axis-8 bot
+    with pytest.raises(SystemExit, match="replicate must be"):
+        RUN.control_gate("BASE", False, replicate=4)
+
+
+def test_replicate_gate_refuses_draft_or_uncommitted_8b(tmp_path, monkeypatch):
+    _prereg_repo(tmp_path, monkeypatch, b_text="STATUS: DRAFT\n- BASE__r1\n")
+    with pytest.raises(SystemExit, match="STATUS: FROZEN"):
+        RUN.control_gate("BASE", False, replicate=1)
+    (tmp_path / "x").mkdir()
+    _prereg_repo(tmp_path / "x", monkeypatch, b_text="STATUS: FROZEN\n- BASE__r1\n", commit_b=False)
+    with pytest.raises(SystemExit, match="not committed"):
+        RUN.control_gate("BASE", False, replicate=1)
+
+
+def test_replicate_listing_is_exact_not_substring(tmp_path, monkeypatch):
+    # only the replicate id is listed in 8b: the plain base id must not pass as a (new-bot) listing, and the gate for the
+    # original bot still follows axis 8 (and is refused once its lock exists)
+    _prereg_repo(tmp_path, monkeypatch, b_text="STATUS: FROZEN\n- BASE__r1\n")
+    assert RUN.listed_ids("- BASE__r1\n") == {"BASE__r1"} and "BASE" not in RUN.listed_ids("- BASE__r1\n")
+
+
+def test_replicate_never_overwrites_original(tmp_path, monkeypatch):
+    _prereg_repo(tmp_path, monkeypatch, b_text="STATUS: FROZEN\n- BASE__r1\n")
+    # (a) the control lock of the original does not block the replicate, and the replicate lock does not touch the original's
+    RUN.take_control_lock("BASE", "c", False, RUN.DATA_DIR)
+    assert RUN.control_gate("BASE", False, replicate=1)  # the original already ran: the replicate is still allowed
+    RUN.take_control_lock(RUN.replicate_id("BASE", 1), "c", False, RUN.DATA_DIR)
+    assert RUN.control_ran("BASE") and RUN.control_ran("BASE__r1")
+    with pytest.raises(SystemExit, match="already ran"):
+        RUN.control_gate("BASE", False, replicate=1)  # a replicate runs once
+    # (b) run directories differ; a submitted original batch.json stays intact and a replicate cannot reuse its directory
+    root = tmp_path / "runs"
+    o, r = RUN.run_dir_for(root, "BASE", "control"), RUN.run_dir_for(root, "BASE", "control", 1)
+    assert o != r and r.name == "BASE__r1__control"
+    o.mkdir(parents=True), r.mkdir(parents=True)
+    led = BUD.Ledger(tmp_path / "s.jsonl")
+    RUN.submit_batch(BOT.FakeClient(), led, o, "k", _reqs(), 0.5, 5.0, fake=True)
+    before = (o / "batch.json").read_text()
+    RUN.submit_batch(BOT.FakeClient(), led, r, "k2", _reqs(), 0.5, 5.0, fake=True)  # own directory: fine
+    with pytest.raises(SystemExit, match="already exists"):
+        RUN.submit_batch(BOT.FakeClient(), led, r, "k2", _reqs(), 0.5, 5.0, fake=True)
+    assert (o / "batch.json").read_text() == before
+
+
+def test_new_8b_bot_gate_uses_8b_file(tmp_path, monkeypatch):
+    _prereg_repo(tmp_path, monkeypatch, b_text="STATUS: FROZEN\n- NEWSYNC\n")
+    assert RUN.control_gate("NEWSYNC", False)
+    with pytest.raises(SystemExit, match="not listed"):
+        RUN.control_gate("UNKNOWN", False)
+
+
+def test_spread_report():
+    import report as REP
+
+    mk = lambda r: {"bot": {"return_pct": r, "max_dd_pct": -5.0, "sharpe": 1.0, "turnover_x": 10.0, "months_pct": {}},  # noqa: E731
+                    "random": {"share_beaten_by_bot": 0.1}, "all_pass": False}
+    sp = REP.spread({"original": mk(-5.0), "r1": mk(-3.0), "r2": mk(-8.0)})
+    assert sp["return_range_pp"] == 5.0 and sp["n_runs"] == 3 and sp["return_min_pct"] == -8.0
+    assert "spread over 3 runs" in REP.spread_table(sp)
+
+
+def _sync_setup(tmp_path):
+    import bars as BR
+
+    s, e = BR.PERIODS["design"]
+    data, i0 = BR.load_data(s, e)
+    return BR.make_bars(data, i0)
+
+
+class _Counting(BOT.FakeClient):
+    def __init__(self):
+        super().__init__(0)
+        self.calls = 0
+        inner = self.messages.create
+
+        def create(**p):
+            self.calls += 1
+            return inner(**p)
+
+        self.messages.create = create
+
+
+def test_sync_resume_does_not_recall_decided_bars(tmp_path):
+    try:
+        b = _sync_setup(tmp_path)
+    except Exception as ex:  # noqa: BLE001  (market data not on this machine)
+        pytest.skip(f"no market data: {ex}")
+    led = BUD.Ledger(tmp_path / "s.jsonl")
+    part = tmp_path / "decisions.partial.jsonl"
+    kw = dict(model="claude-opus-5-5", effort="high", variant="v1_plain", b=b, bid="B", period="design", cap=50.0, dry_run=False,
+              partial_path=part)
+    # run 1 "crashes" after 3 decisions
+    c1 = _Counting()
+    RUN.sync_loop(c1, led, n=3, **kw)
+    assert c1.calls == 3 and len(RUN.load_partial(part, 6)) == 3
+    spent = led.totals()["settled"]
+    with part.open("a") as f:
+        f.write('{"t": 3, "status": "o')  # a torn last line from the crash
+    done = RUN.load_partial(part, 6)
+    assert sorted(done) == [0, 1, 2]
+    # resume: only bars 3..5 are called, decided bars cost nothing more
+    c2 = _Counting()
+    prompts = []
+    orig = c2.messages.create
+    c2.messages.create = lambda **p: (prompts.append(p["messages"][0]["content"]), orig(**p))[1]
+    out = RUN.sync_loop(c2, led, n=6, done=done, **kw)
+    assert c2.calls == 3 and sorted(out) == [0, 1, 2, 3, 4, 5]
+    assert all(out[t] is done[t] for t in range(3))
+    assert led.totals()["settled"] > spent and len([e for e in led._events() if e["kind"] == "actual"]) == 6
+    # the state shown at bar 3 after resume equals the state an uninterrupted run shows (track record replayed)
+    c3 = _Counting()
+    prompts3 = []
+    orig3 = c3.messages.create
+    c3.messages.create = lambda **p: (prompts3.append(p["messages"][0]["content"]), orig3(**p))[1]
+    RUN.sync_loop(c3, BUD.Ledger(tmp_path / "ref.jsonl"), n=6, **{**kw, "partial_path": None})
+    assert prompts == prompts3[3:]
