@@ -296,7 +296,7 @@ def collect_batch(client, ledger: BUD.Ledger, run_dir: Path, model: str, *, dry_
     for batch_id in st["batch_ids"]:
         BOT.poll_batch(client, batch_id, every_s=poll_s)
         for r in client.messages.batches.results(batch_id):
-            t = int(r.custom_id.rsplit(":", 1)[1])
+            t = int(r.custom_id.rsplit("_", 1)[1])
             if r.result.type == "succeeded":
                 msg = r.result.message
                 u = {} if dry_run else BOT.usage_dict(msg)
@@ -391,7 +391,7 @@ def main() -> None:
         if a.collect:
             decisions = collect_batch(client, ledger, run_dir, model, dry_run=a.dry_run, poll_s=0 if a.dry_run else 60)
         else:
-            reqs = [{"custom_id": f"{bid}:{t:04d}",
+            reqs = [{"custom_id": f"d_{t:04d}",
                      "params": BOT.build_params(model, effort, a.prompt_variant, BR.user_message(b, b.first + t, None))}
                     for t in range(n)]
             in_tok = int(np.mean([len(r["params"]["messages"][0]["content"]) for r in reqs]) / CHARS_PER_TOKEN

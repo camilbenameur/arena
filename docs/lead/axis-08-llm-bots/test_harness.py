@@ -19,7 +19,7 @@ import run as RUN  # noqa: E402
 
 def _reqs(n=3, bid="m__v"):
     user = "x"
-    return [{"custom_id": f"{bid}:{t:04d}", "params": BOT.build_params("claude-haiku-5-5", "low", "v1_plain", user)}
+    return [{"custom_id": f"d_{t:04d}", "params": BOT.build_params("claude-haiku-5-5", "low", "v1_plain", user)}
             for t in range(n)]
 
 
