@@ -36,3 +36,12 @@ Daily log of the research lead. Tracker: GitHub issue #1. Paper trading only, st
 On smaller coins the rule fires 2 to 7 times more often, at a much lower gain per trade (-1.8 to +15.6 bp against 71.5 bp): ordinary volatility, not liquidation wicks. The 26-contract result comes from one quarter and one coin (QNT: 64% of the P&L), and turns negative with a one-minute delay or doubled costs.
 
 **Consequence for the live hunter:** it stays on the 6 large contracts, and its edge must now be read as a large-cap effect that has not been confirmed elsewhere. Its live record (still zero trades) is the next real test. No change to the robot.
+
+**Next axes, ranked (`PLAN-v6.md`).** A 9-agent workflow (4 researchers by angle, 4 adversarial critics, 1 ranker) proposed 12 ideas, and the critics kept 2. The ranked plan:
+1. resting bids on stablecoins below par on Kraken spot;
+2. reversal after an open-interest washout, with a ladder of entry delays (to tell it apart from the wick effect);
+3. a beta-hedged short before token unlocks;
+4. dated-futures basis, as an add-on to the carry axis;
+5. a short after hacks, sized by severity.
+
+8 ideas were rejected, with reasons: macro-release windows, post-listing fade, perp premium fades, the gold-token spread, delisting shorts, and LLM classifiers (the control period lies inside the models' knowledge, so they leak). None is a fast-profit engine: realistic expectations are 0 to 8% per year, and the first three are mainly cheap falsifications.
