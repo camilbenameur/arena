@@ -1,0 +1,134 @@
+{
+ "BTC+ETH": {
+  "metrics": {
+   "total_ret": 0.4953,
+   "ann_ret": 0.0714,
+   "ann_vol": 0.009,
+   "sharpe": 7.6997,
+   "max_dd": -0.0103,
+   "worst_month": -0.0045,
+   "pct_pos_months": 0.9429,
+   "n_months": 70,
+   "years": 5.8334,
+   "trades_per_year": 0.343,
+   "funding_eur": 547.5979,
+   "costs_eur": 46.6574
+  },
+  "years": {
+   "2020": {
+    "ret_pct": 10.857,
+    "max_dd_pct": -1.034
+   },
+   "2021": {
+    "ret_pct": 18.682,
+    "max_dd_pct": -0.187
+   },
+   "2022": {
+    "ret_pct": 0.622,
+    "max_dd_pct": -0.52
+   },
+   "2023": {
+    "ret_pct": 3.951,
+    "max_dd_pct": -0.079
+   },
+   "2024": {
+    "ret_pct": 6.607,
+    "max_dd_pct": -0.088
+   },
+   "2025": {
+    "ret_pct": 1.923,
+    "max_dd_pct": -0.08
+   }
+  },
+  "first": "2020-01-01 08:00:00+00:00",
+  "last": "2025-10-31 16:00:00+00:00"
+ },
+ "BTC": {
+  "metrics": {
+   "total_ret": 0.4454,
+   "ann_ret": 0.0652,
+   "ann_vol": 0.0093,
+   "sharpe": 6.8468,
+   "max_dd": -0.0149,
+   "worst_month": -0.0076,
+   "pct_pos_months": 0.9429,
+   "n_months": 70,
+   "years": 5.8334,
+   "trades_per_year": 0.1715,
+   "funding_eur": 483.6796,
+   "costs_eur": 33.8994
+  },
+  "years": {
+   "2020": {
+    "ret_pct": 8.146,
+    "max_dd_pct": -1.493
+   },
+   "2021": {
+    "ret_pct": 16.307,
+    "max_dd_pct": -0.428
+   },
+   "2022": {
+    "ret_pct": 1.67,
+    "max_dd_pct": -0.202
+   },
+   "2023": {
+    "ret_pct": 3.912,
+    "max_dd_pct": -0.082
+   },
+   "2024": {
+    "ret_pct": 6.447,
+    "max_dd_pct": -0.094
+   },
+   "2025": {
+    "ret_pct": 2.182,
+    "max_dd_pct": -0.108
+   }
+  },
+  "first": "2020-01-01 08:00:00+00:00",
+  "last": "2025-10-31 16:00:00+00:00"
+ },
+ "ETH": {
+  "metrics": {
+   "total_ret": 0.542,
+   "ann_ret": 0.0771,
+   "ann_vol": 0.0102,
+   "sharpe": 7.3445,
+   "max_dd": -0.0128,
+   "worst_month": -0.0088,
+   "pct_pos_months": 0.9143,
+   "n_months": 70,
+   "years": 5.8334,
+   "trades_per_year": 0.1715,
+   "funding_eur": 609.2657,
+   "costs_eur": 60.0233
+  },
+  "years": {
+   "2020": {
+    "ret_pct": 13.705,
+    "max_dd_pct": -0.849
+   },
+   "2021": {
+    "ret_pct": 20.651,
+    "max_dd_pct": -0.272
+   },
+   "2022": {
+    "ret_pct": -0.416,
+    "max_dd_pct": -1.284
+   },
+   "2023": {
+    "ret_pct": 3.986,
+    "max_dd_pct": -0.118
+   },
+   "2024": {
+    "ret_pct": 6.765,
+    "max_dd_pct": -0.097
+   },
+   "2025": {
+    "ret_pct": 1.664,
+    "max_dd_pct": -0.138
+   }
+  },
+  "first": "2020-01-01 08:00:00+00:00",
+  "last": "2025-10-31 16:00:00+00:00"
+ }
+}

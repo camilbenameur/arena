@@ -1,0 +1,23 @@
+{
+ "base": {
+  "total_pct": 109.32,
+  "max_dd_pct": -40.63,
+  "trades": 86,
+  "mean_net_bp": 41.4,
+  "win_rate_pct": 68.6
+ },
+ "delay1": {
+  "total_pct": 138.37,
+  "max_dd_pct": -38.96,
+  "trades": 84,
+  "mean_net_bp": 49.4,
+  "win_rate_pct": 66.7
+ },
+ "kraken_v5_year_for_reference": {
+  "total_pct": 295.5,
+  "max_dd_pct": -37.3,
+  "trades": 92,
+  "mean_net_bp": 71.5,
+  "win_rate_pct": 77.2
+ }
+}

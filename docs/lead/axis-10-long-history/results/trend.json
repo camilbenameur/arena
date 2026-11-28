@@ -1,0 +1,226 @@
+{
+ "1x": {
+  "trades": 1443,
+  "total_pct": -4.24,
+  "max_dd_pct": -63.18,
+  "sharpe": 0.2,
+  "turnover_x": 716.5,
+  "fees_pct": 50.15,
+  "funding_pct": -47.93,
+  "ruined": false,
+  "years": {
+   "2020": {
+    "ret_pct": 36.86,
+    "max_dd_pct": -30.79
+   },
+   "2021": {
+    "ret_pct": 5.04,
+    "max_dd_pct": -33.64
+   },
+   "2022": {
+    "ret_pct": -29.54,
+    "max_dd_pct": -58.44
+   },
+   "2023": {
+    "ret_pct": 54.8,
+    "max_dd_pct": -33.77
+   },
+   "2024": {
+    "ret_pct": -15.1,
+    "max_dd_pct": -46.27
+   },
+   "2025": {
+    "ret_pct": -28.06,
+    "max_dd_pct": -34.91
+   }
+  },
+  "win_rate_pct": 26.1,
+  "mean_net_bp": -17.9,
+  "fresh_year": {
+   "2020": {
+    "trades": 202,
+    "total_pct": 36.86,
+    "max_dd_pct": -30.79,
+    "sharpe": 0.96,
+    "turnover_x": 95.2,
+    "fees_pct": 6.66,
+    "funding_pct": -12.58,
+    "ruined": false,
+    "win_rate_pct": 23.8,
+    "mean_net_bp": 7.5
+   },
+   "2021": {
+    "trades": 304,
+    "total_pct": 3.31,
+    "max_dd_pct": -33.64,
+    "sharpe": 0.29,
+    "turnover_x": 84.1,
+    "fees_pct": 5.89,
+    "funding_pct": -14.22,
+    "ruined": false,
+    "win_rate_pct": 24.3,
+    "mean_net_bp": 28.8
+   },
+   "2022": {
+    "trades": 301,
+    "total_pct": -28.73,
+    "max_dd_pct": -58.44,
+    "sharpe": -0.53,
+    "turnover_x": 106.3,
+    "fees_pct": 7.44,
+    "funding_pct": -2.53,
+    "ruined": false,
+    "win_rate_pct": 25.6,
+    "mean_net_bp": -136.0
+   },
+   "2023": {
+    "trades": 176,
+    "total_pct": 55.16,
+    "max_dd_pct": -33.77,
+    "sharpe": 1.2,
+    "turnover_x": 119.5,
+    "fees_pct": 8.37,
+    "funding_pct": -3.95,
+    "ruined": false,
+    "win_rate_pct": 28.4,
+    "mean_net_bp": 70.9
+   },
+   "2024": {
+    "trades": 247,
+    "total_pct": -15.1,
+    "max_dd_pct": -46.27,
+    "sharpe": -0.26,
+    "turnover_x": 87.4,
+    "fees_pct": 6.12,
+    "funding_pct": -4.04,
+    "ruined": false,
+    "win_rate_pct": 27.9,
+    "mean_net_bp": -3.4
+   },
+   "2025": {
+    "trades": 218,
+    "total_pct": -27.49,
+    "max_dd_pct": -34.91,
+    "sharpe": -0.7,
+    "turnover_x": 75.0,
+    "fees_pct": 5.25,
+    "funding_pct": -1.21,
+    "ruined": false,
+    "win_rate_pct": 25.7,
+    "mean_net_bp": -128.7
+   }
+  }
+ },
+ "2x": {
+  "trades": 1470,
+  "total_pct": -71.61,
+  "max_dd_pct": -91.94,
+  "sharpe": 0.16,
+  "turnover_x": 1278.1,
+  "fees_pct": 89.47,
+  "funding_pct": -102.98,
+  "ruined": false,
+  "years": {
+   "2020": {
+    "ret_pct": 69.67,
+    "max_dd_pct": -52.78
+   },
+   "2021": {
+    "ret_pct": -22.31,
+    "max_dd_pct": -60.26
+   },
+   "2022": {
+    "ret_pct": -56.19,
+    "max_dd_pct": -83.37
+   },
+   "2023": {
+    "ret_pct": 88.58,
+    "max_dd_pct": -58.68
+   },
+   "2024": {
+    "ret_pct": -40.45,
+    "max_dd_pct": -73.38
+   },
+   "2025": {
+    "ret_pct": -56.22,
+    "max_dd_pct": -60.26
+   }
+  },
+  "win_rate_pct": 23.9,
+  "mean_net_bp": -118.3,
+  "fresh_year": {
+   "2020": {
+    "trades": 206,
+    "total_pct": 69.67,
+    "max_dd_pct": -52.78,
+    "sharpe": 1.04,
+    "turnover_x": 251.8,
+    "fees_pct": 17.62,
+    "funding_pct": -30.22,
+    "ruined": false,
+    "win_rate_pct": 21.8,
+    "mean_net_bp": -106.3
+   },
+   "2021": {
+    "trades": 331,
+    "total_pct": -26.84,
+    "max_dd_pct": -60.26,
+    "sharpe": 0.08,
+    "turnover_x": 175.8,
+    "fees_pct": 12.31,
+    "funding_pct": -29.4,
+    "ruined": false,
+    "win_rate_pct": 21.1,
+    "mean_net_bp": -86.4
+   },
+   "2022": {
+    "trades": 301,
+    "total_pct": -55.02,
+    "max_dd_pct": -83.37,
+    "sharpe": -0.48,
+    "turnover_x": 240.5,
+    "fees_pct": 16.83,
+    "funding_pct": -3.97,
+    "ruined": false,
+    "win_rate_pct": 24.3,
+    "mean_net_bp": -198.3
+   },
+   "2023": {
+    "trades": 177,
+    "total_pct": 89.38,
+    "max_dd_pct": -58.68,
+    "sharpe": 1.13,
+    "turnover_x": 278.2,
+    "fees_pct": 19.48,
+    "funding_pct": -9.43,
+    "ruined": false,
+    "win_rate_pct": 26.6,
+    "mean_net_bp": -51.5
+   },
+   "2024": {
+    "trades": 245,
+    "total_pct": -40.45,
+    "max_dd_pct": -73.38,
+    "sharpe": -0.35,
+    "turnover_x": 155.0,
+    "fees_pct": 10.85,
+    "funding_pct": -7.52,
+    "ruined": false,
+    "win_rate_pct": 24.9,
+    "mean_net_bp": -129.2
+   },
+   "2025": {
+    "trades": 218,
+    "total_pct": -55.86,
+    "max_dd_pct": -60.26,
+    "sharpe": -0.78,
+    "turnover_x": 123.6,
+    "fees_pct": 8.65,
+    "funding_pct": -1.78,
+    "ruined": false,
+    "win_rate_pct": 24.3,
+    "mean_net_bp": -183.2
+   }
+  }
+ }
+}

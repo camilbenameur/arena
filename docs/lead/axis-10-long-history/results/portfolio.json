@@ -1,0 +1,374 @@
+{
+ "n_days": 2101,
+ "nan_days": 0,
+ "first": "2020-01-31",
+ "last": "2025-10-31",
+ "stand_alone": {
+  "wick_continuous": {
+   "total_pct": -100.0,
+   "max_dd_pct": -100.0,
+   "sharpe": -0.96,
+   "years": {
+    "2020": {
+     "ret_pct": -99.88,
+     "max_dd_pct": -99.91
+    },
+    "2021": {
+     "ret_pct": -100.0,
+     "max_dd_pct": -100.0
+    },
+    "2022": {
+     "ret_pct": -99.04,
+     "max_dd_pct": -99.61
+    },
+    "2023": {
+     "ret_pct": -24.07,
+     "max_dd_pct": -78.29
+    },
+    "2024": {
+     "ret_pct": -98.03,
+     "max_dd_pct": -98.1
+    },
+    "2025": {
+     "ret_pct": -95.12,
+     "max_dd_pct": -96.31
+    }
+   }
+  },
+  "wick_fresh_year": {
+   "total_pct": -100.0,
+   "max_dd_pct": -100.0,
+   "sharpe": -0.96,
+   "years": {
+    "2020": {
+     "ret_pct": -99.88,
+     "max_dd_pct": -99.91
+    },
+    "2021": {
+     "ret_pct": -100.0,
+     "max_dd_pct": -100.0
+    },
+    "2022": {
+     "ret_pct": -99.04,
+     "max_dd_pct": -99.61
+    },
+    "2023": {
+     "ret_pct": -24.07,
+     "max_dd_pct": -78.29
+    },
+    "2024": {
+     "ret_pct": -98.03,
+     "max_dd_pct": -98.1
+    },
+    "2025": {
+     "ret_pct": -95.1,
+     "max_dd_pct": -96.3
+    }
+   }
+  },
+  "trend1x_continuous": {
+   "total_pct": -4.24,
+   "max_dd_pct": -60.72,
+   "sharpe": 0.2,
+   "years": {
+    "2020": {
+     "ret_pct": 36.86,
+     "max_dd_pct": -28.62
+    },
+    "2021": {
+     "ret_pct": 5.04,
+     "max_dd_pct": -30.92
+    },
+    "2022": {
+     "ret_pct": -29.54,
+     "max_dd_pct": -55.77
+    },
+    "2023": {
+     "ret_pct": 54.8,
+     "max_dd_pct": -29.97
+    },
+    "2024": {
+     "ret_pct": -15.1,
+     "max_dd_pct": -44.08
+    },
+    "2025": {
+     "ret_pct": -28.06,
+     "max_dd_pct": -33.5
+    }
+   }
+  },
+  "trend1x_fresh_year": {
+   "total_pct": -3.75,
+   "max_dd_pct": -60.32,
+   "sharpe": 0.2,
+   "years": {
+    "2020": {
+     "ret_pct": 36.86,
+     "max_dd_pct": -28.62
+    },
+    "2021": {
+     "ret_pct": 3.31,
+     "max_dd_pct": -30.92
+    },
+    "2022": {
+     "ret_pct": -28.73,
+     "max_dd_pct": -55.77
+    },
+    "2023": {
+     "ret_pct": 55.16,
+     "max_dd_pct": -29.97
+    },
+    "2024": {
+     "ret_pct": -15.1,
+     "max_dd_pct": -44.08
+    },
+    "2025": {
+     "ret_pct": -27.49,
+     "max_dd_pct": -32.98
+    }
+   }
+  },
+  "carry": {
+   "total_pct": 48.88,
+   "max_dd_pct": -1.02,
+   "sharpe": 8.46,
+   "years": {
+    "2020": {
+     "ret_pct": 10.36,
+     "max_dd_pct": -1.02
+    },
+    "2021": {
+     "ret_pct": 18.7,
+     "max_dd_pct": -0.15
+    },
+    "2022": {
+     "ret_pct": 0.62,
+     "max_dd_pct": -0.51
+    },
+    "2023": {
+     "ret_pct": 3.97,
+     "max_dd_pct": -0.06
+    },
+    "2024": {
+     "ret_pct": 6.6,
+     "max_dd_pct": -0.05
+    },
+    "2025": {
+     "ret_pct": 1.91,
+     "max_dd_pct": -0.07
+    }
+   }
+  }
+ },
+ "P1_preregistered": {
+  "total_pct": -99.15,
+  "max_dd_pct": -99.25,
+  "sharpe": -0.87,
+  "years": {
+   "2020": {
+    "ret_pct": -57.51,
+    "max_dd_pct": -63.91
+   },
+   "2021": {
+    "ret_pct": -79.91,
+    "max_dd_pct": -84.89
+   },
+   "2022": {
+    "ret_pct": -63.59,
+    "max_dd_pct": -79.95
+   },
+   "2023": {
+    "ret_pct": 27.26,
+    "max_dd_pct": -27.9
+   },
+   "2024": {
+    "ret_pct": -57.48,
+    "max_dd_pct": -57.95
+   },
+   "2025": {
+    "ret_pct": -49.25,
+    "max_dd_pct": -51.85
+   }
+  }
+ },
+ "P2_posthoc_fresh_year": {
+  "total_pct": -99.14,
+  "max_dd_pct": -99.25,
+  "sharpe": -0.87,
+  "years": {
+   "2020": {
+    "ret_pct": -57.51,
+    "max_dd_pct": -63.91
+   },
+   "2021": {
+    "ret_pct": -80.01,
+    "max_dd_pct": -84.85
+   },
+   "2022": {
+    "ret_pct": -63.45,
+    "max_dd_pct": -79.95
+   },
+   "2023": {
+    "ret_pct": 27.34,
+    "max_dd_pct": -27.9
+   },
+   "2024": {
+    "ret_pct": -57.48,
+    "max_dd_pct": -57.95
+   },
+   "2025": {
+    "ret_pct": -49.06,
+    "max_dd_pct": -51.79
+   }
+  }
+ },
+ "P3_posthoc_ex_wick_trend_carry_50_50": {
+  "total_pct": 36.26,
+  "max_dd_pct": -32.75,
+  "sharpe": 0.35,
+  "years": {
+   "2020": {
+    "ret_pct": 25.84,
+    "max_dd_pct": -14.49
+   },
+   "2021": {
+    "ret_pct": 14.37,
+    "max_dd_pct": -15.13
+   },
+   "2022": {
+    "ret_pct": -13.67,
+    "max_dd_pct": -32.7
+   },
+   "2023": {
+    "ret_pct": 29.89,
+    "max_dd_pct": -15.7
+   },
+   "2024": {
+    "ret_pct": -3.25,
+    "max_dd_pct": -22.87
+   },
+   "2025": {
+    "ret_pct": -12.74,
+    "max_dd_pct": -17.17
+   }
+  }
+ },
+ "corr_daily_continuous": {
+  "wick": {
+   "wick": 1.0,
+   "trend1x": -0.031,
+   "carry": 0.078
+  },
+  "trend1x": {
+   "wick": -0.031,
+   "trend1x": 1.0,
+   "carry": 0.065
+  },
+  "carry": {
+   "wick": 0.078,
+   "trend1x": 0.065,
+   "carry": 1.0
+  }
+ },
+ "corr_monthly_continuous": {
+  "wick": {
+   "wick": 1.0,
+   "trend1x": 0.113,
+   "carry": -0.172
+  },
+  "trend1x": {
+   "wick": 0.113,
+   "trend1x": 1.0,
+   "carry": 0.179
+  },
+  "carry": {
+   "wick": -0.172,
+   "trend1x": 0.179,
+   "carry": 1.0
+  }
+ },
+ "corr_daily_wick_active_days_continuous": {
+  "wick": {
+   "wick": 1.0,
+   "trend1x": -0.038,
+   "carry": 0.104
+  },
+  "trend1x": {
+   "wick": -0.038,
+   "trend1x": 1.0,
+   "carry": 0.071
+  },
+  "carry": {
+   "wick": 0.104,
+   "trend1x": 0.071,
+   "carry": 1.0
+  }
+ },
+ "wick_active_days_continuous": 748,
+ "corr_daily_fresh_year": {
+  "wick": {
+   "wick": 1.0,
+   "trend1x": -0.032,
+   "carry": 0.078
+  },
+  "trend1x": {
+   "wick": -0.032,
+   "trend1x": 1.0,
+   "carry": 0.063
+  },
+  "carry": {
+   "wick": 0.078,
+   "trend1x": 0.063,
+   "carry": 1.0
+  }
+ },
+ "corr_monthly_fresh_year": {
+  "wick": {
+   "wick": 1.0,
+   "trend1x": 0.116,
+   "carry": -0.172
+  },
+  "trend1x": {
+   "wick": 0.116,
+   "trend1x": 1.0,
+   "carry": 0.17
+  },
+  "carry": {
+   "wick": -0.172,
+   "trend1x": 0.17,
+   "carry": 1.0
+  }
+ },
+ "corr_daily_wick_active_days_fresh_year": {
+  "wick": {
+   "wick": 1.0,
+   "trend1x": -0.038,
+   "carry": 0.104
+  },
+  "trend1x": {
+   "wick": -0.038,
+   "trend1x": 1.0,
+   "carry": 0.068
+  },
+  "carry": {
+   "wick": 0.104,
+   "trend1x": 0.068,
+   "carry": 1.0
+  }
+ },
+ "wick_active_days_fresh_year": 748,
+ "worst_month_pct": {
+  "wick_continuous": -99.93,
+  "wick_fresh_year": -99.93,
+  "trend1x_continuous": -25.42,
+  "trend1x_fresh_year": -25.42,
+  "carry": -0.46
+ },
+ "worst_day_pct": {
+  "wick_continuous": -98.05,
+  "wick_fresh_year": -98.05,
+  "trend1x_continuous": -10.95,
+  "trend1x_fresh_year": -10.95,
+  "carry": -0.72
+ }
+}

@@ -205,3 +205,15 @@ The losses are stable across samples: no run of any model is positive. Total API
 The pass rules are written before any computation:
 - the wick rule must be positive in at least 4 of 6 years and positive overall with a 1-minute delay;
 - the trend engine must be positive in at least 4 of 6 years.
+
+**Axis 10 done: neither frozen survivor holds over 2020 to 2025.** Binance minute data, never used to choose the rules. Both checks judged the result sound.
+- **Wick rule (the live wick hunter):**
+  - Positive in 0 of 6 years, even restarting each year at full equity.
+  - -34.7 bp per trade over 3,664 trades, against +72 bp on the Kraken year it was chosen on. On these years it fires 250 to 1,400 times a year, against 92 on that year.
+  - Per contract, only BTC alone is near break-even (+9 bp per trade). Every alt is ruined.
+  - The 2025-2026 edge was specific to that year: it holds neither across contracts (axis 1) nor across time (axis 10).
+- **Trend engine (Trend Council and its benchmark):** at 1x, +36.9, +5.0, -29.5, +54.8, -15.1 and -28.1% per year, so 3 of 6 positive (the threshold was 4). Total -4.2%, max drawdown -63%. At 2x, the live setting: -71.6%, max drawdown -92%.
+- **Carry:** positive every year, +7.1% a year with a -1.0% max drawdown. Only a cash substitute.
+- **Portfolio (equal thirds, fixed in advance):** -99.2%, ruined by the wick sleeve. Post hoc only, trend 1x plus carry at 50/50 gives +36.3% with a -32.8% max drawdown.
+
+**Consequence:** both robots now in service in the derivatives league (wick hunter, Trend Council at 2x) are, on the long history, lottery tickets with a ruin risk. They trade paper money, so nothing real is at stake, but the site presents them as research results. Decision for the owner: keep them running as documented experiments, or retire them.
