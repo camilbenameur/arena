@@ -192,3 +192,16 @@ The losses are stable across samples: no run of any model is positive. Total API
 - **Spend:** axis 9 and 9b cost $23.6. API total: about $147 of the $160 credit, plus about $5 held for the two dropped sessions.
 
 **Conclusion of axes 8 to 9b (LLMs, data after their training cutoff):** neither as traders (12 bots, 16 replicates, 4 high-effort stateful bots) nor as researchers (26 rules) did Claude models produce a trading edge out of sample. They are useful for honest critique and for running the protocol, not for alpha.
+
+## 2026-11-28, day 3
+
+**Health:** all services running overnight, journal verified, kill switch inactive, last presence confirmation 60 h ago.
+
+**Axis 10 (started): the frozen survivors on six years never used to choose them.** Research v5 selected the wick rule and the trend engine on Kraken data from 2025-11 to 2026-11 only. Binance minute data from 2020 is already on disk from axis 5. Axis 10 runs:
+- the frozen wick rule, unchanged, on 2020 to 2025 per year, with the delay and cost stress tests;
+- the frozen trend engine on the same years;
+- a portfolio of wick, trend and carry, with weights fixed before looking.
+
+The pass rules are written before any computation:
+- the wick rule must be positive in at least 4 of 6 years and positive overall with a 1-minute delay;
+- the trend engine must be positive in at least 4 of 6 years.
