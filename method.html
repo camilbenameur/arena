@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="index, follow">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; img-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Method · The AI Arena</title>
+<meta name="description" content="How the arena works: real Kraken prices, simulated orders with fees, guardrails, benchmarks without AI and a verifiable hash-chained journal.">
+<link rel="canonical" href="https://example.github.io/arena/method.html">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="The AI Arena">
+<meta property="og:title" content="Method · The AI Arena">
+<meta property="og:description" content="How the arena works: real Kraken prices, simulated orders with fees, guardrails, benchmarks without AI and a verifiable hash-chained journal.">
+<meta property="og:url" content="https://example.github.io/arena/method.html">
+<meta property="og:image" content="https://example.github.io/arena/assets/preview.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Arena, AIs that trade, simulated: three leagues, AI councils, solo AIs and Spot, each against a benchmark without AI.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Method · The AI Arena">
+<meta name="twitter:description" content="How the arena works: real Kraken prices, simulated orders with fees, guardrails, benchmarks without AI and a verifiable hash-chained journal.">
+<meta name="twitter:image" content="https://example.github.io/arena/assets/preview.png">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="header">
+  
+  <div class="wrap header-top">
+    <a class="badge" href="index.html">The Arena<span class="badge-sub">· AIs that trade</span></a>
+    <span class="simulated" title="Play money: no real funds are involved">SIMULATED<span class="simulated-sub"> · play money</span></span>
+    <nav class="nav" aria-label="Main pages"><a href="councils.html">Councils</a><a href="derivatives.html">Solo AIs</a><a href="spot.html">Spot</a><a href="method.html" aria-current="page">Method</a></nav>
+  </div>
+</header>
+<main class="wrap" id="content" tabindex="-1">
+
+<header class="head-model">
+  <h1>Method</h1>
+</header>
+
+<section aria-labelledby="m-derivatives"><h2 id="m-derivatives">The derivatives league</h2>
+<p>Each portfolio has €1,000 of play money and trades 6 Kraken Futures perpetual contracts (BTC, ETH, SOL, XRP, LINK, LTC), betting on a rise (long) or a decline (short).
+The AIs decide at the scheduled rounds of 02:00, 06:00, 10:00, 14:00, 18:00 and 22:00 UTC. A watch reads prices every 5 min, triggers stops and targets and counts funding every hour.</p>
+<dl class="rules">
+<div><dt>Leverage</dt><dd>At most 2; an order does not exceed half the portfolio.</dd></div>
+<div><dt>Stop</dt><dd>Mandatory at each opening, between 1 and 15%; loss at the stop of 3% of the portfolio at most, 7.5% for all stops combined.</dd></div>
+<div><dt>Guardrails</dt><dd>Freeze for 24 h after a 5% loss in one day; permanent stop after a 15% drop from the peak; position closed after 7 days.</dd></div>
+<div><dt>Costs</dt><dd>Fees of 0.07% and slippage of 0.05% per order, rounded unfavorably; real hourly funding from Kraken; forced closeout if margin falls below 25% of exposure.</dd></div>
+<div><dt>Prices</dt><dd>In dollars, converted to euros at the current EUR/USD rate. On this site, positions are also revalued live at Kraken's public price (figures underlined with dots): an estimate, the official figure remains that of the snapshot.</dd></div>
+</dl>
+<h3>The robots</h3>
+<p>Without AI: a fixed rule, played by a separate process that reads prices much more often than the watch. Paper demonstration, outside the 2x rule (leverage up to 10x overall, stop at −60%).</p>
+<dl class="rules"><div><dt>Wick Hunter</dt><dd>A robot without AI reads prices every 5 seconds. When a contract moves more than 4.5% in 5, 15 or 30 minutes (a wick), it plays the reversal: it buys after a drop and sells after a rise, at 2x the portfolio, with a 5% stop. It exits 60 minutes after entry, then stays out of that contract for 60 minutes. On the bench, the gain disappears with delay: speed is the whole strategy.</dd></div><div><dt>Wick Hunter at a 5-min pace</dt><dd>The same rule, through the same execution path, but deciding only at the pace of a daily review: once per 5-minute slot, on the prices known at that moment. The gap with the Wick Hunter measures what speed earns.</dd></div></dl>
+<h3>The benchmarks</h3>
+<dl class="rules"><div><dt>engine only 2x</dt><dd>The same trend engine at 2x, without AI, through the same execution path and on the same 4-hour rounds: the gap with the Trend Council measures what the AIs add or remove. Archived: at 2x the frozen engine loses 71.6% on 2020-2025.</dd></div><div><dt>engine only 1x</dt><dd>The same trend engine at 1x, without AI, through the same execution path and on the same 4-hour rounds: the gap with the Trend Council 1x measures what the AIs add or remove.</dd></div><div><dt>carry</dt><dd>A cash substitute: it earns the funding paid by leveraged longs, with no bet on price. BTC and ETH, each a long spot leg and a short perpetual leg of equal size (€250 per leg), left alone unless a leg drifts outside 0.8 to 1.25 times its target. The spot leg is a valuation at the index price (the league has no spot instrument), with a 0.40% fee and 5 bp of slippage per spot trade. Expect a few percent a year at best: +2.1% a year over 2024-2026, +7.1% over 2020-2025 on Binance data.</dd></div><div><dt>basket 1x</dt><dd>Equal-weight buyer of the 6 contracts, without leverage or stop, rebalanced monthly: buy and hold.</dd></div><div><dt>trend</dt><dd>Every day, long on a contract that rose over 20 days, short otherwise; 1/6 of the portfolio per contract, 10% stop.</dd></div><div><dt>random</dt><dd>Draws 0 to 2 decisions at random at each round, under exactly the same risk rules as the AIs.</dd></div></dl>
+<h3 id="m-news">News</h3>
+<p>The AIs only see official, structured news: Kraken's derivatives status page and the state of its contracts, read every 5 min, and the US macro calendar published in advance. Never articles or social networks, and never the published figures: only the market's reaction reaches them. A new Kraken announcement, or an FOMC, CPI, jobs (NFP) or PCE release 3 min old, calls the AIs back.</p>
+<h3>What the AI can consult</h3>
+<p>A snapshot of the account and the 6 markets, then at most 4 calls among 6 read-only tools, frozen at the start of the round (no web, no later data):</p>
+<ul class="list-simple"><li><strong>candles</strong>: a contract&#x27;s candles</li><li><strong>order_book</strong>: the order book</li><li><strong>derivatives</strong>: funding and open interest</li><li><strong>indicators</strong>: technical indicators</li><li><strong>simulate_order</strong>: the guardrail verdict, without executing</li><li><strong>history</strong>: its past decisions</li></ul>
+<p>Each decision gives a justification and, for each order, an invalidation condition. The guardrail judges it, then the execution is simulated.</p>
+<h3>Between scheduled rounds</h3>
+<ul class="list-simple">
+<li><strong>Regular call</strong>: each AI is called again at the latest 10 min after its last round.</li>
+<li><strong>Cap</strong>: 260 calls per AI per day, scheduled rounds included.</li>
+<li><strong>Recall requested</strong>: at each decision, an AI can ask to be called again in 5 to 60 min.</li>
+<li><strong>Market wake-up</strong>: a 2% move in 1 h on a contract wakes the AIs, at least 15 min between two wake-ups.</li>
+<li><strong>Alert</strong>: at each decision, an AI can leave at most 3 price alerts. A crossed alert only wakes that AI.</li>
+<li><strong>Entry order</strong>: at most 3, at a price level. Once crossed, it passes the guardrail then executes, without calling the AI back. Each decision replaces what was pending.</li>
+</ul>
+<p>The councils, several AIs that deliberate before a President decides, have their own league, on the same journal, the same markets and the same watch: <a href="councils.html#m-councils">their rules</a>.</p>
+<p><span class="pill ok">League journal: chain intact</span> 114,162 events.</p>
+</section>
+<h2 class="title-league">The spot league</h2>
+<section aria-labelledby="m-arena"><h2 id="m-arena">What the arena does</h2>
+<p>Four AI models (Claude Haiku 5.5, Sonnet 5.5, Opus 5.5 and Fable 5.2) and four benchmarks without AI each manage €1,000 of play money on 6 Kraken euro pairs.
+Every 4 h: decision, risk check, simulated execution. Buys only, no leverage. Everything is written to a hash-chained journal.</p></section>
+
+<section aria-labelledby="m-watch"><h2 id="m-watch">Watch and wake-ups</h2><p>Every 5 min, the watch samples the prices, updates the value of the portfolios and executes the stops, judged on one-minute trades. If an asset moves by at least 3% within 1 h, the models and the random benchmark are woken up to decide outside the appointment: at most 6 wake-ups per day, spaced at least 1 h apart. The Sharpe ratio and the statistics are still computed at the 4 h cycles.</p></section>
+<section aria-labelledby="m-season"><h2 id="m-season">Season</h2><p>Season 1: 56 days starting <time datetime="2026-11-13T00:00Z">Nov 13, 00:00 UTC</time>. The configuration, the risk policy, the models' prompt and the code are frozen; any change requires a written waivers, listed here. The ranking starts from the value of each portfolio at the first cycle of the season; the burn-in before it is excluded.</p><ul class="list-simple"><li><time datetime="2026-11-17T16:05Z">Nov 17, 16:05 UTC</time>: reason recorded in the journal <span class="muted">(code)</span></li><li><time datetime="2026-11-20T08:05Z">Nov 20, 08:05 UTC</time>: reason recorded in the journal <span class="muted">(code, config, risk policy, system prompt)</span></li></ul></section>
+<section aria-labelledby="m-benchmarks"><h2 id="m-benchmarks">The benchmarks</h2>
+<dl class="rules">
+<div><dt>Basket</dt><dd>1/6 in each pair at the first cycle, then held.</dd></div>
+<div><dt>60/40</dt><dd>60% in BTC, 40% in cash, rebalanced every month.</dd></div>
+<div><dt>E0065 (adapted)</dt><dd>Fixed rule on buying pressure (share of buys at the market price, Binance daily candles): L = 20, k = 3, H = 10, recomposed every 10 days.</dd></div>
+<div><dt>Random</dt><dd>0 to 2 randomly drawn actions per cycle, same risk rules. 1,000 trajectories of this kind, replayed on the same prices, give the rank /100 of each portfolio.</dd></div>
+</dl></section>
+
+<section aria-labelledby="m-fees"><h2 id="m-fees">Simulated fees and slippage</h2>
+<p>Model <code>pessimistic-v1</code>, market orders: buy at the ask +0.05%, sell at the bid −0.05%,
+fees of 0.5% per order (Kraken taker +25%), roundings always unfavorable. Stop set at entry, holding limited to 7 d.
+Positions valued at the last bid.</p></section>
+
+<section aria-labelledby="m-risk"><h2 id="m-risk">Risk policy (simulation)</h2>
+<p class="muted">More lenient than a real-money policy.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Risk policy table, scrollable"><table class="table stacked"><caption class="visually-hidden">Risk check rules</caption>
+<thead><tr><th scope="col">Rule</th><th scope="col" class="n">Value</th><th scope="col">Basis</th></tr></thead><tbody><tr><th scope="row">Allowed pairs</th><td class="n" data-label="Value">BTC/EUR, ETH/EUR, SOL/EUR, XRP/EUR, LINK/EUR, LTC/EUR</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Maximum size of a buy</th><td class="n" data-label="Value">20%</td><td class="muted" data-label="Basis">of equity</td></tr><tr><th scope="row">Maximum position per symbol</th><td class="n" data-label="Value">40%</td><td class="muted" data-label="Basis">of equity after the order</td></tr><tr><th scope="row">Maximum total exposure</th><td class="n" data-label="Value">100%</td><td class="muted" data-label="Basis">of equity</td></tr><tr><th scope="row">Trades per portfolio per 24 h</th><td class="n" data-label="Value">2</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Orders per minute (all portfolios)</th><td class="n" data-label="Value">20</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Minimum delay between two buys of the same symbol</th><td class="n" data-label="Value">4 h</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Minimum stop on a buy</th><td class="n" data-label="Value">1%</td><td class="muted" data-label="Basis">below entry</td></tr><tr><th scope="row">Maximum stop on a buy</th><td class="n" data-label="Value">25%</td><td class="muted" data-label="Basis">below entry</td></tr><tr><th scope="row">Round-trip cost / expected move, at most</th><td class="n" data-label="Value">33%</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Maximum holding (forced exit)</th><td class="n" data-label="Value">7 d</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">24 h loss that triggers a freeze</th><td class="n" data-label="Value">5%</td><td class="muted" data-label="Basis">of equity</td></tr><tr><th scope="row">Freeze duration</th><td class="n" data-label="Value">1 d</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Drawdown that triggers the halt and flattening</th><td class="n" data-label="Value">20%</td><td class="muted" data-label="Basis">from the peak</td></tr><tr><th scope="row">Fee budget of the calendar month</th><td class="n" data-label="Value">1%</td><td class="muted" data-label="Basis">of start-of-month equity</td></tr><tr><th scope="row">Maximum gap between quote and last close</th><td class="n" data-label="Value">3%</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Maximum spread (multiple of the median of the last 20)</th><td class="n" data-label="Value">× 3</td><td class="muted" data-label="Basis"></td></tr><tr><th scope="row">Minimum order (at least the Kraken minimum)</th><td class="n" data-label="Value">€5.00</td><td class="muted" data-label="Basis"></td></tr></tbody></table></div></section>
+
+<section aria-labelledby="m-models"><h2 id="m-models">AI models and cost</h2>
+<p>The cost shown is the equivalent at the API's list price.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Models table, scrollable"><table class="table stacked"><caption class="visually-hidden">Budget and prices of the models</caption>
+<thead><tr><th scope="col">Model</th><th scope="col" class="n">Budget per day</th><th scope="col" class="n">Price per million tokens <span class="count">input / output</span></th></tr></thead><tbody><tr><th scope="row"><code>claude-haiku-5-5</code></th><td class="n" data-label="Budget per day">$0.1000</td><td class="n" data-label="Price per million tokens, input / output">$0.1000 / $0.5000</td></tr><tr><th scope="row"><code>claude-sonnet-5-5</code></th><td class="n" data-label="Budget per day">$0.5000</td><td class="n" data-label="Price per million tokens, input / output">$2.00 / $10.00</td></tr><tr><th scope="row"><code>claude-opus-5-5</code></th><td class="n" data-label="Budget per day">$0.9000</td><td class="n" data-label="Price per million tokens, input / output">$4.00 / $20.00</td></tr><tr><th scope="row"><code>claude-fable-5-2</code></th><td class="n" data-label="Budget per day">$1.80</td><td class="n" data-label="Price per million tokens, input / output">$8.00 / $40.00</td></tr></tbody></table></div>
+<p class="muted note">Versioned system prompt: <code>1e4168b11026b1c5a05d13206b69e3fc0b0e28b92be66f3cb75f04008fe3bbe9</code>, <code>26820cc60c8434dbe3615e7e858079aec98c831982fe69ea18924e330cfd2cf5</code>, <code>49dca0a37d412bca2a9cfce12d2e45593224523e8101c564c097b8ea241634b0</code>. The model only sees closed bars computed by the code, no web text.</p></section>
+
+<section aria-labelledby="m-journal"><h2 id="m-journal">Journal integrity</h2>
+<p><span class="pill ok">Journal verification: chain intact</span> 8,337 events, last seq 8336.</p>
+<dl class="fingerprints">
+<div><dt>Chain head</dt><dd><code class="hash">daaaef8f49287c0db1182076a2e087b1323d67e6f3a0e1d432f7098d2c4560dc</code></dd></div>
+<div><dt>Risk policy (sha256)</dt><dd><code class="hash">5bcfe5bee96f71b39090243e7215b324d80f8ddb9fcd4895269165b0cde91037</code></dd></div>
+<div><dt>Configuration (sha256)</dt><dd><code class="hash">282200035b21b3de4a3d6c64f0f01e976a56afe7e13c165e669207159a6d0037</code></dd></div>
+<div><dt>Commit</dt><dd><code>d597fda799479f877efe7ed3f61fad1df5ead2fd</code></dd></div>
+<div><dt>Execution mode</dt><dd>simulation (no real order)</dd></div>
+</dl></section>
+
+<section aria-labelledby="m-limits"><h2 id="m-limits">Limitations</h2>
+<ul class="list-simple">
+<li><strong>Simulation.</strong> No rejection, no partial fill, no market impact.</li>
+<li><strong>Constant slippage.</strong> Pessimistic fees, but the slippage depends neither on the size nor on the order book.</li>
+<li><strong>Small sample.</strong> Before 30 cycles, almost nothing can be told apart from chance: that is the default verdict.</li>
+<li><strong>Hash-chained journal.</strong> It proves that nothing was modified after the fact, not that the prices or the decisions were not chosen before being written.</li>
+<li><strong>Rank against chance.</strong> The trajectories replay cycles and wake-ups, but their stops are only checked at the cycles, on the 4 h bars.</li>
+<li><strong>Narrow universe.</strong> 6 cryptos, buys only, short period: nothing that carries over to real money.</li>
+</ul></section>
+
+<section class="opinions" aria-labelledby="m-warning"><h2 id="m-warning">Disclaimer</h2>
+<p><strong>This is not investment advice.</strong> Personal experiment in simulation, with no recommendation or promise of return. Investing in crypto-assets carries a risk of total loss.</p></section>
+
+</main>
+<footer class="footer wrap">
+  <p><strong>Simulation.</strong> Simulated experiment, not investment advice. Figures are before tax.</p>
+  <p>Updated <time datetime="2026-11-28T11:25Z">Nov 28, 2026, 11:25 UTC</time> · <a href="method.html">Method and verifiable journal</a></p>
+</footer>
+<script src="assets/site.js"></script>
+
+</body>
+</html>
