@@ -1,0 +1,137 @@
+{
+ "data": {
+  "BTCUSDT": {
+   "first_candle": "2017-08-17 04:00:00",
+   "missing_minutes_after_listing": 6237
+  },
+  "ETHUSDT": {
+   "first_candle": "2017-08-17 04:00:00",
+   "missing_minutes_after_listing": 6237
+  },
+  "LTCUSDT": {
+   "first_candle": "2017-12-13 03:32:00",
+   "missing_minutes_after_listing": 5818
+  },
+  "XRPUSDT": {
+   "first_candle": "2018-05-04 08:11:00",
+   "missing_minutes_after_listing": 3556
+  },
+  "LINKUSDT": {
+   "first_candle": "2019-01-16 10:00:00",
+   "missing_minutes_after_listing": 1764
+  }
+ },
+ "trading_start": "2017-09-16",
+ "bench_ew": {
+  "total_pct": 24.4,
+  "max_dd_pct": -86.47,
+  "sharpe": 0.54,
+  "years": {
+   "2017": {
+    "ret_pct": 231.0,
+    "max_dd_pct": -30.16
+   },
+   "2018": {
+    "ret_pct": -76.63,
+    "max_dd_pct": -86.47
+   },
+   "2019": {
+    "ret_pct": 60.85,
+    "max_dd_pct": -57.07
+   }
+  }
+ },
+ "bench_btc": {
+  "total_pct": 94.47,
+  "max_dd_pct": -83.19,
+  "sharpe": 0.76,
+  "years": {
+   "2017": {
+    "ret_pct": 270.71,
+    "max_dd_pct": -34.88
+   },
+   "2018": {
+    "ret_pct": -73.0,
+    "max_dd_pct": -81.18
+   },
+   "2019": {
+    "ret_pct": 94.31,
+    "max_dd_pct": -49.41
+   }
+  }
+ },
+ "1x": {
+  "trades": 343,
+  "win_rate_pct": 29.7,
+  "mean_net_bp": 82.4,
+  "turnover_x": 207.5,
+  "fees_pct": 14.53,
+  "ruined": false,
+  "total_pct": 119.99,
+  "max_dd_pct": -17.47,
+  "sharpe": 1.16,
+  "years": {
+   "2017": {
+    "ret_pct": 12.84,
+    "max_dd_pct": -3.4
+   },
+   "2018": {
+    "ret_pct": 30.94,
+    "max_dd_pct": -17.47
+   },
+   "2019": {
+    "ret_pct": 48.9,
+    "max_dd_pct": -15.59
+   }
+  },
+  "stop_exits": 164,
+  "by_coin": {
+   "BTCUSDT": 75,
+   "ETHUSDT": 85,
+   "LTCUSDT": 75,
+   "XRPUSDT": 57,
+   "LINKUSDT": 51
+  },
+  "long_trades": 159,
+  "long_mean_bp": 224.0,
+  "short_trades": 184,
+  "short_mean_bp": -39.9
+ },
+ "2x": {
+  "trades": 376,
+  "win_rate_pct": 26.9,
+  "mean_net_bp": -66.6,
+  "turnover_x": 607.4,
+  "fees_pct": 42.52,
+  "ruined": false,
+  "total_pct": 237.64,
+  "max_dd_pct": -31.23,
+  "sharpe": 1.1,
+  "years": {
+   "2017": {
+    "ret_pct": 22.69,
+    "max_dd_pct": -6.9
+   },
+   "2018": {
+    "ret_pct": 48.27,
+    "max_dd_pct": -31.23
+   },
+   "2019": {
+    "ret_pct": 85.6,
+    "max_dd_pct": -29.38
+   }
+  },
+  "stop_exits": 191,
+  "by_coin": {
+   "BTCUSDT": 84,
+   "ETHUSDT": 96,
+   "LTCUSDT": 82,
+   "XRPUSDT": 58,
+   "LINKUSDT": 56
+  },
+  "long_trades": 162,
+  "long_mean_bp": 55.4,
+  "short_trades": 214,
+  "short_mean_bp": -158.9
+ }
+}

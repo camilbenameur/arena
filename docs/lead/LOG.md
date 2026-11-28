@@ -217,3 +217,12 @@ The pass rules are written before any computation:
 - **Portfolio (equal thirds, fixed in advance):** -99.2%, ruined by the wick sleeve. Post hoc only, trend 1x plus carry at 50/50 gives +36.3% with a -32.8% max drawdown.
 
 **Consequence:** both robots now in service in the derivatives league (wick hunter, Trend Council at 2x) are, on the long history, lottery tickets with a ruin risk. They trade paper money, so nothing real is at stake, but the site presents them as research results. Decision for the owner: keep them running as documented experiments, or retire them.
+
+**Axis 11: the frozen trend engine holds on 2017-2019** (Binance spot, never used before; preregistered). At 1x it made +120.0% with a -17.5% max drawdown, positive in all three years: +12.8% in late 2017, +30.9% in 2018 and +48.9% in 2019. Equal-weight buy-and-hold made +24.4% with a -86.5% max drawdown.
+- **Correction:** the adversarial check found a loader bug that dropped about 14 days of December 2017 data (timestamps a few seconds past the minute). It is fixed and the run was repeated. The verdict is unchanged, and the corrected numbers are reported.
+- **Reading across axes:** the trend engine is a regime bet.
+  - 2017-2019: +120% at 1x.
+  - 2020-2025: -4% at 1x, with a -63% drawdown.
+  - 2025-2026: the design part of v5 lost 20.8%, the control part gained 69.2%.
+
+  It protects in long bear markets and lags badly in bull markets. At 1x, over 2017 to 2025, it is positive overall, but with deep drawdowns in between. The 2x setting used live is what ruins it on 2020-2025.
