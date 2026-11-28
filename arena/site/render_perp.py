@@ -311,7 +311,7 @@ def _since(perp: dict[str, Any], p: dict[str, Any]) -> str:
 
 def _folder(p: dict[str, Any]) -> str:
     """The folder of a portfolio's page: councils have their own, the basket benchmark stays with the derivatives."""
-    return "councils" if p["kind"] == "council" or p["id"] == P.TREND_ENGINE else "derivatives"
+    return "councils" if p["kind"] == "council" or p["id"] in P.TREND_ENGINES else "derivatives"
 
 
 def _short_outside_rule(p: dict[str, Any]) -> str:
@@ -590,7 +590,7 @@ def _desc_pf(p: dict[str, Any]) -> str:
     who = {"council": "A council of ten Claude Haiku AIs and a president", "llm": "A single Claude AI"}.get(p["kind"], "A fixed rule without AI, a benchmark")
     if p["kind"] == "robot":
         who = "A robot without AI that plays the rebound after a wick of more than 4.5%"
-    if p["id"] == P.COUNCIL_TREND:
+    if p["id"] in P.TREND_COUNCILS:
         who = "A trend engine that three Claude Haiku AIs and an Opus president can only brake"
     return (
         f"{p['name']}: {who[:1].lower() + who[1:]}, {eur(p['capital_ueur'], decimals=0)} of play money in crypto contracts on Kraken prices. "
@@ -667,7 +667,7 @@ def councils_page(data: dict[str, Any]) -> str:
     capital = pfs[0]["capital_ueur"] if pfs else 1_000_000_000
     direct_pfs = [p for p in pfs if _direct_pf(p)]
     n = len(councils)
-    trend = any(p["id"] == P.COUNCIL_TREND for p in councils)
+    trend = any(p["id"] in P.TREND_COUNCILS for p in councils)
     if trend:
         title = f"A council of Claude AIs brakes a trend engine: {eur(capital, decimals=0)} of play money."
         lead = (
@@ -676,8 +676,9 @@ def councils_page(data: dict[str, Any]) -> str:
             "return is shown next to it, against an “engine alone” benchmark without AI. On the chart, this benchmark is the gray ribbon "
             "under the council's line: as long as the council brakes nothing, the two coincide."
         ) + (
-            " The former Haiku and Opus councils, withdrawn on Nov 17, remain archived: their curve is dotted."
-            if any(p["id"] != P.COUNCIL_TREND for p in councils) else ""
+            " The former Haiku and Opus councils (withdrawn on Nov 17) and the Trend Council at 2x, which ruined itself on 2020-2025 "
+            "and was replaced by this 1x one, remain archived: their curves are dotted."
+            if any(p.get("archive") for p in councils) else ""
         )
     elif n >= 2:
         title = f"{_number(n)} Claude AI councils each trade {eur(capital, decimals=0)} of play money. Only their president changes."
@@ -1113,6 +1114,26 @@ def _pending(p: dict[str, Any]) -> str:
     )
 
 
+def _spot_legs(p: dict[str, Any]) -> str:
+    """The valuation-only spot legs of the carry benchmark (nothing for the other portfolios)."""
+    legs = p.get("spot_legs") or []
+    if not legs:
+        return ""
+    rows = "".join(
+        f'<tr><th scope="row">{e(x["instrument"])} spot</th><td class="n">{e(quantity(x["qty"]))}</td>'
+        f'<td class="n">{price_usd(x["price_uusd"])}</td><td class="n">{eur(x["value_ueur"]) if x["value_ueur"] is not None else "—"}</td></tr>'
+        for x in legs
+    )
+    return (
+        '<h3>Spot legs <span class="h-note">valuation only, at the index price</span></h3>'
+        '<div class="table-scroll" tabindex="0" role="region" aria-label="Spot legs table, scrollable"><table class="table">'
+        '<caption class="visually-hidden">Valuation-only spot legs of the carry benchmark</caption>'
+        '<thead><tr><th scope="col">Leg</th><th scope="col" class="n">Quantity</th><th scope="col" class="n">Index price</th>'
+        '<th scope="col" class="n">Value</th></tr></thead>'
+        f"<tbody>{rows}</tbody></table></div>"
+    )
+
+
 def _operations(p: dict[str, Any]) -> str:
     if not p["operations"]:
         return '<p class="empty">No operations yet.</p>'
@@ -1150,7 +1171,7 @@ def _daily_target(p: dict[str, Any]) -> str:
 
 def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
     council = p["kind"] == "council"
-    councils_league = council or p["id"] == P.TREND_ENGINE  # the "engine alone" benchmark lives in the councils league
+    councils_league = council or p["id"] in P.TREND_ENGINES  # the "engine alone" benchmark lives in the councils league
     _SUMMARY_ONLY.clear()
     with_opinions = [d for d in p.get("decisions") or [] if (d.get("council") or {}).get("opinions")]
     _SUMMARY_ONLY.update(id(d) for d in with_opinions[DETAILED_OPINIONS:])
@@ -1159,7 +1180,7 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
         _stat("Net return", f'<span class="{tone(p["net_return"])}"{_live_attrs(p, "ret")}>{pct(p["net_return"])}</span>', cls="large", card="key"),
         _stat(
             "Value", f'<span{_live_attrs(p, "val")}>{eur(p["equity_ueur"])}</span>',
-            f'<small class="sub">start {eur(p["capital_ueur"], decimals=0)}{f" · target {eur(2 * p['capital_ueur'], decimals=0)}" if council and p["id"] != P.COUNCIL_TREND else ""}</small>',
+            f'<small class="sub">start {eur(p["capital_ueur"], decimals=0)}{f" · target {eur(2 * p['capital_ueur'], decimals=0)}" if council and p["id"] not in P.TREND_COUNCILS else ""}</small>',
         ),
         _stat("Leverage", leverage(p["leverage"]), f'<small class="sub">exposure {eur(p["expo_ueur"], decimals=0)}</small>'),
         _stat("Worst drawdown", pct(-p["drawdown_max"]) if p["drawdown_max"] else "0.00%"),
@@ -1244,7 +1265,8 @@ def portfolio_page(data: dict[str, Any], p: dict[str, Any]) -> str:
 {alerts}
 <dl class="stats">{"".join(stats)}</dl>
 <section aria-labelledby="title-curve"><h2 id="title-curve">Net return <span class="h-note">fees and funding included</span></h2>{_chart_block(chart, focus=p["id"], focus_name=p["name"])}</section>
-<section aria-labelledby="title-positions"><h2 id="title-positions">Positions <span class="h-note">simulated, prices in dollars</span></h2>{direct_state}{_positions(p)}</section>
+{f'<p class="alert info"><strong>A benchmark, not a player.</strong> {e(p["note"])}</p>' if p.get("note") else ""}
+<section aria-labelledby="title-positions"><h2 id="title-positions">Positions <span class="h-note">simulated, prices in dollars</span></h2>{direct_state}{_positions(p)}{_spot_legs(p)}</section>
 {decisions}
 {_pending(p) if llm and not p.get("archive") else ""}
 {operations}
@@ -1324,16 +1346,16 @@ def _trend_method(budget: str) -> str:
 <p>The initial ambition was a council that generates net income “of the order of 10% per day”. Ten percent per day, compounded, is ×17 in a month: no known strategy sustains that pace. The page therefore shows the target and the realized return per day, side by side.</p>
 <p>The former councils (Haiku and Opus) lost money: opinions without an edge, huge sizes, a new decision every 10 minutes. The Trend council reverses the roles: <strong>an engine decides, the AIs can only brake, the code executes.</strong> {e(P.COUNCIL_OUTSIDE_RULE)}</p>
 <ul class="list-simple">
-<li><strong>The engine</strong>: slow trend following (2-day and 6-day moving averages on 4-hour bars, long and short, size scaled to volatility, 2x scale), chosen among 146 trials from four strategy families and frozen before the holdout was read. Over 31 holdout days in a sharp decline it made +21% (drawdowns down to −25%); in a trendless market it hovers around zero. One strategy, one episode of each type: the edge is plausible, not proven.</li>
+<li><strong>The engine</strong>: slow trend following (2-day and 6-day moving averages on 4-hour bars, long and short, size scaled to volatility), chosen among 146 trials from four strategy families and frozen before the holdout was read. <strong>It runs at 1x since axis 10</strong> (the first Trend Council ran it at 2x and is archived): at 2x it lost 71.6% on 2020-2025 (drawdown −92%); at 1x it made −4% over those six years (drawdown −63%, 3 years out of 6 positive) and +120% on 2017-2019 (drawdown −17.5%). It is a bet on the market regime: it protects in long bear markets and lags in bull ones. The edge is plausible, not proven.</li>
 <li><strong>The AIs</strong>: three Haiku (news, data, risk) advise, an Opus President sets for each contract a coefficient of 1, 0.5 or 0 that multiplies the engine's target. They can neither increase, nor invert, nor open a position the engine does not have. If the President fails or times out, the engine plays alone.</li>
 <li><strong>The pace</strong>: one round at each 4-hour bar close (00:00, 04:00… UTC), plus a veto round on a Kraken announcement, a macro release or a 2% move in an hour, which can only lower the coefficients. No call every 10 minutes, no recall requested by an AI.</li>
 <li><strong>The execution</strong>: an order only if the gap between target and position exceeds 5% of the portfolio; a 5% stop on each position. If the guardrail rejects an order for its size, the code retries it smaller.</li>
 <li><strong>The “engine alone” benchmark</strong> plays the same target, without AI, through the same path and on the same rounds: the gap with the Trend council measures what the AIs add or remove.</li>
 </ul>
 <dl class="rules">
-<div><dt>Leverage</dt><dd>At most 10, with Kraken's margins; the engine's scale gives about 1.4 on average, with peaks around 4 to 6. An order up to 400% of the portfolio's value.</dd></div>
+<div><dt>Leverage</dt><dd>At most 10, with Kraken's margins; at 1x the engine holds about 0.7 on average, with peaks around 2 to 3 (twice that at the archived 2x). An order up to 400% of the portfolio's value (the policy's bound, not the engine's need).</dd></div>
 <div><dt>Stop</dt><dd>5% on each position; loss at the stop of 25% of the portfolio at most per position, 59% for all stops combined.</dd></div>
-<div><dt>Cost</dt><dd>The cost of a round trip does not exceed a third of the expected move. The engine's is measured offline (+2.47% gross per trade over the 64 training days), not declared.</dd></div>
+<div><dt>Cost</dt><dd>The cost of a round trip does not exceed a third of the expected move. The engine's is measured offline (+2.47% gross per trade over the 64 training days, at 2x: a price move per trade, kept for 1x), not declared.</dd></div>
 <div><dt>Pace</dt><dd>At most 48 openings or adjustments per 24{NBSP}h, with no delay between two; no daily freeze, no fee budget (fees remain real and counted).</dd></div>
 <div><dt>Stop-out</dt><dd>At −60% from its peak: positions closed, no more rounds. Only the arena operator can restart it, by hand.</dd></div>
 {budget}</dl>
@@ -1357,7 +1379,7 @@ def councils_method(data: dict[str, Any]) -> str:
         f"<div><dt>Daily budget</dt><dd>{budgets}, at list-price equivalent. A round that no longer fits in the budget is skipped.</dd></div>\n"
         if budgets else ""
     )
-    if any(c["id"] == P.COUNCIL_TREND for c in councils):
+    if any(c["id"] in P.TREND_COUNCILS for c in councils):
         return _trend_method(budget)
     return f"""<section aria-labelledby="m-councils"><h2 id="m-councils">Councils: method</h2>
 <p>A council is a portfolio decided by ten Claude Haiku 5.5 that deliberate at each round, then by a President, with an aggressive mandate: double the stake in a few days. The councils play the same rounds as the derivatives AIs (scheduled rounds, regular call, wake-ups, alerts, recalls); a round counts as one call toward the daily cap, and its cost is the sum of the round's calls.</p>

@@ -840,6 +840,7 @@ class PerpWatcher:
         fx = (view.fx_bid, view.fx_ask)
         quotes = {s: (m.bid_uusd, m.ask_uusd) for s, m in view.instruments.items()}
         marks = {s: m.mark_uusd for s, m in view.instruments.items()}
+        index = {s: m.index_uusd for s, m in view.instruments.items() if m.index_uusd}
         self._kill_and_dormancy(now_ts, view, events, rep)
         events = self._events()
         deciding = set()
@@ -847,7 +848,7 @@ class PerpWatcher:
             if acc.retired:  # archived data: no more measure, no control
                 continue
             try:
-                self.sim.write_equity(name, now_ts, marks, fx)
+                self.sim.write_equity(name, now_ts, marks, fx, spot_marks=index)
                 if name in B.REFERENCES:
                     continue
                 deciding.add(name)
@@ -1417,6 +1418,7 @@ class PerpWatcher:
                 ok &= self._basket(now_ts, month, marks, quotes, fx, rep)
             if (B.TREND, str(day)) not in marker:
                 ok &= self._trend(now_ts, str(day), marks, quotes, fx, rep)
+            self._carry(now_ts, view, marks, quotes, fx, rep)  # never blocks the round: its state decides, not a marker
         private = kind in PRIVATE_KINDS  # only their owners play: no benchmark, no other model
         llm_plays = (
             self.llm is not None
@@ -1467,6 +1469,55 @@ class PerpWatcher:
         if ok:
             self._append("perp_benchmark_done", {"benchmark": B.BASKET, "period": month}, now_ts)
         return ok
+
+    def _carry(
+        self,
+        now_ts: int,
+        view: PerpMarketView,
+        marks: dict[str, int],
+        quotes: dict[str, tuple[int, int]],
+        fx: tuple[int, int],
+        rep: TickReport,
+    ) -> None:
+        """The carry benchmark (arena/perp/benchmarks.py): opens its two pairs at the first round, then only brings a
+        coin back to target when a leg left the 0.8 to 1.25 band. The plan comes from the ledger's state, so a step
+        that failed is simply planned again at the next round (a half-built pair is itself outside the band)."""
+        acc = self.sim.states()[B.CARRY]
+        if acc.retired or acc.halted:
+            return
+        index = {s: m.index_uusd for s, m in view.instruments.items()}
+        plan = B.carry_plan(acc, acc.capital_ueur, marks, index, fx[0], self.specs)
+        if plan:  # the reason first (entry or a leg outside the band), then the orders
+            self._append(
+                "carry_plan",
+                {
+                    "portfolio": B.CARRY, "ts": now_ts,
+                    "why": sorted({st.why for st in plan}),
+                    "steps": [{"leg": st.leg, "instrument": st.instrument, "qty": st.qty, "why": st.why} for st in plan],
+                    "leg_share_bp": B.CARRY_LEG_SHARE_BP,
+                    "band_bp": [B.CARRY_BAND_LOW_BP, B.CARRY_BAND_HIGH_BP],
+                    "spot_fee_bp": B.CARRY_SPOT_FEE_BP, "spot_slippage_bp": B.CARRY_SPOT_SLIPPAGE_BP,
+                    "spot_price": "kraken_index",  # the league collects no spot price: the perpetual's index, at EUR/USD
+                },
+                now_ts,
+            )  # fmt: skip
+        for n, step in enumerate(plan):
+            oid = f"{B.CARRY}:{now_ts}:{n}:{step.leg}:{step.instrument}"
+            try:
+                if step.leg == "spot":
+                    idx = index[step.instrument]
+                    assert idx is not None
+                    self.sim.spot_order(
+                        oid, B.CARRY, step.instrument, step.qty, idx, fx, now_ts,
+                        fee_bp=B.CARRY_SPOT_FEE_BP, slippage_bp=B.CARRY_SPOT_SLIPPAGE_BP,
+                    )  # fmt: skip
+                else:
+                    self.sim.market_order(
+                        oid, B.CARRY, step.instrument, step.qty, quotes[step.instrument], fx, now_ts, marks=marks
+                    )
+            except PerpLedgerError as exc:
+                rep.problems.append(f"{B.CARRY} {step.leg} {step.instrument}: {exc}")
+                return  # the legs of a coin go together: nothing more this round
 
     def _daily_close(self, inst: str, day_end: int) -> int | None:
         c = self.store.closed_candles("mark", inst, MINUTE_S, day_end - MINUTE_S, day_end)

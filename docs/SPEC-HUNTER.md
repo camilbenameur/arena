@@ -1,5 +1,7 @@
 # The "Wick Hunter": specification
 
+> **Retired on axis 10 (2026-11-28).** The frozen rule was positive in 0 of 6 years on 2020-2025 (docs/lead/LOG.md). `robot-perp:hunter` and `benchmark-perp:hunter-5min` are retired in the journal and `config/perp-hunter.toml` says `enabled = false`. The code and this specification stay as the record.
+
 Origin: the v5 research of 2026-11-18 (`docs/RESEARCH-V5-AGGRESSIVE-2026-11-18.md`).
 
 Research and sealed holdout check: `docs/RESEARCH-V5-AGGRESSIVE-2026-11-18.md`. The frozen rule is in `docs/research-v5/finalists/shocks_fade-wickS.py`.

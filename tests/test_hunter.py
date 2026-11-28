@@ -23,7 +23,8 @@ from arena.perp.types import Candle, FxQuote, PerpTicker
 from arena.perp.watcher import PerpWatcher
 from tests.test_perp_watcher import CFG, FX, POLICY, PRICES, SPECS, SYMBOLS, T0, World
 
-CONFIG = H.load_hunter_config()
+# the file says `enabled = false` since axis 10 (the hunter is retired): the machinery is still tested enabled
+CONFIG = dataclasses.replace(H.load_hunter_config(), enabled=True)
 ME, WITNESS = CONFIG.portfolio, CONFIG.benchmark
 BTC = "PF_XBTUSD"
 START = T0 + 1200  # a multiple of 300; the witness decides at START + 210 + 300 k
@@ -771,13 +772,25 @@ def test_the_watcher_closes_a_hunter_position_held_for_more_than_3_hours(tmp_pat
     assert {e["payload"]["portfolio"] for e in w.events("perp_fill") if e["payload"]["reason"] == "max_holding"} == {ME, WITNESS}
 
 
+def _config_file(tmp_path, *, enabled: bool):
+    """A copy of the hunter's config (with its policy) with `enabled` set: the shipped one says false since axis 10."""
+    cfg = tmp_path / "perp-hunter.toml"
+    text = H.DEFAULT_CONFIG.read_text(encoding="utf-8").replace("enabled = false", f"enabled = {str(enabled).lower()}")
+    cfg.write_text(text, encoding="utf-8")
+    (tmp_path / "policy-perp-hunter.toml").write_text(
+        (H.DEFAULT_CONFIG.parent / "policy-perp-hunter.toml").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return cfg
+
+
 def test_only_one_hunter_process_may_run(tmp_path):
+    cfg = _config_file(tmp_path, enabled=True)
     fd = H.acquire_lock(tmp_path / "var-perp")
     assert fd is not None
     try:
         assert H.acquire_lock(tmp_path / "var-perp") is None
         assert (tmp_path / "var-perp" / "hunter.lock").exists()
-        rc = H.main(["run", "--var", str(tmp_path / "var-perp")])  # the lock is taken: message and exit 2
+        rc = H.main(["run", "--var", str(tmp_path / "var-perp"), "--config", str(cfg)])  # the lock is taken: message and exit 2
         assert rc == 2
     finally:
         import os
@@ -789,12 +802,7 @@ def test_only_one_hunter_process_may_run(tmp_path):
 
 
 def test_a_disabled_hunter_exits_0_without_the_lock(tmp_path, capsys):
-    cfg = tmp_path / "perp-hunter.toml"
-    text = H.DEFAULT_CONFIG.read_text(encoding="utf-8").replace("enabled = true", "enabled = false")
-    cfg.write_text(text, encoding="utf-8")
-    (tmp_path / "policy-perp-hunter.toml").write_text(
-        (H.DEFAULT_CONFIG.parent / "policy-perp-hunter.toml").read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    cfg = _config_file(tmp_path, enabled=False)
     assert H.main(["run", "--var", str(tmp_path / "var-perp"), "--config", str(cfg)]) == 0
     assert not (tmp_path / "var-perp" / "hunter.lock").exists()
 

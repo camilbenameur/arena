@@ -312,7 +312,9 @@ TREND_KIND = (
     "trend-v4"  # the council v4 (docs/SPEC-TREND-COUNCIL.md): the engine decides, the LLMs may only brake
 )
 TREND_MEMBERS = 3  # Haiku members of the veto council
-TREND_BENCHMARK = "benchmark-perp:trend-engine"
+TREND_BENCHMARK = "benchmark-perp:trend-engine"  # the shadow of the first Trend Council (2x), retired on axis 10
+TREND_BENCHMARKS = frozenset({TREND_BENCHMARK, "benchmark-perp:trend-engine-1x"})
+ENGINE_SCALES = ("1.0", "2.0")  # the frozen engine's scale: 2x was the council's first setting (ruinous on 2020-2025)
 
 
 @dataclass(frozen=True)
@@ -327,6 +329,7 @@ class TrendSettings:
     expected_move_bp: int  # the engine's measured mean gross move per trade (riskd's edge rule), TRAIN period
     expected_move_source: str  # where that number comes from
     horizon_h: int  # the holding time declared with it (riskd's funding cost), at most 168
+    engine_scale: str = "2.0"  # the frozen engine's scale ("1.0" or "2.0"): the file that omits it is the 2x one
 
 
 @dataclass(frozen=True)
@@ -375,6 +378,8 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
         raise CouncilConfigError(f"kind: council-v3 (absent) or {TREND_KIND}")
     if kind == TREND_KIND:
         expected |= trend_keys
+        if "engine_scale" in data:  # optional: absent means "2.0", the setting the first Trend Council ran with
+            expected.add("engine_scale")
     if set(data) != expected:
         raise CouncilConfigError(f"keys: expected {sorted(expected)}, got {sorted(data)}")
     if type(data["enabled"]) is not bool:
@@ -423,8 +428,11 @@ def load_council(path: Path = DEFAULT_COUNCIL_CONFIG) -> CouncilConfig:
 
 def _trend_settings(data: Mapping[str, Any]) -> TrendSettings:
     """The keys of a `kind = "trend-v4"` council, checked (fail closed: any doubt refuses the file)."""
-    if data["benchmark"] != TREND_BENCHMARK:
-        raise CouncilConfigError(f"benchmark: {TREND_BENCHMARK}")
+    if data["benchmark"] not in TREND_BENCHMARKS:
+        raise CouncilConfigError(f"benchmark: one of {sorted(TREND_BENCHMARKS)}")
+    scale = data.get("engine_scale", "2.0")
+    if scale not in ENGINE_SCALES:
+        raise CouncilConfigError(f"engine_scale: one of {list(ENGINE_SCALES)} (a text)")
     band = data["rebalance_band_bp"]
     if type(band) is not int or not 100 <= band <= 2000:
         raise CouncilConfigError("rebalance_band_bp: an integer from 100 to 2000")
@@ -444,7 +452,7 @@ def _trend_settings(data: Mapping[str, Any]) -> TrendSettings:
     hours = data["horizon_h"]
     if type(hours) is not int or not 1 <= hours <= 168:
         raise CouncilConfigError("horizon_h: an integer from 1 to 168")
-    return TrendSettings(data["benchmark"], band, data["stop_pct"], move, data["expected_move_source"], hours)
+    return TrendSettings(data["benchmark"], band, data["stop_pct"], move, data["expected_move_source"], hours, scale)
 
 
 @dataclass(frozen=True)

@@ -324,11 +324,11 @@ def stack(table: str, labels: list[str]) -> str:
 DASHES = [[6, 4], [2, 3], [10, 3, 2, 3], [1, 3]]
 LLM_COLOR = {"llm:claude-haiku-5-5": 0, "llm:claude-sonnet-5-5": 1, "llm:claude-opus-5-5": 2, "llm:claude-fable-5-2": 3}
 N_LLM_COLORS = 4
-BENCHMARK_COLOR = {"benchmark:6040": 0, "benchmark:e0065": 1, "benchmark:random": 2, "benchmark-perp:trend": 0, "benchmark-perp:random": 2}
+BENCHMARK_COLOR = {"benchmark:6040": 0, "benchmark:e0065": 1, "benchmark:random": 2, "benchmark-perp:trend": 0, "benchmark-perp:random": 2, "benchmark-perp:carry": 1}
 REFERENCES = {"benchmark:basket", "benchmark-perp:basket-1x"}  # the "buy and hold" of each league
 # The Trend Council's "engine alone" benchmark: as long as the council does not brake, the two curves are identical.
 # It is drawn as a wide, translucent ribbon under the council so that both stay visible when they overlap.
-HALOS = {"benchmark-perp:trend-engine"}
+HALOS = {"benchmark-perp:trend-engine", "benchmark-perp:trend-engine-1x"}
 HALO_WIDTH = 9
 ARCHIVE_DASH = [1, 6]  # fine, widely spaced dots: not mistaken for the benchmarks' dashes
 MIN_CURVE_POINTS = 3  # under 3 finished cycles a curve is only a straight line: the table is enough

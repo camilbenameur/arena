@@ -104,7 +104,7 @@ def build(
             if councils:  # the councils league: same journal, its own page and one page per council
                 _write(tmp / "councils.html", render_perp.councils_page(data))
                 for p in councils["portfolios"]:
-                    if p["kind"] == "council" or p["id"] == "benchmark-perp:trend-engine":  # and its "engine alone" benchmark
+                    if p["kind"] == "council" or p["id"] in ("benchmark-perp:trend-engine", "benchmark-perp:trend-engine-1x"):  # and its "engine alone" benchmark
                         _write(tmp / "councils" / f"{p['slug']}.html", render_perp.portfolio_page(data, p))
                 _json(tmp / "data" / "councils.json", {**meta, **councils})
             _json(tmp / "data" / "derivatives.json", {**meta, **{k: v for k, v in perp.items() if k != "councils"}})  # already filtered by site.perp

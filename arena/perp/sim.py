@@ -33,6 +33,8 @@ from arena.perp.ledger import (
     gross_exposure_ueur,
     notional_up,
     qty_seconds,
+    spot_value_ueur,
+    total_equity_ueur,
     unrealized_ueur,
 )
 from arena.perp.margin import HUNTER_NAMES, INITIAL, MAINTENANCE, leveraged, margin_ueur
@@ -281,6 +283,54 @@ class PerpSimulator:
             if reason == "intent" and increases:
                 self._check_entry(acc, instrument, qty, price, fee, (bid + ask) // 2, marks, fx, ts)
             return self._fill(portfolio, order_id, instrument, qty, price, fee, fx, ts, reason)
+
+    def spot_order(
+        self,
+        order_id: str,
+        portfolio: str,
+        instrument: str,
+        qty: int,
+        index_uusd: int,
+        fx: tuple[int, int],
+        ts: int,
+        *,
+        fee_bp: int,
+        slippage_bp: int,
+        reason: str = "intent",
+    ) -> dict[str, Any] | None:
+        """Fills `qty` (signed) of the valuation-only SPOT leg of a carry portfolio at the index price: a buy pays
+        `slippage_bp` above it, a sale receives `slippage_bp` below, and `fee_bp` of the notional is charged.
+        Idempotent on `order_id` (None when already filled); a retired portfolio never buys."""
+        if type(qty) is not int or qty == 0:
+            raise PerpLedgerError("qty must be a non-zero integer")
+        if type(index_uusd) is not int or index_uusd <= 0:
+            raise PerpLedgerError(f"no valid index price for {instrument}")
+        fx = _fx(fx)
+        with self._locked():
+            done = self._book.orders.get(order_id)
+            if done is not None:
+                if done != (portfolio, "spot:" + instrument, qty):
+                    raise PerpLedgerError(f"order id {order_id} already used for {done}")
+                return None
+            acc = self._book.account(portfolio)
+            if qty > 0 and (acc.retired or acc.halted):
+                raise PerpLedgerError(f"{portfolio} is retired or halted: no spot purchase")
+            price = ceil_div(index_uusd * (BP + slippage_bp), BP) if qty > 0 else index_uusd * (BP - slippage_bp) // BP
+            fee = fee_ueur(qty, price, fee_bp, *fx)
+            payload = {
+                "order_id": order_id,
+                "portfolio": portfolio,
+                "instrument": instrument,
+                "qty": qty,
+                "price_uusd": price,
+                "fee_ueur": fee,
+                "fx_bid": fx[0],
+                "fx_ask": fx[1],
+                "reason": reason,
+                "index_uusd": index_uusd,
+                "ts": ts,
+            }
+            return self._append("spot_fill", payload, ts)
 
     def _check_entry(
         self,
@@ -618,9 +668,16 @@ class PerpSimulator:
         return out
 
     def write_equity(
-        self, portfolio: str, ts: int, marks: Mapping[str, int], fx: tuple[int, int]
+        self,
+        portfolio: str,
+        ts: int,
+        marks: Mapping[str, int],
+        fx: tuple[int, int],
+        spot_marks: Mapping[str, int] | None = None,
     ) -> dict[str, Any] | None:
-        """Writes one `perp_equity` measure; None if one already exists for (portfolio, ts)."""
+        """Writes one `perp_equity` measure; None if one already exists for (portfolio, ts). A portfolio with a
+        valuation-only spot leg (carry) needs `spot_marks` (the index price per instrument): its equity then counts
+        the leg, and the payload says so (`spot_ueur`, `spot_marks`, `spot_qty`)."""
         fx = _fx(fx)
         with self._locked():
             if (portfolio, ts) in self._book.equity_keys:
@@ -638,4 +695,10 @@ class PerpSimulator:
                 "fx_bid": fx[0],
                 "fx_ask": fx[1],
             }
+            if acc.spot_qty:
+                spot_held = {i: (spot_marks or {}).get(i) for i in acc.spot_qty}
+                payload["spot_ueur"] = spot_value_ueur(acc, spot_held, *fx)  # raises without a valid price
+                payload["equity_ueur"] = total_equity_ueur(acc, held, spot_held, *fx)
+                payload["spot_marks"] = dict(sorted(spot_held.items()))
+                payload["spot_qty"] = dict(sorted(acc.spot_qty.items()))
             return self._append("perp_equity", payload, ts)

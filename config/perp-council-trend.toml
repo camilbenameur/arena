@@ -1,3 +1,5 @@
+# RETIRED on axis 10 (docs/lead/LOG.md): the Trend Council at scale 2x, replaced by perp-council-trend-1x.toml. No longer listed in
+# council-league.toml; kept as the record of what ran (and as a test fixture of the 2x configuration).
 # The council v4, the "Trend Council", of the league of the councils (docs/SPEC-TREND-COUNCIL.md): a council that
 # aims at net income on the order of 10% a day. The engine (arena/perp/lab/trend.py, frozen, scale 2x) decides the
 # target of each contract at every 4-hour bar close; three Haiku members and an Opus President may only brake it

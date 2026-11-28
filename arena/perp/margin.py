@@ -28,7 +28,9 @@ LEVERAGED_PREFIX = "council-perp:"
 # The hunter's two portfolios, defined here only (sim.py: the stop ignores the minute of the entry for them;
 # watcher.py and hunter.py use the names of the hunter's own configuration)
 HUNTER_NAMES = frozenset({"robot-perp:hunter", "benchmark-perp:hunter-5min"})
-LEVERAGED_NAMES = ("benchmark-perp:trend-engine", *sorted(HUNTER_NAMES))
+# The engine-only benchmarks of the Trend Councils: the first one at 2x (retired on axis 10), then the one at 1x
+TREND_ENGINE_NAMES = frozenset({"benchmark-perp:trend-engine", "benchmark-perp:trend-engine-1x"})
+LEVERAGED_NAMES = (*sorted(TREND_ENGINE_NAMES), *sorted(HUNTER_NAMES))
 PPM = 1_000_000
 INITIAL = "initial"
 MAINTENANCE = "maintenance"

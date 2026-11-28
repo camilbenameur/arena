@@ -1,7 +1,7 @@
 """The council v4, the "Trend Council" (docs/SPEC-TREND-COUNCIL.md).
 
 The roles are inverted compared to the councils before it:
-- **the engine decides**: `arena.perp.lab.trend` (frozen on 2026-11-17, scale 2x) gives the target of each contract
+- **the engine decides**: `arena.perp.lab.trend` (frozen on 2026-11-17; scale 1x since axis 10, it was 2x) gives the target of each contract
   at the close of each 4-hour bar. It is journaled (`trend_engine_target`) before anything else;
 - **the LLMs may only brake**: three Haiku members and an Opus President give each contract a coefficient of 1, 0.5
   or 0, which multiplies the target. They cannot raise it, invert it, nor open what the engine does not hold. Any
@@ -68,7 +68,15 @@ PROMPTS_VERSION = "v4"
 PROMPT_DIR = Path(__file__).parent / "prompt" / "council-trend"
 ENGINE_PARAMS = replace(
     trend_lab.FROZEN, scale=2.0
-)  # the frozen engine at the council's scale: never edited here
+)  # the frozen engine at the FIRST council's scale (2x, retired on axis 10): never edited here
+ENGINE_PARAMS_1X = replace(trend_lab.FROZEN, scale=1.0)  # the frozen engine at 1x: the Trend Council since axis 10
+
+
+def engine_params(cfg: CouncilConfig) -> trend_lab.TrendParams:
+    """The frozen engine at the scale of this council's configuration (`engine_scale`, "2.0" when absent)."""
+    assert cfg.trend is not None
+    return replace(trend_lab.FROZEN, scale=float(cfg.trend.engine_scale))
+
 ENGINE_VERSION = "trend-frozen-2026-11-17"
 BAR_S = ENGINE_PARAMS.bar_hours * 3600
 DAY_S = 86_400
@@ -86,13 +94,17 @@ VALIDITY_MAX_H = 4
 KINDS = ("bar", "veto", "restoration")
 # What the engine did on the bench (measured offline), given to every member.
 ENGINE_SUMMARY = {
-    "engine": "slow trend following (EMA 2 d / 6 d on 4-hour bars), long and short, volatility targeting, scale 2x",
+    "engine": "slow trend following (EMA 2 d / 6 d on 4-hour bars), long and short, volatility targeting, scale 1x",
     "in_trend": (
-        "64-day training period: +102% (1.1%/day); sealed 31-day holdout in a clear decline: +21% "
-        "(0.62%/day), maximum drawdown -24.6%"
+        "Kraken 2026, at 1x: 64-day training period +47% (0.6%/day); the following 31 days +12% (0.37%/day), "
+        "maximum drawdown -12.6%. Binance 2017-2019 at 1x: +120%, maximum drawdown -17.5%"
     ),
-    "in_range": "around zero, sometimes slightly negative (a 16-day block at -3.4% at 1x): its normal costs",
-    "source": "docs/COUNCIL-V4-RESEARCH.md",
+    "in_range": (
+        "around zero, sometimes slightly negative (a 16-day block at -3.4% at 1x): its normal costs. Binance "
+        "2020-2025 at 1x: +36.9, +5.0, -29.5, +54.8, -15.1 and -28.1% a year, maximum drawdown -63%: a bet on the "
+        "market regime, not a steady earner"
+    ),
+    "source": "docs/COUNCIL-V4-RESEARCH.md; docs/lead/LOG.md, axes 10 and 11 (the scale was cut from 2x to 1x)",
 }
 
 
@@ -112,6 +124,7 @@ class EngineTarget:
     vol_day_bp: dict[str, int]  # the contract's daily volatility (bp of price)
     held: dict[str, str]  # contract -> why its data is not trusted: it keeps its position
     missing_pct: dict[str, int]
+    scale: str = "2.0"  # the engine's scale this target was computed with
 
     def payload(self, portfolio: str) -> dict[str, Any]:
         return {
@@ -125,8 +138,8 @@ class EngineTarget:
             "held": dict(self.held),
             "missing_pct": dict(self.missing_pct),
             "engine_version": ENGINE_VERSION,
-            "params_sha256": params_sha256(),
-            "scale": "2.0",
+            "params_sha256": params_sha256(replace(trend_lab.FROZEN, scale=float(self.scale))),
+            "scale": self.scale,
         }
 
     @classmethod
@@ -139,6 +152,7 @@ class EngineTarget:
             {str(k): int(v) for k, v in p["vol_day_bp"].items()},
             {str(k): str(v) for k, v in p["held"].items()},
             {str(k): int(v) for k, v in p["missing_pct"].items()},
+            str(p.get("scale", "2.0")),
         )
 
 
@@ -245,7 +259,7 @@ def engine_target(
             format(Decimal(float(z[j])).quantize(Decimal("0.0001")), "f") if math.isfinite(z[j]) else "0"
         )
         vols[inst] = round(float(vol[j]) * BP) if math.isfinite(vol[j]) else 0
-    return EngineTarget(bar_ts, end_ts, target, zs, vols, held, missing)
+    return EngineTarget(bar_ts, end_ts, target, zs, vols, held, missing, f"{params.scale:.1f}")
 
 
 # ---------------------------------------------------------------------- coefficients and orders
@@ -740,7 +754,8 @@ class TrendDecider:
                 "bar_ts": self.engine.bar_ts,
                 "bar_end_ts": end_ts,
                 "engine_version": ENGINE_VERSION,
-                "params_sha256": params_sha256(),
+                "params_sha256": params_sha256(replace(trend_lab.FROZEN, scale=float(self.engine.scale))),
+                "scale": self.engine.scale,
                 "targets_bp": dict(self.engine.target_bp),
                 "final_bp": final,
                 "held": dict(self.engine.held),
@@ -894,7 +909,9 @@ def journal_engine(sim: PerpSimulator, portfolio: str, engine: EngineTarget, now
         sim.append_event("trend_engine_target", engine.payload(portfolio), now_ts)
 
 
-def journal_engine_error(sim: PerpSimulator, portfolio: str, end_ts: int, error: str, now_ts: int) -> None:
+def journal_engine_error(
+    sim: PerpSimulator, portfolio: str, end_ts: int, error: str, now_ts: int, params: trend_lab.TrendParams = ENGINE_PARAMS
+) -> None:
     """The engine could not be computed: one `trend_engine_target` with status `error` per portfolio and bar."""
     if not any(
         e["type"] == "trend_engine_target"
@@ -905,7 +922,7 @@ def journal_engine_error(sim: PerpSimulator, portfolio: str, end_ts: int, error:
         sim.append_event(
             "trend_engine_target",
             {"portfolio": portfolio, "status": "error", "bar_end_ts": end_ts, "error": error[:300],
-             "engine_version": ENGINE_VERSION, "params_sha256": params_sha256()},
+             "engine_version": ENGINE_VERSION, "params_sha256": params_sha256(params)},
             now_ts,
         )  # fmt: skip
 
@@ -992,11 +1009,11 @@ def run_trend_round(
     if engine is None:
         if kind == "bar":
             try:
-                engine = engine_target(store, now_ts)
+                engine = engine_target(store, now_ts, engine_params(cfg))
             except Exception as exc:  # noqa: BLE001 (no engine, no order: the positions stay)
                 msg = f"{type(exc).__name__}: {exc}"
                 for pf in (name, bench):
-                    journal_engine_error(sim, pf, end_ts, msg, now_ts)
+                    journal_engine_error(sim, pf, end_ts, msg, now_ts, engine_params(cfg))
                 rep.problems.append(f"trend engine not computed for the bar of {end_ts}: {msg}"[:300])
                 return rep
         else:
@@ -1078,7 +1095,7 @@ def run_trend_round(
             extra={
                 "llm_config_sha256": llm_sha256, "budget_ceiling_uusd": ceiling_uusd,
                 "council_config_sha256": cfg.sha256, "councils_league_sha256": league_sha256,
-                "trend_params_sha256": params_sha256(),
+                "trend_params_sha256": params_sha256(engine_params(cfg)),
             },
             snapshot_extra={
                 **snapshot_blocks(engine, prior, now_ts),

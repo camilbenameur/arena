@@ -126,7 +126,7 @@ def test_first_tick_opens_the_league_and_runs_the_rendezvous(tmp_path):
     assert all(p.qty > 0 for p in states[B.BASKET].positions.values())
     assert set(states[B.TREND].positions) == set(SYMBOLS)  # rising 20-day closes: long everywhere, with stops
     assert all(p.stop_uusd is not None for p in states[B.TREND].positions.values())
-    assert len([e for e in w.events("perp_equity")]) == 3 and w.events("perp_tick")
+    assert len([e for e in w.events("perp_equity")]) == 4 and w.events("perp_tick")
     assert w.events("perp_verdict") or not w.events("perp_verdict")  # the random benchmark may do nothing
     for name, acc in states.items():
         assert acc.invariant_ok(), name

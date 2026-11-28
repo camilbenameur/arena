@@ -24,6 +24,7 @@ from arena.perp import round_quota
 from arena.perp.ledger import MarginAccount, PerpLedgerError, price_pnl_uusd, replay, to_eur
 from arena.perp.llm_league import LlmConfigError, load_llm_league
 from arena.perp.news import load_news_config
+from arena.types import QTY_SCALE
 
 ROUND_S = 4 * 3600
 ROUND_OFFSET_S = 2 * 3600  # rounds at 02:00, 06:00, …, 22:00 UTC
@@ -44,8 +45,13 @@ TREND = "benchmark-perp:trend"
 RANDOM = "benchmark-perp:random"
 COUNCIL = "council-perp:haiku"  # the Haiku Council: Haiku President
 COUNCIL_OPUS = "council-perp:opus"  # the Opus Council: the same ten Haiku advisers, Opus President
-COUNCIL_TREND = "council-perp:trend"  # the Trend Council (v4): the engine decides, the LLMs brake
-TREND_ENGINE = "benchmark-perp:trend-engine"  # its benchmark: the same engine, without LLMs
+COUNCIL_TREND = "council-perp:trend"  # the Trend Council (v4) at 2x: the engine decides, the LLMs brake. Retired on axis 10
+TREND_ENGINE = "benchmark-perp:trend-engine"  # its benchmark: the same engine, without LLMs. Retired on axis 10
+COUNCIL_TREND_1X = "council-perp:trend-1x"  # the Trend Council at 1x, which replaced it
+TREND_ENGINE_1X = "benchmark-perp:trend-engine-1x"  # its benchmark
+TREND_COUNCILS = (COUNCIL_TREND, COUNCIL_TREND_1X)
+TREND_ENGINES = (TREND_ENGINE, TREND_ENGINE_1X)
+CARRY = "benchmark-perp:carry"  # a cash substitute: long spot + short perp on BTC and ETH, no bet on price
 ROBOT = "robot-perp:hunter"  # the Wick Hunter: a robot without AI that reads prices every 5 seconds
 ROBOT_5MIN = "benchmark-perp:hunter-5min"  # its benchmark: the same rule, decided only every 5 minutes
 ROBOTS = (ROBOT, ROBOT_5MIN)
@@ -59,26 +65,33 @@ NAMES = {
     "llm-perp:claude-fable-5-2": "Claude Fable 5.2",
     COUNCIL: "Haiku Council",
     COUNCIL_OPUS: "Opus Council",
-    COUNCIL_TREND: "Trend Council",
-    TREND_ENGINE: "Benchmark engine only",
+    COUNCIL_TREND_1X: "Trend Council 1x",
+    TREND_ENGINE_1X: "Benchmark engine only 1x",
+    COUNCIL_TREND: "Trend Council 2x",
+    TREND_ENGINE: "Benchmark engine only 2x",
     ROBOT: "Wick Hunter",
     ROBOT_5MIN: "Wick Hunter at a 5-min pace",
     BASKET: "Benchmark basket 1x",
     TREND: "Benchmark trend",
     RANDOM: "Benchmark random",
+    CARRY: "Benchmark carry",
 }
 ORDER = list(NAMES)
 SUBTITLES = {
     COUNCIL: "10 Haiku · Haiku president",
     COUNCIL_OPUS: "10 Haiku · Opus president",
-    COUNCIL_TREND: "trend engine · 3 Haiku and an Opus president who brake",
+    COUNCIL_TREND: "trend engine at 2x · 3 Haiku and an Opus president who brake",
+    COUNCIL_TREND_1X: "trend engine at 1x · 3 Haiku and an Opus president who brake",
 }
-COUNCIL_BUDGETS_USD = {COUNCIL: 10, COUNCIL_OPUS: 25, COUNCIL_TREND: 5}  # the day's budget, at list-price equivalent
+COUNCIL_BUDGETS_USD = {COUNCIL: 10, COUNCIL_OPUS: 25, COUNCIL_TREND: 5, COUNCIL_TREND_1X: 5}  # the day's budget, at list-price equivalent
 DESCRIPTIONS = {
     COUNCIL: "Claude Haiku 5.5 models deliberate every round: independent opinions, a devil's advocate, then a Haiku President who decides.",
     COUNCIL_OPUS: "The same Haiku 5.5 advisers deliberate every round; a Claude Opus 5.5 President decides.",
-    COUNCIL_TREND: "A trend-following engine (2-day / 6-day moving averages, long and short, size set by volatility, scale 2x) gives the target of each contract at every 4-hour bar. Three Haiku and an Opus President can only brake: a coefficient of 1, 0.5 or 0 per contract.",
-    TREND_ENGINE: "The same trend engine at 2x, without AI, through the same execution path and on the same 4-hour rounds: the gap with the Trend Council measures what the AIs add or remove.",
+    COUNCIL_TREND: "A trend-following engine (2-day / 6-day moving averages, long and short, size set by volatility, scale 2x) gives the target of each contract at every 4-hour bar. Three Haiku and an Opus President can only brake: a coefficient of 1, 0.5 or 0 per contract. Archived: at 2x the frozen engine loses 71.6% on 2020-2025 (axis 10).",
+    TREND_ENGINE: "The same trend engine at 2x, without AI, through the same execution path and on the same 4-hour rounds: the gap with the Trend Council measures what the AIs add or remove. Archived: at 2x the frozen engine loses 71.6% on 2020-2025.",
+    COUNCIL_TREND_1X: "The same trend-following engine as the first Trend Council (2-day / 6-day moving averages, long and short, size set by volatility) at half its scale, 1x: it ruined itself at 2x on 2020-2025. It gives the target of each contract at every 4-hour bar. Three Haiku and an Opus President can only brake: a coefficient of 1, 0.5 or 0 per contract.",
+    TREND_ENGINE_1X: "The same trend engine at 1x, without AI, through the same execution path and on the same 4-hour rounds: the gap with the Trend Council 1x measures what the AIs add or remove.",
+    CARRY: "A cash substitute: it earns the funding paid by leveraged longs, with no bet on price. BTC and ETH, each a long spot leg and a short perpetual leg of equal size (€250 per leg), left alone unless a leg drifts outside 0.8 to 1.25 times its target. The spot leg is a valuation at the index price (the league has no spot instrument), with a 0.40% fee and 5 bp of slippage per spot trade. Expect a few percent a year at best: +2.1% a year over 2024-2026, +7.1% over 2020-2025 on Binance data.",
     ROBOT: "A robot without AI reads prices every 5 seconds. When a contract moves more than 4.5% in 5, 15 or 30 minutes (a wick), it plays the reversal: it buys after a drop and sells after a rise, at 2x the portfolio, with a 5% stop. It exits 60 minutes after entry, then stays out of that contract for 60 minutes. On the bench, the gain disappears with delay: speed is the whole strategy.",
     ROBOT_5MIN: "The same rule, through the same execution path, but deciding only at the pace of a daily review: once per 5-minute slot, on the prices known at that moment. The gap with the Wick Hunter measures what speed earns.",
     BASKET: "Equal-weight buyer of the 6 contracts, without leverage or stop, rebalanced monthly: buy and hold.",
@@ -92,6 +105,26 @@ ROBOT_BADGE = "robot without AI · leverage ≤ 10x · paper demonstration, outs
 ROBOT_SUBTITLES = {ROBOT: ROBOT_RULE, ROBOT_5MIN: "the same rule, decided once per 5-min slot"}
 
 TREND_BADGE = "trend engine · leverage ≤ 10x · the AIs can only brake"
+CARRY_BADGE = "benchmark · a cash substitute: earns the funding paid by leveraged longs, no bet on price"
+CARRY_NOTE = (
+    "The spot leg is a valuation only, at the perpetual's index price converted at the EUR/USD quote: the league trades no spot "
+    "instrument. Each spot trade pays 0.40% and 5 bp of slippage (entry and rebalances only); the perpetual leg goes through the normal ledger."
+)
+
+
+def _spot_legs(latest: Mapping[str, Any] | None, fx: tuple[int, int] | None) -> list[dict[str, Any]]:
+    """The valuation-only spot legs of the carry benchmark, from its latest equity measure."""
+    if not latest or not latest.get("spot_qty"):
+        return []
+    out = []
+    for inst, qty in sorted(latest["spot_qty"].items()):
+        price = int((latest.get("spot_marks") or {}).get(inst) or 0)
+        value = int(qty) * price // QTY_SCALE  # µUSD
+        out.append({
+            "instrument": short(inst), "qty": int(qty), "price_uusd": price,
+            "value_ueur": value * 1_000_000 // fx[1] if fx else None,
+        })  # fmt: skip
+    return out
 
 
 def _daily_target(capital: int, equity: int, open_ts: int, now: int) -> dict[str, Any]:
@@ -956,6 +989,11 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
                 "ts": e["ts"], "instrument": short(p.get("instrument")), "qty": p["qty"], "price_uusd": p["price_uusd"],
                 "fees_ueur": p.get("fee_ueur") or 0, "reason": FILL_REASONS.get(str(p.get("reason")), str(p.get("reason"))),
             })  # fmt: skip
+        elif t == "spot_fill":  # the carry's valuation-only spot leg: an operation like the others, marked as spot
+            fills.setdefault(pf, []).append({
+                "ts": e["ts"], "instrument": short(p.get("instrument")) + " spot", "qty": p["qty"], "price_uusd": p["price_uusd"],
+                "fees_ueur": p.get("fee_ueur") or 0, "reason": FILL_REASONS.get(str(p.get("reason")), str(p.get("reason"))),
+            })  # fmt: skip
         elif t == "portfolio_halted":
             status[pf] = {"state": "stopped", "until": None, "ts": e["ts"], "reason": p.get("reason")}
         elif t == "portfolio_frozen":
@@ -1004,10 +1042,13 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             "cost_uusd": None, "n_rounds": 0, "n_orders": 0, "fx": list(fx) if fx else None,
             "archive": retired.get(pf),
         }  # fmt: skip
-        if pf in (COUNCIL_TREND, TREND_ENGINE):
+        if pf in TREND_COUNCILS or pf in TREND_ENGINES:
             p_out["daily_target"] = _daily_target(capital, equity, opened[pf]["ts"], now)
-        if pf == TREND_ENGINE:
+        if pf in TREND_ENGINES:
             p_out["badge"] = TREND_BADGE
+        if pf == CARRY:
+            p_out["badge"], p_out["note"] = CARRY_BADGE, CARRY_NOTE
+            p_out["spot_legs"] = _spot_legs(latest, fx)
         if kind == "robot":
             p_out["badge"], p_out["subtitle"], p_out["rule"] = ROBOT_BADGE, ROBOT_SUBTITLES.get(pf), ROBOT_RULE
             p_out["n_shocks"] = len(shocks.get(pf, ()))
@@ -1017,12 +1058,12 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
             if kind == "council":
                 n_delib = 0
                 for d in ds:
-                    d["rules"] = "trend" if pf == COUNCIL_TREND else "council"  # its refusals read against the bounds of its own policy
+                    d["rules"] = "trend" if pf in TREND_COUNCILS else "council"  # its refusals read against the bounds of its own policy
                     c = d.get("council")
                     n_delib += 1 if c else 0
                     if c and n_delib > DELIBERATIONS_MAX:  # keeps the page light: ~150 rounds a day, 9 opinions each
                         c["opinions_outside_page"], c["opinions"] = len(c["opinions"]), []
-                p_out["badge"], p_out["outside_rule"] = (TREND_BADGE if pf == COUNCIL_TREND else COUNCIL_BADGE), COUNCIL_OUTSIDE_RULE
+                p_out["badge"], p_out["outside_rule"] = (TREND_BADGE if pf in TREND_COUNCILS else COUNCIL_BADGE), COUNCIL_OUTSIDE_RULE
                 p_out["subtitle"] = SUBTITLES.get(pf)
                 p_out["chair_cost_uusd"] = sum((d.get("council") or {}).get("chair_cost_uusd") or 0 for d in ds)
                 p_out["president"] = next(((d["council"] or {}).get("president") for d in ds if d.get("council") and d["council"].get("president")), None)
@@ -1095,10 +1136,10 @@ def compute(path: Path, now: int) -> dict[str, Any] | None:
 
     # The councils have their own league: the basket benchmark is their reference, without leaving the derivatives
     # league; the "engine only" benchmark belongs to that league alone.
-    deriv = league([p for p in portfolios if p["kind"] != "council" and p["id"] != TREND_ENGINE])
+    deriv = league([p for p in portfolios if p["kind"] != "council" and p["id"] not in TREND_ENGINES])
     councils = [p for p in portfolios if p["kind"] == "council"]
     basket = [p for p in portfolios if p["id"] == BASKET]
-    engine = [p for p in portfolios if p["id"] == TREND_ENGINE]
+    engine = [p for p in portfolios if p["id"] in TREND_ENGINES]
     # The engine benchmark first: its curve (a ribbon) passes under the council's, which stays readable on top.
     deriv["councils"] = league(engine + councils + basket) if councils else None
     return deriv

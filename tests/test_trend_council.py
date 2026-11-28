@@ -36,7 +36,7 @@ from arena.perp.riskd import PerpIntent
 from arena.perp.types import Candle
 from tests.test_perp_watcher import PRICES, SPECS, SYMBOLS, T0, World
 
-CONFIG = Path("config/perp-council-trend.toml")
+CONFIG = Path("config/perp-council-trend-1x.toml")  # the live one since axis 10 (the 2x file is the retired record)
 COUNCIL = load_council(CONFIG)
 NAME = COUNCIL.portfolio
 BENCH = COUNCIL.trend.benchmark
@@ -153,6 +153,19 @@ def test_live_engine_equals_the_bench_targets_on_the_same_bars(tmp_path):
     assert TC.ENGINE_PARAMS == dataclasses.replace(trend_lab.FROZEN, scale=2.0)  # the frozen engine, only scaled
 
 
+def test_the_1x_engine_is_the_frozen_engine_at_half_the_weights_and_the_2x_one_is_kept(tmp_path):
+    w = world(tmp_path)
+    one = TC.engine_target(w.store, T0 + 120, TC.engine_params(COUNCIL))
+    two = TC.engine_target(w.store, T0 + 120)  # the default stays the first council's 2x
+    assert (one.scale, two.scale) == ("1.0", "2.0") and TC.ENGINE_PARAMS_1X.scale == 1.0
+    assert any(two.target_bp.values()) and all(abs(2 * one.target_bp[i] - two.target_bp[i]) <= 1 for i in one.target_bp)
+    assert all(abs(t) <= 20_000 for t in one.target_bp.values())  # the cap 2 x the scale 1
+    assert one.payload(NAME)["scale"] == "1.0" and two.payload(NAME)["scale"] == "2.0"
+    assert TC.EngineTarget.from_payload(one.payload(NAME)).scale == "1.0"
+    old = {k: v for k, v in one.payload(NAME).items() if k != "scale"}  # a journal event written before axis 10
+    assert TC.EngineTarget.from_payload(old).scale == "2.0"
+
+
 def test_a_contract_with_too_many_missing_minutes_keeps_its_position(tmp_path):
     gap = {"PF_XRPUSD": {t for t in range(T0 - 7200 - 5 * 3600, T0 - 7200 - 3600 - 60, 60)}}  # 4 h = 17% of 24 h
     w = world(tmp_path, drop=gap)
@@ -235,7 +248,7 @@ def test_rebalance_band_is_five_percent_of_the_equity():
 
 
 def decider(w, kind="bar", prior=None, veto=True, runner=None, exposure=None, engine=None, now=T0 + 120):
-    eng = engine or TC.engine_target(w.store, now)
+    eng = engine or TC.engine_target(w.store, now, TC.engine_params(COUNCIL))
     exp = exposure if exposure is not None else {}
     return TC.TrendDecider(
         COUNCIL, w.var / "claude-empty", eng, now, lambda: exp, kind=kind, prior=prior or {}, veto=veto,
@@ -355,7 +368,8 @@ def test_a_bar_round_journals_the_engine_first_then_trades_the_council_and_its_s
     assert {e["payload"]["portfolio"] for e in eng} == {NAME, BENCH}
     p = eng[0]["payload"]
     assert p["bar_end_ts"] == T0 and p["bar_ts"] == T0 - 60 and p["engine_version"] and len(p["params_sha256"]) == 64
-    assert set(p["targets_bp"]) == set(SYMBOLS) and set(p["z"]) == set(SYMBOLS) and p["scale"] == "2.0"
+    assert set(p["targets_bp"]) == set(SYMBOLS) and set(p["z"]) == set(SYMBOLS) and p["scale"] == "1.0"
+    assert p["params_sha256"] == TC.params_sha256(trend_lab.TrendParams(scale=1.0)) != TC.params_sha256()  # axis 10: 1x, not 2x
     assert kinds.index("trend_engine_target") < kinds.index("council_opinion") < kinds.index("agent_decision")
     states = replay(ev)
     assert set(states[NAME].positions) == set(states[BENCH].positions) and states[NAME].positions
@@ -539,7 +553,8 @@ def test_the_v4_config_is_valid_strict_and_the_old_councils_still_load(tmp_path)
         ("expected_move_bp = 247", "expected_move_bp = 0"),
         ("horizon_h = 168", "horizon_h = 400"),
         ('kind = "trend-v4"', 'kind = "other"'),
-        ('benchmark = "benchmark-perp:trend-engine"', 'benchmark = "benchmark-perp:x"'),
+        ('benchmark = "benchmark-perp:trend-engine-1x"', 'benchmark = "benchmark-perp:x"'),
+        ('engine_scale = "1.0"', 'engine_scale = "3.0"'),
         ("horizon_h = 168", "x = 1"),
     ):
         f = tmp_path / "c.toml"
@@ -550,8 +565,8 @@ def test_the_v4_config_is_valid_strict_and_the_old_councils_still_load(tmp_path)
     f.write_text(Path("config/perp-council.toml").read_text() + '\nbenchmark = "x"\n')
     with pytest.raises(CouncilConfigError):
         load_council(f)
-    pol = Path("config/policy-perp-council-trend.toml").read_text()
-    assert load_perp_policy(Path("config/policy-perp-council-trend.toml"), profile=AGGRESSIVE).sha256
+    pol = Path("config/policy-perp-council-trend-1x.toml").read_text()
+    assert load_perp_policy(Path("config/policy-perp-council-trend-1x.toml"), profile=AGGRESSIVE).sha256
     assert "TRAIN" in pol and "MEASURED" in pol
 
 
@@ -580,14 +595,14 @@ def test_the_site_shows_the_council_its_shadow_and_each_round_line(tmp_path):
         return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", h)).replace(" ", " ").replace("\xa0", " ")
 
     html = (out / "councils.html").read_text(encoding="utf-8")
-    assert "Trend Council" in clean(html) and "Benchmark engine only" in clean(html) and "council-perp-trend.html" in html
-    page = (out / "councils" / "council-perp-trend.html").read_text(encoding="utf-8")
+    assert "Trend Council" in clean(html) and "Benchmark engine only" in clean(html) and "council-perp-trend-1x.html" in html
+    page = (out / "councils" / "council-perp-trend-1x.html").read_text(encoding="utf-8")
     ptxt = clean(page)
     assert "target: 1%/day · realized:" in ptxt
     assert "Engine targets" in ptxt and "Council coefficients" in ptxt and "Orders" in ptxt
     assert "BTC ×0.5" in ptxt and "maintenance announcement on the contract" in ptxt and "The News Watcher" in ptxt
     assert "4 h bar close" in ptxt
-    assert (out / "councils" / "benchmark-perp-trend-engine.html").exists()
+    assert (out / "councils" / "benchmark-perp-trend-engine-1x.html").exists()
     derivatives = (out / "derivatives.html").read_text(encoding="utf-8")
     assert "trend-engine" not in derivatives and "Benchmark engine only" not in derivatives  # a benchmark of the councils' league only
 

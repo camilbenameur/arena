@@ -5,8 +5,13 @@
 # minute, +13.9 % one minute late, -8.1 % five minutes late), hence a process of its own that reads the prices every 5
 # seconds (`python -m arena.perp.hunter run`, unit arena-perp-hunter.service). Hashed (sha256 of the bytes) and
 # journaled (`hunter_config`) at each start.
+#
+# DISABLED on axis 10 (docs/lead/LOG.md): on 2020-2025 minute data never used to choose it, the frozen rule was positive
+# in 0 of 6 years (-34.7 bp per trade over 3,664 trades, against +72 bp on the year it was chosen on). `enabled = false`
+# makes `python -m arena.perp.hunter run` exit 0 at once (the unit is `Restart=on-failure`: it stays stopped), and
+# the watcher no longer opens or controls its two portfolios, retired in the journal (`portfolio_retired`). Code kept.
 kind = "hunter-v1"
-enabled = true
+enabled = false
 portfolio = "robot-perp:hunter"
 name = "Wick Hunter"
 # The witness: the same rule through the same execution path, deciding only at the pace of the watcher (once per

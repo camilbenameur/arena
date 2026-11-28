@@ -1,7 +1,8 @@
 """Retiring a portfolio that plays: a council (its journal then stays as data) or a
 solo model of the LLM league (it is archived).
 
-`python -m arena.perp.retire --portfolio llm-perp:<model>` (or `council-perp:<name>`; the council command
+`python -m arena.perp.retire --portfolio llm-perp:<model>` (or `council-perp:<name>`, `benchmark-perp:trend-engine*`,
+`robot-perp:hunter`, `benchmark-perp:hunter-5min`; the council command
 `python -m arena.perp.council retire` is the same thing).
 
 `retire_portfolio` takes the watcher's lock (no round is running, none starts), flattens the portfolio at market
@@ -25,13 +26,17 @@ from arena.journal import Journal
 from arena.perp import agent_orders as AO
 from arena.perp.collect import data_root
 from arena.perp.ledger import PerpLedgerError
-from arena.perp.margin import LEVERAGED_PREFIX
+from arena.perp.margin import HUNTER_NAMES, LEVERAGED_PREFIX, TREND_ENGINE_NAMES
 from arena.perp.market import market_view
 from arena.perp.sim import PerpSimulator
 from arena.perp.store import PerpDataStore
 
 LLM_PREFIX = "llm-perp:"
-RETIRABLE_PREFIXES = (LEVERAGED_PREFIX, LLM_PREFIX)  # the benchmarks are the league's references: never retired
+RETIRABLE_PREFIXES = (LEVERAGED_PREFIX, LLM_PREFIX)
+# The benchmarks are the league's references: never retired, except the ones that exist only for a player that is
+# itself retired (the engine-only shadow of a Trend Council, the 5-minute witness of the Wick Hunter) and the Wick
+# Hunter (a robot) itself. The basket, trend, random and carry benchmarks are never retirable.
+RETIRABLE_NAMES = frozenset(TREND_ENGINE_NAMES | HUNTER_NAMES)
 LOCK_WAIT_S = 1200  # a round can hold the watcher lock for a few minutes: wait for it, never race it
 VIEW_MAX_AGE_S = 900
 
@@ -75,8 +80,11 @@ def retired_portfolio(
     from arena.perp.config import load_perp_config
     from arena.perp.watcher import load_specs
 
-    if not portfolio.startswith(RETIRABLE_PREFIXES) or portfolio.endswith(":trial"):
-        raise RetiredError(f"{portfolio}: only a council ({LEVERAGED_PREFIX}...) or a model ({LLM_PREFIX}...) can be retired")
+    if not (portfolio.startswith(RETIRABLE_PREFIXES) or portfolio in RETIRABLE_NAMES) or portfolio.endswith(":trial"):
+        raise RetiredError(
+            f"{portfolio}: only a council ({LEVERAGED_PREFIX}...), a model ({LLM_PREFIX}...), a trend-engine shadow "
+            "or the Wick Hunter's two portfolios can be retired"
+        )
     cfg = load_perp_config()
     symbols = [i.kraken_symbol for i in cfg.instruments]
     journal = Journal(var / "journal" / "events.jsonl")
@@ -108,7 +116,8 @@ def retired_portfolio(
                 raise RetiredError(f"{portfolio}: flatten refused: {exc}") from exc
         if view is not None and fresh:  # the portfolio's last measure is its final value
             marks = {s: m.mark_uusd for s, m in view.instruments.items()}
-            sim.write_equity(portfolio, now_ts, marks, (view.fx_bid, view.fx_ask))
+            index = {s: m.index_uusd for s, m in view.instruments.items() if m.index_uusd}
+            sim.write_equity(portfolio, now_ts, marks, (view.fx_bid, view.fx_ask), spot_marks=index)
         state = AO.pending_state(journal.events(), portfolio)
         todo = {el.id: el for el in state.pending}
         todo.update({el.id: el for el, _trig in state.unresolved_entries()})

@@ -36,6 +36,7 @@ FILL_REASONS = (
     "no_stop",  # a deciding portfolio's position found without a stop is closed at once
     "retired",  # a council taken out of the league (`python -m arena.perp.council retire`): flat, then archived
 )
+SPOT_FILL_REASONS = ("intent", "retired")  # `spot_fill`: the valuation-only spot leg of the carry benchmark
 
 
 class PerpLedgerError(ValueError):
@@ -146,6 +147,10 @@ class MarginAccount:
     last_fill_ts: int = 0
     qty_history: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     funding_cursor: dict[str, int] = field(default_factory=dict)  # last settled stamp per instrument
+    # The valuation-only spot leg (the carry benchmark, `spot_fill`): quantity held per instrument (never negative),
+    # and the net cash it took out of the collateral (purchases minus sales, at the fill's EUR value, fees apart).
+    spot_qty: dict[str, int] = field(default_factory=dict)
+    spot_invested_ueur: int = 0
 
     @property
     def retired(self) -> bool:
@@ -158,6 +163,7 @@ class MarginAccount:
             - self.fees_paid_ueur
             - self.funding_paid_ueur
             + self.absorbed_deficit_ueur
+            - self.spot_invested_ueur
         )
         return self.collateral_ueur == expected and self.collateral_ueur >= 0
 
@@ -226,6 +232,48 @@ def apply_fill(acc: MarginAccount, p: Mapping[str, Any], ts: int, seq: int) -> F
     acc.fees_paid_ueur += fee
     acc._protect_negative_balance()
     return FillEffect(realized, closed)
+
+
+def apply_spot_fill(acc: MarginAccount, p: Mapping[str, Any], ts: int) -> int:
+    """Applies a `spot_fill` payload: a purchase (qty > 0) or a sale (qty < 0) of the spot leg of a carry
+    portfolio. The leg is a valuation only (no spot instrument in this league): its cash comes out of, and goes back
+    into, the collateral, at the EUR value of the fill (a purchase at the bid, a sale at the ask: unfavourable), and
+    the fee is charged like a perp fee. Raises on a sale of more than is held, on a purchase the collateral cannot
+    pay and on an older fill. Returns the EUR amount of the leg's cash flow."""
+    inst = p["instrument"]
+    d = _int(p["qty"], "qty")
+    price = _int(p["price_uusd"], "price_uusd")
+    fee = _int(p["fee_ueur"], "fee_ueur")
+    fx_bid, fx_ask = p["fx_bid"], p["fx_ask"]
+    _check_fx(fx_bid, fx_ask)
+    _int(ts, "ts")
+    if d == 0 or price <= 0 or fee < 0:
+        raise PerpLedgerError(f"invalid spot fill (qty={d}, price={price}, fee={fee})")
+    if p.get("reason") not in SPOT_FILL_REASONS:
+        raise PerpLedgerError(f"unknown spot fill reason {p.get('reason')!r}")
+    if ts < acc.last_fill_ts:
+        raise PerpLedgerError(f"{acc.portfolio}: spot fill at {ts} is older than the previous fill ({acc.last_fill_ts})")
+    held = acc.spot_qty.get(inst, 0)
+    if held + d < 0:
+        raise PerpLedgerError(f"{acc.portfolio} {inst}: a spot sale of {-d} exceeds the {held} held")
+    if d > 0:
+        flow = cost_eur(notional_up(d, price), fx_bid, fx_ask)
+        if acc.collateral_ueur - flow - fee < 0:
+            raise PerpLedgerError(f"{acc.portfolio} {inst}: the collateral cannot pay the spot purchase")
+        acc.collateral_ueur -= flow + fee
+        acc.spot_invested_ueur += flow
+    else:
+        flow = gain_eur(notional_down(d, price), fx_bid, fx_ask)
+        acc.collateral_ueur += flow - fee
+        acc.spot_invested_ueur -= flow
+        flow = -flow
+    acc.spot_qty[inst] = held + d
+    if acc.spot_qty[inst] == 0:
+        del acc.spot_qty[inst]
+    acc.fees_paid_ueur += fee
+    acc.last_fill_ts = ts
+    acc._protect_negative_balance()
+    return flow
 
 
 def _check_stamp(acc: MarginAccount, inst: str, stamp: int) -> None:
@@ -343,6 +391,13 @@ class PerpBook:
             apply_fill(self.account(p["portfolio"]), p, ts, seq)
             if not dry:
                 self.orders[oid] = (p["portfolio"], p["instrument"], p["qty"])
+        elif t == "spot_fill":
+            oid = p["order_id"]
+            if oid in self.orders:
+                raise PerpLedgerError(f"duplicate order id {oid}")
+            apply_spot_fill(self.account(p["portfolio"]), p, ts)
+            if not dry:
+                self.orders[oid] = (p["portfolio"], "spot:" + p["instrument"], p["qty"])
         elif t in ("funding", "funding_missing"):
             key = (p["portfolio"], p["instrument"], p["stamp"])
             if key in self.funding_keys:
@@ -381,7 +436,7 @@ class PerpBook:
             acc.halted, acc.frozen_until_ts = False, 0
         elif t == "portfolio_retired":
             acc = self.account(p["portfolio"])
-            if acc.positions:
+            if acc.positions or acc.spot_qty:
                 raise PerpLedgerError(f"{acc.portfolio}: cannot be retired with open positions")
             if acc.retired_ts is None:  # a second event keeps the first retirement date
                 acc.retired_ts = _int(ts, "ts")
@@ -415,6 +470,20 @@ def unrealized_ueur(acc: MarginAccount, marks: Mapping[str, int], fx_bid: int, f
 
 def equity_ueur(acc: MarginAccount, marks: Mapping[str, int], fx_bid: int, fx_ask: int) -> int:
     return acc.collateral_ueur + unrealized_ueur(acc, marks, fx_bid, fx_ask)
+
+
+def spot_value_ueur(acc: MarginAccount, spot_marks: Mapping[str, int], fx_bid: int, fx_ask: int) -> int:
+    """Value of the spot legs in µEUR (at the ask, rounded down: the unfavourable direction). A leg without a valid
+    price raises: a valuation never silently drops a leg."""
+    return sum(gain_eur(notional_down(q, _mark(spot_marks, inst)), fx_bid, fx_ask) for inst, q in acc.spot_qty.items())
+
+
+def total_equity_ueur(
+    acc: MarginAccount, marks: Mapping[str, int], spot_marks: Mapping[str, int], fx_bid: int, fx_ask: int
+) -> int:
+    """The published equity: the margin account's (`equity_ueur`) plus the valuation-only spot legs. Margin checks
+    and the close-out keep using `equity_ueur` alone (the spot leg is not collateral: pessimistic)."""
+    return equity_ueur(acc, marks, fx_bid, fx_ask) + spot_value_ueur(acc, spot_marks, fx_bid, fx_ask)
 
 
 def gross_exposure_ueur(acc: MarginAccount, marks: Mapping[str, int], fx_bid: int, fx_ask: int) -> int:

@@ -26,8 +26,8 @@ The council **can neither increase a target, nor reverse it, nor open a position
 
 ## The engine, to know what is being braked
 
-- Slow trend following: a moving-average crossover (2 days / 6 days) on 4-hour bars, long and short, size set by volatility, 2x scale. It holds its positions for several days.
-- **What it earns** (offline benches, the simulator's fee model): in a trending market, rising or falling, about +0.3 to +1% per day, with pullbacks of the order of 25%. Over 64 training days: +102%; over the following 31 days, sealed: +21% (a clear market decline).
+- Slow trend following: a moving-average crossover (2 days / 6 days) on 4-hour bars, long and short, size set by volatility, 1x scale. It holds its positions for several days.
+- **What it earns** (offline benches, the simulator's fee model, at 1x): in a trending market, rising or falling, about +0.2 to +0.6% per day, with pullbacks of the order of 12 to 17%. Over 64 training days: +47%; over the following 31 days: +12%. Over longer histories it is a bet on the market regime: +120% over 2017-2019, but -4% over 2020-2025 with a -63% drawdown.
 - **What it loses**: in a trendless market (a range), it hovers around zero or loses a little (a 16-day block at -3.4%). These are its normal costs: they do not justify braking it.
 - The six contracts are correlated: when all the targets point the same way, it is in practice **a single bet** on the crypto market.
 

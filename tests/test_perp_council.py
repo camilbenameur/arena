@@ -535,7 +535,7 @@ def test_resume_lifts_the_halt(tmp_path, capsys):
     var = tmp_path / "var-perp"
     sim = PerpSimulator(Journal(var / "journal" / "events.jsonl"), {})
     live = load_councils_league().councils[0].portfolio  # the league lists one council (the v4): no --portfolio needed
-    assert live == "council-perp:trend"
+    assert live == "council-perp:trend-1x"
     sim.open_portfolio(live, "council", 0)
     sim.append_event("portfolio_halted", {"portfolio": live, "reason": "drawdown", "until_ts": 0}, 1)
     assert main(["resume", "--portfolio", "council-perp:nope", "--var", str(var)]) == 2

@@ -167,6 +167,8 @@ def _join_and(words: list[str]) -> str:
 
 def home_page(data: dict[str, Any]) -> str:
     """The home page: what the experiment is in two sentences, then one card per league with its leader."""
+    from arena.site.perp import TREND_COUNCILS
+
     perp = data["perp"]
     cards = []
     capital = eur(1_000_000_000, decimals=0)
@@ -175,7 +177,12 @@ def home_page(data: dict[str, Any]) -> str:
         rows = _perp_rows(councils_league)
         archives = [r for r in rows if r.get("archive")]
         what = f"Ten Claude Haiku give their opinion, a president decides: Haiku for one council, Opus for the other. Leverage up to 10, {capital} of play money each."
-        if archives and len(archives) == sum(1 for p in councils_league["portfolios"] if p["kind"] == "council"):
+        if any(p["id"] in TREND_COUNCILS and not p.get("archive") for p in councils_league["portfolios"]):
+            what = (
+                "A trend engine decides each position; three Claude Haiku and an Opus president can only brake it. "
+                f"Leverage up to 10, {capital} of play money. The earlier councils, with the Trend Council at 2x, are archived: their curves remain dotted."
+            )
+        elif archives and len(archives) == sum(1 for p in councils_league["portfolios"] if p["kind"] == "council"):
             what = "The first two councils, Haiku President and Opus President, are archived: their curves remain dotted."
         cards.append(_card(
             href="councils.html", title="AI councils",

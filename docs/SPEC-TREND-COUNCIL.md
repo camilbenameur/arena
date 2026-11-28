@@ -1,5 +1,7 @@
 # Council v4 "Trend Council": specification
 
+> **Axis 10 update (2026-11-28).** The engine ran at scale 2x, which lost 71.6% on 2020-2025. `council-perp:trend` and `benchmark-perp:trend-engine` (2x) are retired; the Trend Council now runs at **1x** as `council-perp:trend-1x` with its shadow `benchmark-perp:trend-engine-1x` (`config/perp-council-trend-1x.toml`, key `engine_scale = "1.0"`; a council file without the key is a 2x one). Everything else below (stop, band, rounds, brake rules, policy numbers) is unchanged; read "scale 2x" and "2" times the scale below as the first council's setting. See `docs/lead/LOG.md` and `docs/lead/DEPLOY-axis-10.md`.
+
 A redesign of the council with everything permitted, aiming at a council that generates net income, on the order of 10% per day.
 
 ## 1. The principle
