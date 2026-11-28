@@ -236,3 +236,11 @@ The owner approved acting on the axis 10 and 11 findings. Three changes, code on
 3. **Carry added as a benchmark.** `benchmark-perp:carry`: always-on BTC and ETH cash-and-carry, long spot plus short perp of equal quantity, EUR 250 per leg per coin (EUR 1,000 in all) from the first scheduled round, resized only when a leg leaves 0.8 to 1.25 times its target (axis 3's rule, checked at each scheduled round). The league has no spot instrument, so the spot leg is a valuation only (`spot_fill` events, a `spot_qty` field in the ledger), priced at the perpetual's index price (the Kraken spot index the collector already stores with every ticker) converted at the EUR/USD quote, with the axis 3 spot cost of 0.40% per side plus 5 bp of slippage on entry and on each rebalance. The perp leg goes through the normal ledger and receives the funding. The site labels it "a cash substitute: earns the funding paid by leveraged longs, no bet on price". Expected: +2.1% a year in the 2024-2026 control, +7.1% a year on 2020-2025 (axis 10), about EUR 13 to 20 a year on EUR 1,000 in the control regime.
 
 **Season 1 freeze:** nothing frozen is touched. The perp league is outside the freeze (`arena/season.py`: `arena/perp/` and `arena/site/` are outside the frozen code; the frozen files, `config/arena.toml`'s season part and `config/policy.toml` are unchanged).
+
+**Deployed (owner approved, 2026-11-28 ~10:20 UTC, commit 17e9b9c).**
+- **Retired:** `robot-perp:hunter`, `benchmark-perp:hunter-5min`, `council-perp:trend` (2x, 2 positions flattened) and `benchmark-perp:trend-engine` (2x, 2 positions flattened). Each `portfolio_retired` event carries its reason, quoting axes 10 and 11.
+- **Hunter service:** stopped and disabled.
+- **Opened at EUR 1,000 each:** `council-perp:trend-1x`, `benchmark-perp:trend-engine-1x` and `benchmark-perp:carry`. The engine targets are journaled with scale 1.0.
+- **Carry legs:** they enter at the next scheduled round, every 4 hours.
+- **Deploy order:** watcher paused, merge, retirements, watcher restarted.
+- **Checks:** the new code passed two adversarial reviews and all 33 test files. The site was rebuilt and published: the 1x portfolios are live, the retired ones are dotted, and the carry is labelled as a cash substitute.
